@@ -86,15 +86,13 @@ def test_placeholder_artifacts_schema_valid() -> None:
     # costEstimateRef is a STRING pointer at the cost model — NOT a numeric price.
     assert isinstance(image.cost_estimate_ref, str)
     assert isinstance(video.cost_estimate_ref, str)
-    # There is no hardcoded price field anywhere on these records.
-    assert "cost_estimate" in image.model_fields
+    # The cost is a *ref* string, and there is no hardcoded price field anywhere.
+    assert "cost_estimate_ref" in ImageArtifact.model_fields
     assert not any(
-        name in image.model_fields
-        for name in ("price", "cost", "cost_usd", "amount")
+        name in ImageArtifact.model_fields for name in ("price", "cost", "cost_usd", "amount")
     )
     assert not any(
-        name in video.model_fields
-        for name in ("price", "cost", "cost_usd", "amount")
+        name in VideoArtifact.model_fields for name in ("price", "cost", "cost_usd", "amount")
     )
 
     # liveAssetUri is optional/empty in v1.
