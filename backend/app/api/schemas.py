@@ -161,15 +161,37 @@ class DecisionRequest(BaseModel):
 class DecisionResponse(BaseModel):
     """The decision result — the ONLY state-applying path (INV-2; NFR-6).
 
-    On ``approve`` a SIMULATED send was recorded (``send_simulated`` True) and
+    On ``approve`` a send is recorded through the CRM adapter (``send_simulated``
+    True for the simulated recorder, False for a live HubSpot write) and
     ``seam_status`` carries the recomputed §4.7 seam; on edit/discard there is no
-    send and ``seam_status`` is ``None``.
+    send and ``seam_status`` is ``None``. ``note_id`` is the adapter's recorded
+    send id — under ``CRM_MODE=live`` the live HubSpot Note id, so the cockpit
+    can deep-link the captured note (S10 W3).
     """
 
     proposal_id: UUID
     action: DecisionAction
     send_simulated: bool = False
     seam_status: SeamStatus | None = None
+    note_id: str | None = None
+
+
+class SeedResponse(BaseModel):
+    """``POST /enrollment/families/{id}/seed`` result — the captured live push (S10 W3).
+
+    The deterministic seed route pushes a synthetic family through the
+    ``CRMAdapter`` seam (mode-agnostic): the simulated recorder records, the live
+    adapter writes a Contact + Deal into HubSpot. Returns the recorded/live deal
+    id, the pushed funnel stage, and the §4.7 seam recomputed after the push
+    (``unsynced → synced``). ``simulated`` is False for a live HubSpot write.
+    """
+
+    family_id: UUID
+    simulated: bool
+    deal_id: str
+    contact_id: str | None = None
+    stage: Stage
+    seam_status: SeamStatus
 
 
 class AuditResponse(BaseModel):

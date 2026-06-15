@@ -11,6 +11,7 @@ from mangum import Mangum
 
 from app.api.ai_actions import router as ai_actions_router
 from app.api.content import router as content_router
+from app.api.enrollment import router as enrollment_router
 from app.api.evals import router as evals_router
 from app.api.families import router as families_router
 from app.api.funding import router as funding_router
@@ -56,6 +57,12 @@ app.include_router(ai_actions_router)
 # Per-family notes timeline (FR-2.3; A-8) — /families/{id}/notes GET + POST.
 # Manual notes + deterministic state-change auto-notes; no LLM, no proposals.
 app.include_router(notes_router)
+
+# "Seed to HubSpot" deterministic write-action (S10 W3; ARCH §7.1; INV-2/9) —
+# /enrollment/families/{id}/seed POST. Pushes a synthetic family across the
+# CRMAdapter seam (live writes a Contact+Deal into the real portal behind the
+# four guards; simulate records). The deal id returned is the captured live id.
+app.include_router(enrollment_router)
 
 # Funding view + GT-controlled signal advance (FR-2.7; ARCH §6, §5.4) —
 # /families/{id}/funding GET + /families/{id}/funding/signal POST. Deterministic

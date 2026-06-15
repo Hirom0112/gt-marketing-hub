@@ -303,6 +303,60 @@ def test_approve_writes_followup_note_and_stamps_contact() -> None:
 
 
 # --------------------------------------------------------------------------- #
+# 3c. Approve threads the live note through the adapter and surfaces its id.
+# --------------------------------------------------------------------------- #
+def test_approve_surfaces_live_note_id_from_adapter() -> None:
+    """Approve passes family_id + body to send_message and returns the note id (S10 W3).
+
+    The decision response carries ``note_id`` = the adapter's recorded send id, so
+    the cockpit can deep-link the live HubSpot Note. The send_message message
+    carries the family_id (so the live adapter resolves contact/deal) and the
+    draft body (so the live Note body matches the auto-note). INV-2 holds: the
+    live note fires only post-approval, from the deterministic decision route.
+    """
+    from app.adapters.hubspot.crm_adapter import SendResult, SimulatedCRMAdapter
+    from app.core.seam import MirrorState
+    from app.data.models import FamilyRecord
+
+    family_id = _a_family_id()
+    body = "Hello, a quick note about your enrollment and funding next steps."
+
+    sent_messages: list[dict[str, object]] = []
+
+    class _NoteAdapter(SimulatedCRMAdapter):
+        def send_message(self, message: dict[str, object]) -> SendResult:
+            sent_messages.append(message)
+            return SendResult(simulated=False, recorded_id="live-note-55443322", channel="email")
+
+        def read_mirror(self, family_id: object) -> MirrorState:  # type: ignore[override]
+            return MirrorState(stage=None, mirror_updated_at=None)
+
+    adapter = _NoteAdapter()
+    app.dependency_overrides[deps.get_llm_client] = lambda: _llm_client_returning(
+        _proposal_json(family_id, body=body)
+    )
+    app.dependency_overrides[deps.get_brand_judge] = _on_brand_judge
+    app.dependency_overrides[deps.get_crm_adapter_dep] = lambda: adapter
+
+    draft = client.post(
+        "/ai/enrollment/draft", json={"family_id": str(family_id), "action": "email"}
+    ).json()
+    decision = client.post(
+        f"/proposals/{draft['proposal_id']}/decision", json={"action": "approve"}
+    )
+
+    assert decision.status_code == 200
+    dbody = decision.json()
+    assert dbody["note_id"] == "live-note-55443322"
+    # The send carried the family_id (for live id resolution) and the draft body.
+    assert len(sent_messages) == 1
+    assert sent_messages[0]["family_id"] == str(family_id)
+    assert body[:40] in str(sent_messages[0]["body"])
+    # Sanity: FamilyRecord import keeps the type checker honest about the seam type.
+    assert FamilyRecord is not None
+
+
+# --------------------------------------------------------------------------- #
 # 4. A decision on an unknown proposal_id is a 404.
 # --------------------------------------------------------------------------- #
 def test_decision_on_unknown_proposal_404() -> None:

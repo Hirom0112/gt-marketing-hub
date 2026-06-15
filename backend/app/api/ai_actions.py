@@ -221,9 +221,22 @@ def decide_proposal(
     assert audit is not None  # re-checked above; narrows for the type checker.
     family_id = audit.proposal.family_id
 
-    # SIMULATED send (INV-9): the adapter records, never sends.
+    # Send through the CRM adapter — mode-agnostic (INV-9): the simulated recorder
+    # records (never sends); the LIVE adapter writes a HubSpot Note, resolving the
+    # contact/deal by gt_synthetic_id from `family_id` (S10 W3). The message
+    # carries `family_id` (for live id resolution) and the draft `body` (so the
+    # live Note body matches the deterministic auto-note). This live note fires
+    # ONLY here, post-approval, from the deterministic decision route (INV-2).
     channel = str(audit.proposal.payload.get("action", "email"))
-    send = crm_adapter.send_message({"channel": channel, "proposal_id": str(proposal_id)})
+    body_excerpt = str(audit.proposal.payload.get("body", ""))
+    send = crm_adapter.send_message(
+        {
+            "channel": channel,
+            "proposal_id": str(proposal_id),
+            "family_id": str(family_id) if family_id is not None else None,
+            "body": summarize_followup(channel, body_excerpt),
+        }
+    )
 
     # Append a DETERMINISTIC follow-up auto-note (A-8; INV-2): a system-authored
     # state_change record of the simulated send, built by the pure core builder
@@ -232,7 +245,6 @@ def decide_proposal(
     # same pattern as `api/notes.py`); the recency status itself derives from the
     # logged approve DECISION (A-14), so no new field is written.
     if family_id is not None:
-        body_excerpt = str(audit.proposal.payload.get("body", ""))
         notes.add_note(
             Note(
                 family_id=family_id,
@@ -257,6 +269,9 @@ def decide_proposal(
         action=request.action,
         send_simulated=send.simulated,
         seam_status=seam_status,
+        # The adapter's recorded send id — under CRM_MODE=live the live HubSpot
+        # Note id, so the cockpit can deep-link the captured note (S10 W3).
+        note_id=send.recorded_id,
     )
 
 
