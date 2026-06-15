@@ -7,13 +7,16 @@ store is swappable to Supabase with zero changes here (NFR-8).
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from typing import Annotated
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException
 
-from app.api.deps import get_params, get_repository
+from app.api.deps import get_observability_log, get_params, get_repository
 from app.api.schemas import FamilyDetailResponse, PipelineResponse, WorkQueueItem
+from app.core.contact_log import last_contact_at
+from app.core.contact_status import derive_contact_status
 from app.core.family_record import assemble_deal_view
 from app.core.params import Params
 from app.core.work_queue import (
@@ -26,6 +29,7 @@ from app.core.work_queue import (
 )
 from app.data.models import FamilyRecord, FundingState, SeamStatus, Stage
 from app.data.repository import FamilyRepository, JoinedFamily
+from app.observability.log_store import ObservabilityLog
 
 router = APIRouter(tags=["families"])
 
@@ -34,6 +38,9 @@ router = APIRouter(tags=["families"])
 RepositoryDep = Annotated[FamilyRepository, Depends(get_repository)]
 # The typed §8 params seam, injected the same way (INV-11 — every tunable here).
 ParamsDep = Annotated[Params, Depends(get_params)]
+# The NFR-6 audit spine — the recency source (A-14): last_contact_at is derived
+# from the logged approve decisions, never a stored column.
+LogDep = Annotated[ObservabilityLog, Depends(get_observability_log)]
 
 
 def _work_queue_family(joined: JoinedFamily, params: Params) -> WorkQueueFamily:
@@ -104,24 +111,48 @@ def list_families(
 
 
 @router.get("/families/{family_id}", response_model=FamilyDetailResponse)
-def get_family(family_id: UUID, repository: RepositoryDep) -> FamilyDetailResponse:
+def get_family(
+    family_id: UUID,
+    repository: RepositoryDep,
+    params: ParamsDep,
+    log: LogDep,
+) -> FamilyDetailResponse:
     """Full joined Family Record — spine + four source rows + FR-2.2 deal view (§6).
 
     Stays the "full joined Family Record" (§6): the spine and its four source
     rows are returned as before (the S0 contract), enriched with ``deal_view`` —
     the flat operator projection from :func:`assemble_deal_view` over the same
-    joined rows. Pure projection, no AI (INV-2).
+    joined rows. The drop-off fields are pure (sourced in the projection); the
+    contact-recency fields are composed HERE, the composition root (CLAUDE §3,
+    INV-2): the deriver needs ``now`` + the audit log, neither of which the pure
+    core may touch, so this handler derives ``last_contact_at`` (A-14) and
+    ``contact_status`` and stamps them onto the projection via ``model_copy``.
+    No AI (INV-2).
     """
     joined = repository.get_family(family_id)
     if joined is None:
         raise HTTPException(status_code=404, detail="family not found")
+
+    # Recency composed at the api layer (NOT pure core): derive last_contact_at
+    # from the audit log (A-14) and the color status against an api-layer `now`.
+    contacted_at = last_contact_at(log, family_id)
+    contact_status = derive_contact_status(
+        created_at=joined.family.created_at or datetime.now(UTC),
+        last_contact_at=contacted_at,
+        now=datetime.now(UTC),
+        funded=joined.family.funding_state is FundingState.FUNDED,
+        params=params,
+    )
+    deal_view = assemble_deal_view(joined).model_copy(
+        update={"contact_status": contact_status, "last_contact_at": contacted_at}
+    )
     return FamilyDetailResponse(
         family=joined.family,
         lead=joined.lead,
         app_form=joined.app_form,
         enrollment_forms=joined.enrollment_forms,
         community_profile=joined.community_profile,
-        deal_view=assemble_deal_view(joined),
+        deal_view=deal_view,
     )
 
 

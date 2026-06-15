@@ -18,10 +18,12 @@ the deriver is the single source of truth for the seam's three states.
 
 from __future__ import annotations
 
+from datetime import datetime
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict
 
+from app.core.contact_status import ContactStatus
 from app.core.seam import MirrorState, derive_seam_status
 from app.data.models import (
     FundingType,
@@ -60,6 +62,25 @@ class DealView(BaseModel):
     map_score: float | None
     academic_signals: dict[str, object]
 
+    # Drop-off signal (S9 W2; FR-2.2) — PURE, projected from the source rows:
+    # how far the application got (``completion_pct``), the six-form gauntlet
+    # progress (``forms_signed`` / ``forms_total``), and the first unsigned form
+    # (``next_unsigned_form`` — the "stuck on <name>" signal, None when all are
+    # signed or there are no forms). ``apply_date`` is the application instant
+    # (``app_form.submitted_at``), falling back to the spine ``created_at``.
+    completion_pct: float | None = None
+    forms_signed: int | None = None
+    forms_total: int | None = None
+    next_unsigned_form: str | None = None
+    apply_date: datetime | None = None
+
+    # Contact-recency (S9 W2; A-14) — composed in the API layer, NOT here: the
+    # deriver needs ``now`` + the audit log, which the pure core never touches.
+    # ``assemble_deal_view`` leaves these None; ``api/families.py`` fills them via
+    # ``model_copy`` so the projection stays a pure function of its rows (INV-2).
+    contact_status: ContactStatus | None = None
+    last_contact_at: datetime | None = None
+
     # CRM seam, DERIVED via the §4.7 deriver (not the seeded column).
     crm_seam_status: SeamStatus
 
@@ -75,6 +96,21 @@ def _default_mirror(joined: JoinedFamily) -> MirrorState:
         stage=joined.family.current_stage,
         mirror_updated_at=joined.family.updated_at,
     )
+
+
+def _next_unsigned_form(forms_status: list[dict[str, object]]) -> str | None:
+    """First form whose ``signed_at`` is None — the "stuck on <name>" signal (FR-2.2).
+
+    Pure scan over the per-form ``{name, signed_at|null}`` rows in document order
+    (§4.4). Returns the first unsigned form's ``name``, or None when every form is
+    signed (or there are no forms). A missing ``name`` falls back to None so the
+    projection never raises on a malformed row.
+    """
+    for form in forms_status:
+        if form.get("signed_at") is None:
+            name = form.get("name")
+            return name if isinstance(name, str) else None
+    return None
 
 
 def assemble_deal_view(
@@ -100,8 +136,15 @@ def assemble_deal_view(
     """
     family = joined.family
     app_form = joined.app_form
+    enrollment_forms = joined.enrollment_forms
 
     effective_mirror = mirror if mirror is not None else _default_mirror(joined)
+
+    # Drop-off projection (S9 W2; FR-2.2) — pure, straight off the source rows.
+    # apply_date prefers the application instant, else the spine created_at.
+    apply_date = app_form.submitted_at if app_form is not None else None
+    if apply_date is None:
+        apply_date = family.created_at
 
     return DealView(
         family_id=family.family_id,
@@ -113,5 +156,15 @@ def assemble_deal_view(
         attribution_utm=family.attribution_utm,
         map_score=app_form.map_score if app_form is not None else None,
         academic_signals=app_form.academic_signals if app_form is not None else {},
+        completion_pct=app_form.completion_pct if app_form is not None else None,
+        forms_signed=enrollment_forms.forms_signed if enrollment_forms is not None else None,
+        forms_total=enrollment_forms.forms_total if enrollment_forms is not None else None,
+        next_unsigned_form=(
+            _next_unsigned_form(enrollment_forms.forms_status)
+            if enrollment_forms is not None
+            else None
+        ),
+        apply_date=apply_date,
+        # contact_status / last_contact_at stay None here — composed in api/ (A-14).
         crm_seam_status=derive_seam_status(family, effective_mirror),
     )
