@@ -18,7 +18,15 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from uuid import uuid4
 
-from app.core.seam import MirrorState, derive_seam_status
+from app.core.seam import (
+    MirrorState,
+    ReconcileDirection,
+    ReconcileProposal,
+    ReconcileResult,
+    apply_reconcile,
+    derive_seam_status,
+    propose_reconcile,
+)
 
 from app.data.models import FamilyRecord, SeamStatus, Stage
 
@@ -48,9 +56,9 @@ def _family_record(
     )
 
 
-def test_seam_status_synced_unsynced_conflict() -> None:
-    """All three §4.7 branches plus the null-`crm_synced_at` edge."""
-    # --- synced: crm_synced_at >= updated_at, mirror agrees on tracked field. ---
+def test_derive_synced() -> None:
+    """`synced`: crm_synced_at >= updated_at and the mirror agrees (§4.7)."""
+    # crm_synced_at strictly after updated_at, mirror agrees on tracked field.
     synced = _family_record(updated_at=_T0, crm_synced_at=_AFTER, current_stage=Stage.APPLY)
     mirror_agrees = MirrorState(stage=Stage.APPLY, mirror_updated_at=_AFTER)
     assert derive_seam_status(synced, mirror_agrees) is SeamStatus.SYNCED
@@ -62,23 +70,99 @@ def test_seam_status_synced_unsynced_conflict() -> None:
         is SeamStatus.SYNCED
     )
 
-    # --- unsynced: crm_synced_at < updated_at (local edited after last push). ---
+
+def test_derive_unsynced() -> None:
+    """`unsynced`: crm_synced_at is null or strictly before updated_at (§4.7)."""
+    # crm_synced_at < updated_at (local edited after last push).
     unsynced = _family_record(updated_at=_T0, crm_synced_at=_BEFORE)
     assert (
         derive_seam_status(unsynced, MirrorState(stage=Stage.APPLY, mirror_updated_at=_BEFORE))
         is SeamStatus.UNSYNCED
     )
 
-    # --- unsynced (null edge): crm_synced_at is null ⇒ never pushed. ---
+    # null edge: crm_synced_at is null ⇒ never pushed.
     never_synced = _family_record(updated_at=_T0, crm_synced_at=None)
     assert (
         derive_seam_status(never_synced, MirrorState(stage=Stage.APPLY, mirror_updated_at=None))
         is SeamStatus.UNSYNCED
     )
 
-    # --- conflict: mirror holds a diverging tracked-field value (stage), and
-    #     neither side is clearly newer (mirror_updated_at == updated_at). The
-    #     timestamps would otherwise read `synced`, but divergence wins (§4.7). ---
+
+def test_derive_conflict() -> None:
+    """`conflict`: mirror diverges on a tracked field, neither side newer (§4.7)."""
+    # mirror holds a diverging tracked-field value (stage), and neither side is
+    # clearly newer (mirror_updated_at == updated_at). The timestamps would
+    # otherwise read `synced`, but divergence wins (§4.7).
     conflicting = _family_record(updated_at=_T0, crm_synced_at=_AFTER, current_stage=Stage.APPLY)
     mirror_diverges = MirrorState(stage=Stage.ENROLL, mirror_updated_at=_T0)
     assert derive_seam_status(conflicting, mirror_diverges) is SeamStatus.CONFLICT
+
+
+# ---------------------------------------------------------------------------
+# Reconcile flow (FR-2.6; ARCH §4.7). Deterministic, human-gated, simulated v1.
+# Proposal is computed by the core; application is only ever invoked via the
+# human-approved API path — these tests pin the pure post-reconcile state.
+# ---------------------------------------------------------------------------
+
+
+def test_propose_reconcile_synced_is_noop() -> None:
+    """A synced family needs no reconcile ⇒ `propose_reconcile` returns None."""
+    synced = _family_record(updated_at=_T0, crm_synced_at=_AFTER, current_stage=Stage.APPLY)
+    mirror = MirrorState(stage=Stage.APPLY, mirror_updated_at=_AFTER)
+    assert propose_reconcile(synced, mirror) is None
+
+
+def test_propose_reconcile_unsynced_proposes_push_local() -> None:
+    """An unsynced family (local newer / unpushed) ⇒ propose `push_local` (§4.7)."""
+    unsynced = _family_record(updated_at=_T0, crm_synced_at=_BEFORE, current_stage=Stage.ENROLL)
+    mirror = MirrorState(stage=Stage.APPLY, mirror_updated_at=_BEFORE)
+
+    proposal = propose_reconcile(unsynced, mirror)
+
+    assert proposal is not None
+    assert proposal.direction is ReconcileDirection.PUSH_LOCAL
+    assert proposal.family_id == unsynced.family_id
+    # The local tracked-field value is what would be pushed to the mirror.
+    assert proposal.local_stage is Stage.ENROLL
+    assert proposal.summary  # human-readable, non-empty.
+
+
+def test_propose_reconcile_conflict_flags_not_autoresolved() -> None:
+    """A true conflict is FLAGGED, never silently resolved (INV-4-style, §4.7).
+
+    `propose_reconcile` yields `flag_conflict` (no auto-picked winner), and
+    `apply_reconcile` on that flagged proposal does NOT recompute to `synced` —
+    it fails closed until a human supplies a chosen direction.
+    """
+    conflicting = _family_record(updated_at=_T0, crm_synced_at=_AFTER, current_stage=Stage.APPLY)
+    mirror = MirrorState(stage=Stage.ENROLL, mirror_updated_at=_T0)
+
+    proposal = propose_reconcile(conflicting, mirror)
+
+    assert proposal is not None
+    assert proposal.direction is ReconcileDirection.FLAG_CONFLICT
+
+    # Fail-closed: applying a flagged conflict does NOT mark it synced.
+    result = apply_reconcile(conflicting, proposal)
+    assert result.applied is False
+    assert result.seam_status is SeamStatus.CONFLICT
+    assert derive_seam_status(conflicting, result.mirror) is SeamStatus.CONFLICT
+
+
+def test_apply_reconcile_push_local_recomputes_synced() -> None:
+    """After an approved push_local reconcile, the seam recomputes to `synced`."""
+    unsynced = _family_record(updated_at=_T0, crm_synced_at=_BEFORE, current_stage=Stage.ENROLL)
+    mirror = MirrorState(stage=Stage.APPLY, mirror_updated_at=_BEFORE)
+
+    proposal = propose_reconcile(unsynced, mirror)
+    assert proposal is not None
+
+    result = apply_reconcile(unsynced, proposal)
+
+    assert result.applied is True
+    assert result.seam_status is SeamStatus.SYNCED
+    # The returned post-reconcile record + mirror re-derive to synced (A-7 pattern):
+    # local state is mirrored and crm_synced_at advances to updated_at.
+    assert result.record.crm_synced_at == unsynced.updated_at
+    assert result.mirror.stage is Stage.ENROLL
+    assert derive_seam_status(result.record, result.mirror) is SeamStatus.SYNCED
