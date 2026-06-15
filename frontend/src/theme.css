@@ -46,6 +46,27 @@
   --gate-wash: #f6ebd5;
   --gate-ink: #6f4c0c; /* AA text on --gate-wash: 7.2:1                       */
 
+  /* ---- recency · contact color system (S9 Wave 4) ------------------------- */
+  /* The enrollment vision's contact-recency tint, mapped onto the existing
+     semantic palette so there is ONE canonical home (visual INV-11). Each
+     status resolves to a wash/ink/solid triple, reusing the accent tokens:
+       · fresh        → muted/neutral (grey: young & uncontacted)
+       · overdue      → signal (red: aged past the threshold, still uncontacted)
+       · followed_up  → flow (light-green: contacted, not yet closed)
+       · closed       → neutral/flow base (won — quiet, off the worklist)        */
+  --recency-fresh-wash: var(--surface-2);
+  --recency-fresh-ink: var(--muted);
+  --recency-fresh-solid: var(--line-strong);
+  --recency-overdue-wash: var(--signal-wash);
+  --recency-overdue-ink: var(--signal-ink);
+  --recency-overdue-solid: var(--signal);
+  --recency-followed_up-wash: var(--flow-wash);
+  --recency-followed_up-ink: var(--flow-ink);
+  --recency-followed_up-solid: var(--flow);
+  --recency-closed-wash: var(--paper);
+  --recency-closed-ink: var(--ink-soft);
+  --recency-closed-solid: var(--line);
+
   /* ---- focus ring --------------------------------------------------------- */
   --focus: #2f6df0;
   --focus-ring: 0 0 0 2px var(--surface), 0 0 0 4px var(--focus);

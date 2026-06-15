@@ -24,6 +24,12 @@ from pydantic import BaseModel, ConfigDict
 SendMode = Literal["simulate", "live"]
 MediaGenMode = Literal["placeholder", "live"]
 SocialPostMode = Literal["simulate", "live"]
+# CRM_MODE is a *separate* seam from the v1 `send_mode` lock (D-9, OUT-3): the
+# CRM/HubSpot boundary can go `live` independently — pushing SYNTHETIC data into
+# a real portal behind the four guards (ANALYSIS/hubspot-complement-plan.md §3) —
+# without unlocking the simulated send/social/media modes. v1 default stays
+# `simulate`; `live` selects the production HubSpot adapter (S10 W2).
+CrmMode = Literal["simulate", "live"]
 
 
 def _env_bool(name: str, default: bool) -> bool:
@@ -84,6 +90,23 @@ class Settings(BaseModel):
     media_gen_mode: MediaGenMode = "placeholder"
     social_post_mode: SocialPostMode = "simulate"
 
+    # CRM/HubSpot seam — flips to `live` independently of the send-mode lock so
+    # the cockpit can push SYNTHETIC data into the real portal behind the four
+    # guards (S10; ANALYSIS/hubspot-complement-plan.md §3). Default `simulate`.
+    crm_mode: CrmMode = "simulate"
+
+    # HubSpot live-adapter config (§5.4). The token defaults to ``None`` —
+    # absence is a first-class state: with no token the CRM edge can only run
+    # `simulate` (the adapter agent's registry fails loud on `live` w/o a token).
+    hubspot_private_app_token: str | None = None
+    # INV-8: a hard per-run ceiling on HubSpot API calls. The account-shared
+    # quota means overuse DoSes GT's real automation, so a breach degrades to the
+    # SimulatedCRMAdapter (S10 W2 guard 3) — never a silent overspend.
+    hubspot_calls_per_run_cap: int = 200
+    # INV-8 kill switch: when ``True``, all live HubSpot writes are disabled and
+    # the CRM edge degrades to the simulated adapter regardless of `crm_mode`.
+    hubspot_kill_switch: bool = False
+
     # Browser origins allowed to call the API (CORS; §5.1). The React app runs on
     # a separate origin (Vite dev server / built host) so it must be allow-listed
     # explicitly — never `*`, which would let any site call the API. Defaults to
@@ -111,6 +134,13 @@ class Settings(BaseModel):
         send_mode = os.environ.get("SEND_MODE", "simulate").strip() or "simulate"
         media_mode = os.environ.get("MEDIA_GEN_MODE", "placeholder").strip() or "placeholder"
         social_mode = os.environ.get("SOCIAL_POST_MODE", "simulate").strip() or "simulate"
+        crm_mode = os.environ.get("CRM_MODE", "simulate").strip() or "simulate"
+
+        # A placeholder/sentinel token (the .env.example angle-bracket form or an
+        # empty string) counts as "unset" — same posture as ANTHROPIC_API_KEY.
+        hs_token = os.environ.get("HUBSPOT_PRIVATE_APP_TOKEN")
+        if hs_token is not None and (hs_token.strip() == "" or hs_token.strip().startswith("<")):
+            hs_token = None
 
         return cls(
             anthropic_api_key=key,
@@ -126,6 +156,10 @@ class Settings(BaseModel):
             send_mode=send_mode,  # type: ignore[arg-type]
             media_gen_mode=media_mode,  # type: ignore[arg-type]
             social_post_mode=social_mode,  # type: ignore[arg-type]
+            crm_mode=crm_mode,  # type: ignore[arg-type]
+            hubspot_private_app_token=hs_token,
+            hubspot_calls_per_run_cap=_env_int("HUBSPOT_CALLS_PER_RUN_CAP", 200),
+            hubspot_kill_switch=_env_bool("HUBSPOT_KILL_SWITCH", False),
             cors_allow_origins=_env_list(
                 "GT_CORS_ALLOW_ORIGINS",
                 ("http://localhost:5173", "http://localhost:3000"),
