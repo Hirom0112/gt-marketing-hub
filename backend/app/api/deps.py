@@ -9,7 +9,9 @@ Going to production = rebinding :data:`_repository` to a Supabase-backed impl
 
 from __future__ import annotations
 
+from datetime import timedelta
 from pathlib import Path
+from uuid import UUID
 
 from app.adapters import registry
 from app.adapters.brand_memory.base import BrandMemoryStore
@@ -67,11 +69,70 @@ _params: Params = _load_params_with_fallback()
 # `app.core.settings.get_settings` (a fresh-read helper, not the cached seam).
 _settings: Settings = Settings.from_env()
 
+# How many of the seeded demo families read as "followed_up" — a deterministic
+# handful get a seeded approve-decision so the situation bar shows a believable
+# light-green slice alongside fresh/overdue/closed (A-14: recency is DERIVED from
+# the audit log, never a stored column). ~15% of the slimmed demo cohort.
+_FOLLOWED_UP_SEED_COUNT = 4
+
+
+def _seed_followed_up_contacts(log: ObservabilityLog) -> None:
+    """Seed a few approved outbounds so a handful of demo families read followed_up.
+
+    Recency is derived from the audit log (A-14): a family with an APPROVE
+    decision has a non-None ``last_contact_at`` and so colors FOLLOWED_UP. We
+    pick the first ``_FOLLOWED_UP_SEED_COUNT`` non-funded, otherwise-overdue
+    families (stable repo order ⇒ deterministic) and log one approved outbound
+    each, dated two days after the family was created — a realistic "we already
+    reached out" contact. This is the only writer to the demo log; tests that need
+    a clean log call ``reset_observability_log`` (which rebinds to an empty store).
+    """
+    from app.data.models import FundingState
+    from app.observability.log_store import DecisionAction
+
+    seeded = 0
+    for joined in _repository.list_joined():
+        if seeded >= _FOLLOWED_UP_SEED_COUNT:
+            break
+        family = joined.family
+        if family.funding_state is FundingState.FUNDED:
+            continue  # funded ⇒ CLOSED; leave it for the closed slice.
+        created = family.created_at
+        if created is None:
+            continue
+        # A deterministic id per family so re-seeding is idempotent in shape.
+        proposal_id = UUID(int=(family.family_id.int ^ 0xF0110_3ED) & ((1 << 128) - 1), version=4)
+        contacted_at = created + timedelta(days=2)
+        log.log_proposal(
+            proposal_id=proposal_id,
+            flow="enrollment_draft",
+            schema_version="1",
+            payload={"action": "email", "body": "Following up on your GT School application."},
+            family_id=family.family_id,
+            created_at=created,
+        )
+        log.log_decision(
+            proposal_id=proposal_id,
+            human="seed-operator",
+            action=DecisionAction.APPROVE,
+            created_at=contacted_at,
+        )
+        seeded += 1
+
+
+def _build_observability_log() -> ObservabilityLog:
+    """Build the demo audit log, pre-seeded with a few followed_up contacts (A-14)."""
+    log = InMemoryObservabilityLog()
+    _seed_followed_up_contacts(log)
+    return log
+
+
 # Singleton observability log — the A-3 in-memory NFR-6 audit store. Production
 # swaps a Supabase-backed `ObservabilityLog` behind the same interface (the seam
 # pattern as `_repository`). Held in a one-slot list so `reset_observability_log`
-# can rebind it for test isolation without a `global` statement.
-_observability: list[ObservabilityLog] = [InMemoryObservabilityLog()]
+# can rebind it for test isolation without a `global` statement. Seeded with a
+# few approved outbounds so the demo situation bar shows a followed_up slice.
+_observability: list[ObservabilityLog] = [_build_observability_log()]
 
 # Singleton consolidated eval-suite verdict (FR-4.5) — the last `run_suite(...)`
 # result, or `None` until a suite has run. Held in a one-slot list (the same

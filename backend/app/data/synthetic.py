@@ -224,8 +224,34 @@ _STALL_BY_STAGE: dict[Stage, tuple[StallReason, ...]] = {
     Stage.TUITION: (StallReason.FUNDING_PENDING,),
 }
 
-# An epoch start for synthetic timestamps (UTC). Deterministic offsets only.
-_EPOCH = datetime(2026, 1, 1, tzinfo=UTC)
+# The demo "now" anchor for synthetic timestamps (UTC). FIXED and deterministic
+# (never datetime.now — determinism/repro is required, CLAUDE.md §4.1): every
+# family's created_at/apply_date is a deterministic offset *before* this instant,
+# so the funnel reads as a current one. Set to the demo date (2026-06-15) so the
+# recent-month spread lands across the current month (June 2026) and the months
+# around it, and the calendar opens on populated months instead of empty ones.
+_EPOCH = datetime(2026, 6, 15, tzinfo=UTC)
+
+# Recency buckets (S9 contact-color realism). A family's age-from-now bucket is
+# drawn deterministically so the situation bar reads as a believable mix rather
+# than ~100% overdue. FRESH families are created within the grey window
+# (`enrollment.contact.grey_window_days` = 3) of the demo now ⇒ they color grey;
+# OVERDUE families are older (created weeks-to-months back) ⇒ they color red.
+# CLOSED is independent of age (it follows the funding gate), and FOLLOWED_UP is
+# composed at the api layer from the audit log (A-14), not seeded here.
+#
+# `fresh` weight is set so that — net of the families the funding gate pulls into
+# CLOSED — the non-closed remainder splits into a believable fresh/overdue mix.
+_FRESH_WEIGHT = 0.32
+
+# Day ranges for each recency bucket (inclusive, measured back from the epoch):
+# fresh sits strictly inside the grey window (age 0..2 < grey_window_days=3 ⇒
+# still FRESH at the committed overdue_days=4); overdue spans a few days to ~5
+# months back so the recent-month calendar (May/June 2026) populates and the
+# older tail reads as genuinely-overdue.
+_FRESH_MAX_DAYS_AGO = 2
+_OVERDUE_MIN_DAYS_AGO = 7
+_OVERDUE_MAX_DAYS_AGO = 150
 
 
 @dataclass(frozen=True)
@@ -275,6 +301,31 @@ def _timestamp(rng: random.Random, max_days_ago: int) -> datetime:
     return _EPOCH - timedelta(days=rng.randint(0, max_days_ago), minutes=rng.randint(0, 1439))
 
 
+def _timestamp_between(rng: random.Random, *, min_days_ago: int, max_days_ago: int) -> datetime:
+    """A deterministic UTC timestamp ``[min_days_ago, max_days_ago]`` days before the epoch."""
+    return _EPOCH - timedelta(
+        days=rng.randint(min_days_ago, max_days_ago), minutes=rng.randint(0, 1439)
+    )
+
+
+def _created_at(rng: random.Random) -> datetime:
+    """A family's ``created_at`` drawn from a recency bucket (contact-color realism).
+
+    A ``_FRESH_WEIGHT`` share of families are created strictly inside the grey
+    window (age ``0..2`` days) so they color FRESH; the rest are created weeks to
+    months back (``7..150`` days) so they color OVERDUE when uncontacted — the
+    recent end of that range keeps the May/June 2026 calendar populated. CLOSED
+    and FOLLOWED_UP are derived downstream (funding gate / audit log), so this
+    only governs the fresh-vs-overdue split. Deterministic: every draw is from
+    ``rng``.
+    """
+    if rng.random() < _FRESH_WEIGHT:
+        return _timestamp(rng, max_days_ago=_FRESH_MAX_DAYS_AGO)
+    return _timestamp_between(
+        rng, min_days_ago=_OVERDUE_MIN_DAYS_AGO, max_days_ago=_OVERDUE_MAX_DAYS_AGO
+    )
+
+
 def _synthetic_utm(rng: random.Random, attribution_source: str) -> dict[str, object]:
     """A synthetic utm/click-id blob (FR-1.4) — opaque IDs, no PII."""
     return {
@@ -308,7 +359,7 @@ def _build_family(
     product = _weighted_choice(rng, _PRODUCT_WEIGHTS)
     attribution_source = rng.choice(_ATTRIBUTION_SOURCES)
     email = _synthetic_email(rng, surname)
-    created = _timestamp(rng, max_days_ago=120)
+    created = _created_at(rng)
 
     utm = _synthetic_utm(rng, attribution_source)
 
@@ -338,7 +389,8 @@ def _build_family(
         crm_seam_status=_seam_status(rng),
         work_queue_score=round(rng.uniform(0.0, 1.0), 4),
         created_at=created,
-        updated_at=created + timedelta(days=rng.randint(0, 30)),
+        # Bounded by the demo now so a fresh family is never "updated in the future".
+        updated_at=min(created + timedelta(days=rng.randint(0, 30)), _EPOCH),
     )
 
     lead = LeadsNew(

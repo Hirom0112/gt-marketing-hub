@@ -42,7 +42,11 @@ from app.data.synthetic import SyntheticDataset, generate
 # deterministic and the API tests can assert exact counts. Production reads a live
 # store, not these constants.
 DEFAULT_SEED = 42
-DEFAULT_FAMILY_COUNT = 200
+# A small, curated demo cohort: the situation bar and "show full queue" list stay
+# scannable (a 200-row queue read like a broken harness). The generator itself is
+# unbounded — `test_scale_5000_families` drives it directly at N=5000 (NFR-9) — so
+# this only sizes the local demo seed, not the generator's capability.
+DEFAULT_FAMILY_COUNT = 24
 
 
 @dataclass(frozen=True)

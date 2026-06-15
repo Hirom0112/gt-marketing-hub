@@ -81,7 +81,9 @@ def _expected_in_month(month: str) -> list[JoinedFamily]:
 
 def test_calendar_returns_in_month_entries_sorted() -> None:
     """A populated month returns only its families, sorted ascending by apply_date."""
-    month = "2025-11"
+    # The generator anchors apply_dates to the demo "now" (2026-06-15), so the
+    # current month (June 2026) is populated — the calendar opens on real data.
+    month = "2026-06"
     resp = client.get("/enrollment/calendar", params={"month": month})
     assert resp.status_code == 200
     body = resp.json()
@@ -90,7 +92,7 @@ def test_calendar_returns_in_month_entries_sorted() -> None:
     entries = body["entries"]
     expected = _expected_in_month(month)
     assert len(entries) == len(expected)
-    assert len(entries) > 0  # 2025-11 is populated in the fixed seed.
+    assert len(entries) > 0  # 2026-06 (the demo month) is populated in the fixed seed.
 
     # Only in-month families appear (exact id set match).
     assert {e["family_id"] for e in entries} == {str(j.family.family_id) for j in expected}
@@ -144,7 +146,7 @@ def test_calendar_composes_contact_status_from_log() -> None:
     """An approved outbound ⇒ the entry's contact_status is followed_up (composed)."""
     params = _params()
     # A non-funded family with an apply_date in a known populated month.
-    target_month = "2025-11"
+    target_month = "2026-06"
     candidates = _expected_in_month(target_month)
     sample = next(j.family for j in candidates if j.family.funding_state is not FundingState.FUNDED)
 
