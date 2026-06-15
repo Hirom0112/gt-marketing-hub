@@ -75,7 +75,7 @@ def _work_queue_family(joined: JoinedFamily, params: Params) -> WorkQueueFamily:
 
 def _expected_ranked(params: Params) -> list[WorkQueueFamily]:
     repo = _seeded()
-    queue_families = [_work_queue_family(repo.get_family(f.family_id), params) for f in repo.list_families()]  # type: ignore[arg-type]
+    queue_families = [_work_queue_family(joined, params) for joined in repo.list_joined()]
     return rank_families(queue_families, params)
 
 
@@ -148,9 +148,7 @@ def test_read_endpoints_contract() -> None:
     assert filtered.status_code == 200
     filtered_ids = {row["family_id"] for row in filtered.json()}
 
-    expected_ids = {
-        str(f.family_id) for f in ranked if score_family(f, params) >= threshold
-    }
+    expected_ids = {str(f.family_id) for f in ranked if score_family(f, params) >= threshold}
     assert filtered_ids == expected_ids
     # Sanity: the filter actually drops some families (threshold is mid-list).
     assert len(filtered_ids) < DEFAULT_FAMILY_COUNT

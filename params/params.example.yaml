@@ -7,6 +7,7 @@ work_queue:                 # FR-2.5 — score = w_recoverability·recoverabilit
     stall_recency_weight: 0.5
     stage_proximity_weight: 0.3     # closer to Tuition = more recoverable
     responsiveness_weight: 0.2
+    responsiveness_email_opens_max: 40   # email_opens normalizer (A-5); §4.5 aggregate cap
   value:
     tuition_annual_default: 10400   # GT Anywhere $/yr (PROJECT.md §2) — value baseline
     funded_multiplier: 1.0          # TEFA-funded vs self-pay value weighting

@@ -43,6 +43,10 @@ class Recoverability(_StrictModel):
     stall_recency_weight: float
     stage_proximity_weight: float
     responsiveness_weight: float
+    # Normalizer for the responsiveness sub-factor (A-5): the aggregate
+    # `community_profile.engagement_signals["email_opens"]` count is divided by
+    # this to map into [0,1]. Aggregate only — no child-keyed signal (INV-6).
+    responsiveness_email_opens_max: int
 
 
 class WorkQueueValue(_StrictModel):

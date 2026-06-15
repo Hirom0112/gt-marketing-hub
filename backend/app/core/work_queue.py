@@ -65,6 +65,32 @@ def _clamp01(value: float) -> float:
     return max(0.0, min(1.0, value))
 
 
+def responsiveness_from_engagement(engagement_signals: dict[str, object], params: Params) -> float:
+    """Derive the [0,1] responsiveness sub-factor from aggregate engagement (A-5).
+
+    The spine `FamilyRecord` does not carry a normalized responsiveness; it lives
+    in the joined ``community_profile.engagement_signals`` dict as an integer
+    ``email_opens`` count (aggregate only — P-4 / INV-6). This normalizes that
+    count into [0,1] by dividing by ``work_queue.recoverability.
+    responsiveness_email_opens_max`` (params — INV-11, no magic number) and
+    clamping. A missing, empty, or non-numeric signal yields ``0.0`` (no
+    engagement evidence ⇒ no responsiveness credit), never an error.
+
+    Args:
+        engagement_signals: The ``community_profile.engagement_signals`` dict
+            (aggregate counts). May be empty / missing the key.
+        params: Loaded params (§8); supplies the email-opens normalizer.
+
+    Returns:
+        The responsiveness sub-factor in [0,1].
+    """
+    raw = engagement_signals.get("email_opens", 0)
+    if not isinstance(raw, (int, float)) or isinstance(raw, bool):
+        return 0.0
+    cap = params.work_queue.recoverability.responsiveness_email_opens_max
+    return _clamp01(raw / cap)
+
+
 def _now_or(now: datetime | None) -> datetime:
     """Reference time for the stall-recency window; injectable for determinism."""
     return now if now is not None else datetime.now(UTC)

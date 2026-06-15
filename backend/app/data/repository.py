@@ -84,6 +84,17 @@ class FamilyRepository(ABC):
         raise NotImplementedError
 
     @abstractmethod
+    def list_joined(self) -> list[JoinedFamily]:
+        """Every family joined to its four source rows (the work-queue's input).
+
+        The FR-2.5 work-queue scorer needs the ``community_profile`` engagement
+        signals (only available via the join, not :meth:`list_families`), so the
+        ranking router reads the cohort through this seam. A SQL-backed impl maps
+        it to the same join ``list_families`` would, over all rows.
+        """
+        raise NotImplementedError
+
+    @abstractmethod
     def pipeline_counts(self) -> dict[Stage, int]:
         """Per-stage tally over ``family_record.current_stage`` (FR-2.1)."""
         raise NotImplementedError
@@ -147,6 +158,12 @@ class InMemoryFamilyRepository(FamilyRepository):
             enrollment_forms=self._enrollment_forms.get(family_id),
             community_profile=self._community_profiles.get(family_id),
         )
+
+    def list_joined(self) -> list[JoinedFamily]:
+        # One JoinedFamily per spine row, in stored order. The per-id getter
+        # already assembles the join from the O(1) indexes built at construction.
+        joined = [self.get_family(family.family_id) for family in self._families]
+        return [j for j in joined if j is not None]
 
     def pipeline_counts(self) -> dict[Stage, int]:
         # Delegate to the pure core counter (FR-2.1): the counting contract lives

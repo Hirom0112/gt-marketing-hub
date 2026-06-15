@@ -7,8 +7,11 @@ deal view (FR-2.2 — the full deal view lands in S1).
 
 from __future__ import annotations
 
+from uuid import UUID
+
 from pydantic import BaseModel
 
+from app.core.family_record import DealView
 from app.data.models import (
     AppForm,
     CommunityProfile,
@@ -36,10 +39,13 @@ class PipelineResponse(BaseModel):
 
 
 class FamilyDetailResponse(BaseModel):
-    """A spine row joined to its four source rows (FR-2.2, basic).
+    """A spine row joined to its four source rows, plus the FR-2.2 deal view (§6).
 
-    The full deal view (notes timeline, funding installments) arrives in S1; this
-    is the read-only landing-slice projection.
+    `GET /families/{id}` stays the "full joined Family Record" (§6): the spine
+    and its four source rows are kept (the S0 contract). S1 adds ``deal_view`` —
+    the flat operator-facing FR-2.2 projection from
+    :func:`app.core.family_record.assemble_deal_view` over the joined rows
+    (stall reason, funding tier, MAP score, attribution, derived seam status).
     """
 
     family: FamilyRecord
@@ -47,3 +53,21 @@ class FamilyDetailResponse(BaseModel):
     app_form: AppForm | None
     enrollment_forms: EnrollmentForms | None
     community_profile: CommunityProfile | None
+    deal_view: DealView
+
+
+class WorkQueueItem(BaseModel):
+    """One ranked work-queue row (FR-2.5; §6 `GET /work-queue`).
+
+    The deterministic deal card the queue UI renders: family identity plus the
+    score and its two interpretable components (``recoverability``, ``value``)
+    so an operator sees *why* a family ranks where it does. Computed entirely by
+    the pure :mod:`app.core.work_queue` scorer — never by an LLM (INV-2).
+    """
+
+    family_id: UUID
+    display_name: str
+    current_stage: Stage
+    score: float
+    recoverability: float
+    value: float
