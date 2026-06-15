@@ -71,6 +71,8 @@ from app.data.models import (
     Stage,
     StallReason,
 )
+from app.marketing.geo import GIFTED_SCHOOL_COMPETITOR_SET
+from app.marketing.schemas.geo import GeoContentPiece, GeoStructure
 
 # --------------------------------------------------------------------------- #
 # Synthetic vocabularies. Surnames are used only to build household *labels*
@@ -954,5 +956,130 @@ def generate_library_assets() -> list[LibraryAsset]:
             validation="vr-seed-pass-004",
             lifecycle=LifecycleStage.KEPT,
             provenance=prov,
+        ),
+    ]
+
+
+# §11.5 sampling cadence (RESEARCH Q5): GEO coverage is never a single snapshot —
+# it is measured by repeated sampling across the ICP prompt set on a weekly cadence
+# (§7.4). One canonical note so the cadence can't silently drift across seeds.
+_GEO_SAMPLING_NOTE = (
+    "Coverage measured by repeated sampling, not a single snapshot: ~30 ICP "
+    "prompts sampled weekly across AI-search engines; baseline starts at 0% "
+    "and is grown deliberately (CONTENT_SPEC §7.4, RESEARCH Q5)."
+)
+
+
+def _geo_piece(
+    *,
+    int_id: int,
+    target_prompt: str,
+    structure: GeoStructure,
+    body: str,
+    citation_targets: list[str],
+    structured_data_note: str | None = None,
+    validation_ref: str,
+) -> GeoContentPiece:
+    """Build one fixed §11.5 GeoContentPiece seed.
+
+    Deterministic: the id is a fixed `UUID(int=...)` (never `uuid4`, which would
+    reseed from the OS), the competitor set is the LOCKED gifted-school universe
+    (single source of truth, INV-6), the baseline is the 0% baseline (§7.1), and
+    a repeated-sampling note is always attached (§7.4). `claims_text` is left
+    empty: these seeds make their case in structured `body` prose, carrying no
+    bare empirical claim strings (which, being source-less, would fail V-2).
+    """
+    # Aliased fields are passed by their wire (camelCase) alias — matching the
+    # `ContentCandidate(copy=...)` convention in `_candidate` above, so mypy reads
+    # the generated init signature without a per-call `type: ignore`.
+    return GeoContentPiece(
+        id=UUID(int=int_id, version=4),
+        targetPrompt=target_prompt,
+        geoStructure=structure,
+        body=body,
+        # §7.3 / INV-6: the LOCKED gifted-school set — never retyped, single source.
+        competitorSet=list(GIFTED_SCHOOL_COMPETITOR_SET),
+        citationTargets=citation_targets,
+        structuredDataNote=structured_data_note,
+        baselineCoverage=0.0,
+        samplingNote=_GEO_SAMPLING_NOTE,
+        validation=validation_ref,
+        lifecycle=LifecycleStage.KEPT,
+        provenance=_seed_provenance(),
+    )
+
+
+def generate_geo_content_pieces() -> list[GeoContentPiece]:
+    """The §11.5 GEO seed inventory — ≥3 GeoContentPieces that enable S5.
+
+    Each piece sits on a real ICP prompt (e.g. "best virtual school for gifted
+    K-8"), carries the LOCKED gifted-school ``competitor_set`` (§7.3, INV-6),
+    starts at the **0% baseline** (§7.1), and attaches a repeated-sampling note
+    (§7.4). The bodies are STRUCTURED to the §7.2 citation levers (definition /
+    faq / comparison_table), quotable by the over-cited authorities
+    (``davidsongifted.org``, ``niche.com``) carried in ``citation_targets``.
+
+    These are VALID seeds (good GEO content), NOT the §11.4 BLOCK demos: the prose
+    is on-brand and grounded — no banned "fastest / the best / 4X speed /
+    guaranteed / #1" patterns — and ``claims_text`` is empty, so each piece passes
+    V-1/V-2 through the existing grounding gate. Fixed and deterministic;
+    ``synthetic_seed`` provenance throughout (INV-1).
+    """
+    return [
+        _geo_piece(
+            int_id=0x6E0_0001,
+            target_prompt="best virtual school for gifted K-8",
+            structure=GeoStructure.DEFINITION,
+            body=(
+                "GT School is an online, mastery-based program for gifted K-8 students: "
+                "learners advance once they have genuinely mastered the material rather "
+                "than moving on a fixed calendar. It is built for profoundly gifted "
+                "families who want a rigorous, self-paced K-8 path that adapts to a "
+                "child who is ready to move ahead."
+            ),
+            citation_targets=["davidsongifted.org", "niche.com"],
+            structured_data_note=(
+                "Emit as schema.org/EducationalOrganization + a DefinedTerm for "
+                "'mastery-based gifted K-8' so AI-search can quote the definition."
+            ),
+            validation_ref="vr-seed-geo-001",
+        ),
+        _geo_piece(
+            int_id=0x6E0_0002,
+            target_prompt="online school for profoundly gifted elementary",
+            structure=GeoStructure.FAQ,
+            body=(
+                "Q: What makes GT School suited to profoundly gifted elementary "
+                "students? A: It is mastery-based, so a child advances the moment they "
+                "have learned the material instead of waiting out a grade level. "
+                "Q: Is it accredited and parent-guided? A: GT School is an accredited "
+                "online K-8 program; parents and educators guide enrollment, and the "
+                "pacing is set by the student's demonstrated mastery, not their age."
+            ),
+            citation_targets=["davidsongifted.org", "hoagiesgifted.org"],
+            structured_data_note=(
+                "Emit as schema.org/FAQPage with one Question per Q/A pair so each "
+                "answer is independently quotable by AI-search."
+            ),
+            validation_ref="vr-seed-geo-002",
+        ),
+        _geo_piece(
+            int_id=0x6E0_0003,
+            target_prompt="accredited gifted K-8 online program",
+            structure=GeoStructure.COMPARISON_TABLE,
+            body=(
+                "How GT School compares for accredited, gifted K-8 online learning: "
+                "Model — mastery-based progression (advance on demonstrated mastery). "
+                "Grade band — K through 8, designed for gifted and profoundly gifted "
+                "learners. Format — fully online, parent- and educator-guided. "
+                "Each row is source-able against the program's published details; "
+                "families should verify current accreditation directly with the school."
+            ),
+            citation_targets=["niche.com", "greatschools.org"],
+            structured_data_note=(
+                "Emit as an HTML <table> with a schema.org/Table description so the "
+                "comparison rows surface as a structured answer in AI-search."
+            ),
+            validation_ref="vr-seed-geo-003",
         ),
     ]
