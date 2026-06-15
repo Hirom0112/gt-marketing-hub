@@ -44,7 +44,9 @@ describe('LandingDashboard', () => {
     }
 
     // The total is surfaced too.
-    expect(await screen.findByTestId('pipeline-total')).toHaveTextContent('200');
+    expect(await screen.findByTestId('pipeline-total')).toHaveTextContent(
+      '200',
+    );
   });
 
   it('renders a seam-status summary', async () => {

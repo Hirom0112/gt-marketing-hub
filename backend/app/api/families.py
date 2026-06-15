@@ -26,9 +26,11 @@ RepositoryDep = Annotated[FamilyRepository, Depends(get_repository)]
 
 @router.get("/pipeline", response_model=PipelineResponse)
 def get_pipeline(repository: RepositoryDep) -> PipelineResponse:
-    """Per-stage pipeline counts (FR-2.1)."""
+    """Per-stage pipeline counts + CRM-seam summary (FR-2.1, FR-2.6)."""
     counts = repository.pipeline_counts()
-    return PipelineResponse(counts=counts, total=sum(counts.values()))
+    # Seam summary derived through the same store seam (every status zero-filled).
+    seam = {status: len(repository.list_families(seam_status=status)) for status in SeamStatus}
+    return PipelineResponse(counts=counts, total=sum(counts.values()), seam=seam)
 
 
 @router.get("/families", response_model=list[FamilyRecord])

@@ -51,6 +51,11 @@ def test_pipeline_returns_per_stage_counts() -> None:
     assert sum(counts[s] for s in _STAGE_KEYS) == DEFAULT_FAMILY_COUNT
     assert body["total"] == DEFAULT_FAMILY_COUNT
 
+    # The CRM-seam summary is present and sums to the same family total (FR-2.6).
+    seam = body["seam"]
+    assert set(seam) == {"synced", "unsynced", "conflict"}
+    assert sum(seam.values()) == DEFAULT_FAMILY_COUNT
+
 
 def test_families_list_and_filter() -> None:
     """GET /families lists all families and filters by stage (FR-2.1)."""
