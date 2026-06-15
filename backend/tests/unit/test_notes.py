@@ -31,6 +31,7 @@ from app.core.notes import (
     Note,
     NoteAuthor,
     NoteKind,
+    summarize_followup,
     summarize_funding_change,
     summarize_stage_change,
 )
@@ -120,6 +121,26 @@ def test_summarize_funding_change_is_deterministic() -> None:
     assert a.kind is NoteKind.STATE_CHANGE
     assert "awarded_selfreport" in a.body
     assert "gt_confirmed" in a.body
+
+
+def test_summarize_followup_is_deterministic_and_channel_mapped() -> None:
+    """The follow-up summary is deterministic, channel-mapped, and excerpt-truncated.
+
+    ``summarize_followup`` builds the body for the auto follow-up note the approve
+    path writes (S9 W2; A-8): ``email`` ⇒ "Email sent (simulated): …", ``sms`` ⇒
+    "Nudge sent (simulated): …", with the body truncated to its first 60 chars +
+    an ellipsis when longer. Pure: same inputs ⇒ identical string.
+    """
+    short = "Quick note about your enrollment."
+    assert summarize_followup("email", short) == f"Email sent (simulated): {short}"
+    assert summarize_followup("sms", short) == f"Nudge sent (simulated): {short}"
+    # Deterministic.
+    assert summarize_followup("email", short) == summarize_followup("email", short)
+
+    # Long bodies are truncated to the first 60 chars + an ellipsis.
+    long_body = "x" * 100
+    out = summarize_followup("email", long_body)
+    assert out == f"Email sent (simulated): {'x' * 60}…"
 
 
 def test_post_manual_note_then_get_timeline() -> None:

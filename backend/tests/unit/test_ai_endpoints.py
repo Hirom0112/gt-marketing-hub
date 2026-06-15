@@ -28,7 +28,10 @@ from app.adapters.hubspot.crm_adapter import SimulatedCRMAdapter
 from app.ai.client import AnthropicLLMClient, LLMClient
 from app.ai.schemas.enrollment_draft import DraftAction
 from app.api import deps
+from app.core.contact_log import last_contact_at
+from app.core.notes import NoteAuthor, NoteKind
 from app.core.settings import Settings
+from app.data.notes_repository import InMemoryNotesRepository
 from app.data.repository import InMemoryFamilyRepository
 from app.main import app
 
@@ -245,6 +248,58 @@ def test_decision_approve_simulates_send_and_logs() -> None:
     assert len(adapter.sent_log) == 1  # unchanged — discard sends nothing
     audit2 = client.get(f"/proposals/{pid2}").json()
     assert any(d["action"] == "discard" for d in audit2["decisions"])
+
+
+# --------------------------------------------------------------------------- #
+# 3b. Approve writes a deterministic auto follow-up note; edit/discard do not.
+# --------------------------------------------------------------------------- #
+def test_approve_writes_followup_note_and_stamps_contact() -> None:
+    """Approve ⇒ a system/state_change follow-up note + a derivable last_contact_at.
+
+    The approve path appends a DETERMINISTIC auto follow-up note (author=system,
+    kind=state_change) for the proposal's family (S9 W2; A-8 — not an LLM call),
+    and because the approve DECISION is logged the family's ``last_contact_at``
+    derives non-None. Discard writes no such note and leaves contact un-stamped.
+    """
+    family_id = _a_family_id()
+    body = "Hello, a quick note about your enrollment and funding next steps."
+    notes_store = InMemoryNotesRepository()
+    app.dependency_overrides[deps.get_llm_client] = lambda: _llm_client_returning(
+        _proposal_json(family_id, body=body)
+    )
+    app.dependency_overrides[deps.get_brand_judge] = _on_brand_judge
+    app.dependency_overrides[deps.get_notes_repository] = lambda: notes_store
+
+    # --- approve ⇒ a follow-up note is appended for the family ---
+    draft = client.post(
+        "/ai/enrollment/draft", json={"family_id": str(family_id), "action": "email"}
+    ).json()
+    proposal_id = draft["proposal_id"]
+    decision = client.post(f"/proposals/{proposal_id}/decision", json={"action": "approve"})
+    assert decision.status_code == 200
+
+    timeline = client.get(f"/families/{family_id}/notes").json()
+    followups = [n for n in timeline if n["kind"] == NoteKind.STATE_CHANGE.value]
+    assert len(followups) == 1
+    note = followups[0]
+    assert note["author"] == NoteAuthor.SYSTEM.value
+    assert note["family_id"] == str(family_id)
+    assert "Email sent (simulated)" in note["body"]
+    # The body excerpt comes from the proposal draft body.
+    assert body[:60] in note["body"]
+
+    # Recency falls out of the logged approve decision (no new field needed).
+    assert last_contact_at(deps.get_observability_log(), family_id) is not None
+
+    # --- discard ⇒ no follow-up note appended ---
+    draft2 = client.post(
+        "/ai/enrollment/draft", json={"family_id": str(family_id), "action": "email"}
+    ).json()
+    pid2 = draft2["proposal_id"]
+    assert client.post(f"/proposals/{pid2}/decision", json={"action": "discard"}).status_code == 200
+    timeline2 = client.get(f"/families/{family_id}/notes").json()
+    followups2 = [n for n in timeline2 if n["kind"] == NoteKind.STATE_CHANGE.value]
+    assert len(followups2) == 1  # unchanged — discard writes no note
 
 
 # --------------------------------------------------------------------------- #
