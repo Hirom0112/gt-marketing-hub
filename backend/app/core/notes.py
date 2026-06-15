@@ -108,6 +108,42 @@ def summarize_stage_change(
     )
 
 
+# The channel → human label map for the follow-up note (email/sms are the two
+# §5.2 draft channels; everything else falls back to the raw channel token).
+_FOLLOWUP_CHANNEL_LABELS = {"email": "Email", "sms": "Nudge"}
+# How many characters of the draft body the follow-up note excerpts (A-8 factual
+# record — a short, deterministic preview, not the full message).
+_FOLLOWUP_EXCERPT_CHARS = 60
+
+
+def summarize_followup(channel: str, body_excerpt: str) -> str:
+    """Build the deterministic auto follow-up note body for an approved send (S9 W2).
+
+    The approve path (``api/ai_actions.py``) appends a system/state_change note
+    when an outbound is approved and SIMULATED-sent; this builds its body from the
+    known channel and the draft's body. ``email`` ⇒ ``"Email sent (simulated): …"``
+    and ``sms`` ⇒ ``"Nudge sent (simulated): …"``; an unknown channel falls back
+    to its raw token. The excerpt is the first 60 chars of ``body_excerpt`` (an
+    ellipsis appended only when the body is longer) so the note stays a short,
+    factual preview.
+
+    Pure (A-8; INV-2): a deterministic function of its two arguments — no clock,
+    no randomness, no LLM. Same inputs ⇒ identical body.
+
+    Args:
+        channel: The send channel (``email`` / ``sms``), mapped to a human label.
+        body_excerpt: The approved draft's body, truncated for the preview.
+
+    Returns:
+        The follow-up note body string.
+    """
+    label = _FOLLOWUP_CHANNEL_LABELS.get(channel, channel)
+    excerpt = body_excerpt[:_FOLLOWUP_EXCERPT_CHARS]
+    if len(body_excerpt) > _FOLLOWUP_EXCERPT_CHARS:
+        excerpt += "…"
+    return f"{label} sent (simulated): {excerpt}"
+
+
 def summarize_funding_change(
     *,
     family_id: UUID,

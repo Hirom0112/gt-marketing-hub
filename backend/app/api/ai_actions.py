@@ -32,6 +32,7 @@ made here — the client degrades without a key and tests inject transports.
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from typing import Annotated
 from uuid import UUID, uuid4
 
@@ -46,6 +47,7 @@ from app.api.deps import (
     get_crm_adapter_dep,
     get_eval_state,
     get_llm_client,
+    get_notes_repository,
     get_observability_log,
     get_params,
     get_repository,
@@ -59,9 +61,11 @@ from app.api.schemas import (
     DraftResponse,
 )
 from app.core.eval_gate import BrandJudge, action_enabled
+from app.core.notes import Note, NoteAuthor, NoteKind, summarize_followup
 from app.core.params import Params
 from app.core.seam import derive_seam_status
 from app.core.settings import Settings
+from app.data.notes_repository import NotesRepository
 from app.data.repository import FamilyRepository
 from app.evals.suite import EvalSuiteResult
 from app.observability.log_store import DecisionAction, ObservabilityLog
@@ -90,6 +94,7 @@ LogDep = Annotated[ObservabilityLog, Depends(get_observability_log)]
 LLMClientDep = Annotated[LLMClient, Depends(get_llm_client)]
 BrandJudgeDep = Annotated["BrandJudge | None", Depends(get_brand_judge)]
 CRMAdapterDep = Annotated[CRMAdapter, Depends(get_crm_adapter_dep)]
+NotesRepositoryDep = Annotated[NotesRepository, Depends(get_notes_repository)]
 # Injected as a Depends so tests can override the live suite-level kill state.
 EvalStateDep = Annotated["EvalSuiteResult | None", Depends(get_eval_state)]
 
@@ -187,12 +192,15 @@ def decide_proposal(
     repository: RepositoryDep,
     log: LogDep,
     crm_adapter: CRMAdapterDep,
+    notes: NotesRepositoryDep,
 ) -> DecisionResponse:
     """Apply a human verdict — the SOLE state-applying path (ARCH §6; NFR-6).
 
     404 if the proposal was never logged (§10 causality). Logs the decision. On
-    ``approve``: simulate a send (INV-9) and recompute the §4.7 seam; on
-    edit/discard: log only, no send.
+    ``approve``: simulate a send (INV-9), append a DETERMINISTIC follow-up
+    auto-note (A-8; INV-2 — not an LLM call), and recompute the §4.7 seam; on
+    edit/discard: log only, no send, no note. The family's ``last_contact_at``
+    then derives from the logged approve decision (A-14) — no stored field.
     """
     if log.get_audit(proposal_id) is None:
         raise HTTPException(status_code=404, detail="proposal not found")
@@ -216,6 +224,24 @@ def decide_proposal(
     # SIMULATED send (INV-9): the adapter records, never sends.
     channel = str(audit.proposal.payload.get("action", "email"))
     send = crm_adapter.send_message({"channel": channel, "proposal_id": str(proposal_id)})
+
+    # Append a DETERMINISTIC follow-up auto-note (A-8; INV-2): a system-authored
+    # state_change record of the simulated send, built by the pure core builder
+    # from the logged draft body — NOT an LLM call. The note's `created_at` is the
+    # only wall-clock read, set here at the composition root (core stays clock-free,
+    # same pattern as `api/notes.py`); the recency status itself derives from the
+    # logged approve DECISION (A-14), so no new field is written.
+    if family_id is not None:
+        body_excerpt = str(audit.proposal.payload.get("body", ""))
+        notes.add_note(
+            Note(
+                family_id=family_id,
+                author=NoteAuthor.SYSTEM,
+                kind=NoteKind.STATE_CHANGE,
+                body=summarize_followup(channel, body_excerpt),
+                created_at=datetime.now(UTC),
+            )
+        )
 
     # Recompute the §4.7 seam from the adapter mirror (A-7: derive-and-return; the
     # in-memory repo is read-only per A-3, so we do not persist the new status).
