@@ -16,8 +16,9 @@ from __future__ import annotations
 from uuid import uuid4
 
 import pytest
-from app.ai.schemas.enrollment_draft import Claim, DraftAction, EnrollmentDraftProposal
 from pydantic import ValidationError
+
+from app.ai.schemas.enrollment_draft import Claim, DraftAction, EnrollmentDraftProposal
 
 
 def _valid_kwargs() -> dict[str, object]:
@@ -27,7 +28,10 @@ def _valid_kwargs() -> dict[str, object]:
         "family_id": uuid4(),
         "body": "Hi Rivera family — your application is one form short of complete.",
         "claims": [
-            {"text": "GT School is tuition-free for TEFA-eligible families.", "source_ref": "kb:tefa"},
+            {
+                "text": "GT School is tuition-free for TEFA-eligible families.",
+                "source_ref": "kb:tefa",
+            },
         ],
     }
 
