@@ -24,6 +24,7 @@ from datetime import datetime
 from enum import StrEnum
 
 from app.core.params import Params
+from app.data.models import StallReason
 
 
 class ContactStatus(StrEnum):
@@ -93,3 +94,29 @@ def derive_contact_status(
     if age_days >= overdue_days:
         return ContactStatus.OVERDUE
     return ContactStatus.FRESH
+
+
+def contact_stall_reason(status: ContactStatus) -> StallReason | None:
+    """Map an OVERDUE contact status to the ``no_response`` stall reason (S9 W1).
+
+    Wires the previously-unwired :attr:`~app.data.models.StallReason.NO_RESPONSE`
+    enum value (it was defined but never emitted): an uncontacted family aged past
+    ``overdue_days`` (:attr:`ContactStatus.OVERDUE`) surfaces ``no_response`` —
+    *we let the lead sit and got no reply*. Every other contact status maps to
+    ``None``; this deriver owns only the no-response label, leaving the
+    stage-keyed reasons (``app_incomplete`` / ``forms_partial`` /
+    ``funding_pending``) to ``stage_machine.py``.
+
+    Pure: a total function of ``status`` alone. Composing it with
+    :func:`derive_contact_status` lets callers surface ``no_response`` without
+    duplicating the age rule.
+
+    Args:
+        status: The family's derived :class:`ContactStatus`.
+
+    Returns:
+        :attr:`StallReason.NO_RESPONSE` when ``status`` is OVERDUE, else ``None``.
+    """
+    if status is ContactStatus.OVERDUE:
+        return StallReason.NO_RESPONSE
+    return None
