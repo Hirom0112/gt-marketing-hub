@@ -205,6 +205,13 @@ def iter_files(roots: Iterable[Path]) -> Iterator[Path]:
                 p = Path(dirpath) / name
                 if name in SKIP_FILENAMES:
                     continue
+                # Gitignored local secret files (`.env`, `.env.local`, `.env.hubspot`,
+                # …) are the LEGITIMATE home for real secrets and can never be
+                # committed (`.gitignore`: `.env`, `.env.*`). Scanning them would
+                # fail the gate on a correctly-placed token. `.env.example` is the
+                # committed placeholder template and stays scanned.
+                if (name == ".env" or name.startswith(".env.")) and name != ".env.example":
+                    continue
                 if p.suffix.lower() in SKIP_SUFFIXES:
                     continue
                 yield p
