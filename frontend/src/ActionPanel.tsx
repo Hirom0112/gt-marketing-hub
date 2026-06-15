@@ -7,6 +7,7 @@ import {
   Mail,
   Pencil,
   ShieldAlert,
+  ShieldCheck,
   ShieldOff,
   Trash2,
   Zap,
@@ -487,9 +488,28 @@ function DraftResult({
         </ul>
       )}
 
+      {/* Make the eval gate VISIBLE (INV-3/INV-4): this draft only reached the
+          operator because the grounding/safety gate PASSED, so "Approve" reads
+          as a safety-checked commit — not a hidden check. */}
+      <div
+        data-testid="eval-gate-passed"
+        className="eval-gate-passed"
+        style={{
+          marginTop: 'var(--s-3)',
+          display: 'inline-flex',
+          alignItems: 'center',
+          gap: 'var(--s-1)',
+          fontSize: 'var(--fs-sm)',
+          color: 'var(--flow-ink)',
+        }}
+      >
+        <ShieldCheck size={13} aria-hidden />
+        Grounding &amp; safety gate passed — approving commits this send.
+      </div>
+
       <div
         className="proposal-decisions"
-        style={{ display: 'flex', gap: 'var(--s-2)', marginTop: 'var(--s-3)', flexWrap: 'wrap' }}
+        style={{ display: 'flex', gap: 'var(--s-2)', marginTop: 'var(--s-2)', flexWrap: 'wrap' }}
       >
         {editing ? (
           <Button

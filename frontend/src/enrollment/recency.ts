@@ -118,10 +118,14 @@ function isRecoverable(status: string | null | undefined): boolean {
   return status !== 'closed';
 }
 
-// True if a row is "stalled": still recoverable AND not yet followed up — the
-// fresh/overdue (un-actioned) families the recovery board exists to surface.
+// True if a row is "stalled": still recoverable, not yet followed up, AND not a
+// brand-new FRESH lead (A-17). A fresh lead is still inside its contact window —
+// it hasn't gone cold yet, so it is NOT money the recovery loop is leaving on the
+// table. Stalled is the un-actioned-AND-aged set the situation strip headlines.
 function isStalled(status: string | null | undefined): boolean {
-  return isRecoverable(status) && status !== 'followed_up';
+  return (
+    isRecoverable(status) && status !== 'followed_up' && status !== 'fresh'
+  );
 }
 
 // Fold a list of work-queue rows into the situation-bar headline figures. Pure:

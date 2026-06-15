@@ -3,9 +3,10 @@ import { summarizeRecovery } from '../recency';
 
 // Unit test (CLAUDE §4.1) for the pure situation-bar summary. The headline
 // figures are DERIVED from the /work-queue rows — never hardcoded (INV-11
-// spirit). Stalled = still recoverable AND not yet followed up (fresh/overdue);
-// overdue = contact_status 'overdue'; recoverable $ = sum of value over rows not
-// closed.
+// spirit). Stalled = still recoverable AND not yet followed up AND NOT fresh
+// (A-17: a fresh lead is still inside its contact window, not yet "money on the
+// table"); overdue = contact_status 'overdue'; recoverable $ = sum of value over
+// rows not closed.
 describe('summarizeRecovery', () => {
   it('derives stalled / overdue / recoverable $ from the rows', () => {
     const rows = [
@@ -15,8 +16,9 @@ describe('summarizeRecovery', () => {
       { value: 9999, contact_status: 'closed' },
     ];
     const s = summarizeRecovery(rows);
-    // overdue + fresh are stalled (un-actioned); followed_up + closed are not.
-    expect(s.stalled).toBe(2);
+    // A-17: only the OVERDUE row is stalled — fresh is still inside its window,
+    // followed_up + closed are off the un-actioned set.
+    expect(s.stalled).toBe(1);
     // only the overdue row.
     expect(s.overdue).toBe(1);
     // everything except the closed (won, off-worklist) row.

@@ -107,6 +107,38 @@ function DealField({
   );
 }
 
+// The CRM-seam status as a CLEAN NAMED CHIP — never a raw UUID (A-17). The seam
+// is the forward step's state: synced (in HubSpot / flow), conflict (needs a
+// human / signal), unsynced or anything else (not yet pushed / neutral). The
+// `deal-seam-status` testid carries the named status the suite reads.
+function SeamField({ status }: { status: string }): JSX.Element {
+  const normalized = status.toLowerCase();
+  const tone: 'flow' | 'signal' | 'neutral' =
+    normalized === 'synced'
+      ? 'flow'
+      : normalized === 'conflict'
+        ? 'signal'
+        : 'neutral';
+  return (
+    <div
+      style={{
+        border: '1px solid var(--line)',
+        borderRadius: 'var(--r-sm)',
+        padding: '6px 9px',
+        background: 'var(--surface-2)',
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 4,
+      }}
+    >
+      <div className="lab">HubSpot seam</div>
+      <span data-testid="deal-seam-status">
+        <Chip tone={tone}>{status}</Chip>
+      </span>
+    </div>
+  );
+}
+
 export default function DealView({
   familyId,
   refreshKey,
@@ -297,14 +329,12 @@ export default function DealView({
           value={deal.attribution_source}
           testId="deal-attribution"
         />
-        <DealField
-          label="CRM seam status"
-          value={
+        <SeamField
+          status={
             seed.status === 'captured'
               ? seed.data.seam_status
               : deal.crm_seam_status
           }
-          testId="deal-seam-status"
         />
       </dl>
 

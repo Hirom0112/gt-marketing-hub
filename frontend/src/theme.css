@@ -175,6 +175,241 @@ figure {
   font-family: var(--mono);
 }
 
+/* =============================================================================
+   Operator page (S11 W2; A-17) — two surfaces under a thin situation strip.
+
+   Read in 3 seconds in the order the operator lives it:
+     situation (money on the table) → calendar (find) → work-panel (act).
+   Hierarchy first: the situation strip is loud, the calendar is the wide canvas,
+   the work-panel is a self-contained column. Color is signal only.
+============================================================================= */
+
+.enrollment-workspace {
+  display: grid;
+  gap: var(--s-5);
+}
+
+/* Two primary surfaces: calendar (find, wide) | work-panel (act). On a narrow
+   viewport they stack — find first, act below. */
+.operator-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.5fr) minmax(360px, 1fr);
+  gap: var(--s-5);
+  align-items: start;
+}
+
+@media (max-width: 980px) {
+  .operator-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+.operator-find {
+  display: grid;
+  gap: var(--s-3);
+  min-width: 0;
+}
+
+.operator-act {
+  min-width: 0;
+  position: sticky;
+  top: var(--s-4);
+}
+
+@media (max-width: 980px) {
+  .operator-act {
+    position: static;
+  }
+}
+
+/* The find-surface header: a section title on the left, the Calendar⇆All toggle
+   on the right. */
+.find-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--s-3);
+}
+
+.find-head-title {
+  font-size: var(--fs-sm);
+  color: var(--ink);
+  letter-spacing: var(--tracking-lab);
+}
+
+/* ---- situation strip — narrative beat 1, "money on the table" -------------- */
+.situation-bar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--s-3);
+  padding: var(--s-3) var(--s-4);
+  background: var(--signal-wash);
+  border-color: var(--signal);
+  border-left: 3px solid var(--signal);
+  font-size: var(--fs-body);
+}
+
+.situation-lead {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s-2);
+  color: var(--signal-ink);
+  font-weight: 700;
+}
+
+.situation-item {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s-1);
+  color: var(--ink-soft);
+}
+
+.situation-figure {
+  font-weight: 700;
+  font-size: var(--fs-md);
+  color: var(--signal-ink);
+}
+
+.situation-money {
+  color: var(--gate-ink);
+}
+
+.situation-dot {
+  color: var(--line-strong);
+}
+
+/* ---- work-panel (act) — the self-contained right column ------------------- */
+.work-panel {
+  display: grid;
+  gap: var(--s-4);
+  min-width: 0;
+}
+
+.work-panel-rule {
+  height: 1px;
+  background: var(--line);
+}
+
+/* ---- calendar (find) — the wide primary canvas ---------------------------- */
+.calendar-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--s-2);
+  margin-bottom: var(--s-2);
+}
+
+.calendar-head-title {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s-1);
+  color: var(--ink);
+  font-size: var(--fs-sm);
+}
+
+.calendar-pager {
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+}
+
+.calendar-month-label {
+  font-size: var(--fs-sm);
+  font-weight: 700;
+  min-width: 104px;
+  text-align: center;
+  color: var(--ink);
+}
+
+.calendar-weekdays {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  gap: var(--s-1);
+  margin-bottom: var(--s-1);
+}
+
+.calendar-grid {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  gap: var(--s-1);
+}
+
+.calendar-cell {
+  min-height: 76px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-sm);
+  padding: var(--s-1);
+  background: var(--surface-2);
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+/* A day that actually carries a stall lifts off the page slightly — the eye goes
+   straight to the days that hold work. */
+.calendar-cell.has-families {
+  background: var(--surface);
+  border-color: var(--line-strong);
+  box-shadow: var(--shadow-sm);
+}
+
+.calendar-daynum {
+  color: var(--muted);
+}
+
+/* One family chip — two urgency signals in one row: the recency tint (border +
+   wash) and a recovery-value badge. */
+.calendar-chip {
+  display: flex;
+  align-items: center;
+  gap: var(--s-1);
+  width: 100%;
+  font: inherit;
+  font-size: var(--fs-chip);
+  text-align: left;
+  border-radius: var(--r-xs);
+  border: 1px solid var(--line);
+  padding: 2px 4px 2px 6px;
+  transition:
+    box-shadow var(--dur) var(--ease),
+    transform var(--dur) var(--ease);
+}
+
+.calendar-chip:hover {
+  box-shadow: var(--shadow-sm);
+}
+
+.calendar-chip.active {
+  outline: 2px solid var(--ink);
+  outline-offset: 1px;
+}
+
+/* Overdue chips carry a heavier border — the loudest "go cold" signal reads
+   first at a glance. */
+.calendar-chip.recency-overdue {
+  border-left-width: 3px;
+  font-weight: 600;
+}
+
+.calendar-chip-name {
+  flex: 1;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.calendar-chip-value {
+  flex-shrink: 0;
+  font-size: var(--fs-micro);
+  font-weight: 700;
+  padding: 0 4px;
+  border-radius: var(--r-pill);
+  border: 1px solid var(--line);
+  line-height: 1.5;
+}
+
 /* ---- refined scrollbars --------------------------------------------------- */
 .scroll {
   scrollbar-width: thin;

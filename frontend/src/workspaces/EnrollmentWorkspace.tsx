@@ -1,36 +1,29 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { AlertTriangle, CalendarDays, LayoutGrid } from 'lucide-react';
+import { AlertTriangle, CalendarDays, List } from 'lucide-react';
 import ActionPanel from '../ActionPanel';
 import DealView from '../DealView';
 import FundingTracker from '../FundingTracker';
-import LandingDashboard from '../LandingDashboard';
-import PipelineBoard from '../PipelineBoard';
-import SeamView from '../SeamView';
 import WorkQueue from '../WorkQueue';
 import CloseTipsPanel from '../enrollment/CloseTipsPanel';
 import EnrollmentCalendar from '../enrollment/EnrollmentCalendar';
 import NotesTimeline, {
   type NotesTimelineHandle,
 } from '../enrollment/NotesTimeline';
-import {
-  type RecoverableRow,
-  summarizeRecovery,
-} from '../enrollment/recency';
+import { type RecoverableRow, summarizeRecovery } from '../enrollment/recency';
 import { apiBaseUrl } from '../config';
 import { Card, WorkspaceToggle } from '../ui';
 
-// S8 Wave 2 enrollment workspace — composes the (now re-skinned) real enrollment
-// components into the reference's enrollment IA: a KPI strip up top (pipeline
-// counts + CRM-seam ledger), then a two-column body — the pipeline board and the
-// recovery work surfaces on the left, the live deal panel (deal view + AI action
-// panel + funding/TEFA gate) on the right. Internals fetch real data; this
-// container only places them and owns the focused-family SELECTION.
+// The operator page (S11 W2; A-17). This cockpit is the CATCH-AND-FORWARD layer,
+// not the system of record: the operator's job is (1) see a stall the moment it
+// happens, (2) capture context, (3) push to HubSpot. The page is therefore TWO
+// primary surfaces only — a CALENDAR (find) on the LEFT and a family WORK-PANEL
+// (act) on the RIGHT — under a thin SITUATION STRIP ("money on the table").
 //
-// Selection wiring (bug fix): the deal panel previously hardcoded familyId to a
-// non-real id ('fam-a'), which 422s against the real API. We now load
-// GET /families on mount, default the focus to the first real family_id (a
-// UUID), and never mount the deal panel with a non-real id — the work queue
-// drives selection via onSelectFamily.
+// The funnel scoreboard + the CRM-seam ledger moved to Leadership (A-17); the
+// ranked work queue is DEMOTED to an optional "show everything regardless of
+// date" list behind the calendar⇆all toggle. Nothing else competes for the
+// operator's primary attention. Internals fetch real data; this container only
+// places them and owns the focused-family SELECTION.
 
 // GET /families item — only the fields we read here (the API returns more).
 interface FamilySummary {
@@ -38,10 +31,9 @@ interface FamilySummary {
   display_name: string;
 }
 
-// Which surface the left column shows: the pipeline board + capped work queue,
-// or the full-width enrollment calendar. The calendar is reachable in ONE click
-// (the toggle), not by scrolling a long page.
-type LeftView = 'board' | 'calendar';
+// The left surface: the default calendar (find by stall date), or the demoted
+// "all families regardless of date" ranked list (the old work queue).
+type LeftView = 'calendar' | 'all';
 
 type FamiliesState =
   | { status: 'loading' }
@@ -53,11 +45,12 @@ export default function EnrollmentWorkspace(): JSX.Element {
     status: 'loading',
   });
   const [selectedFamilyId, setSelectedFamilyId] = useState<string | null>(null);
-  // The left column defaults to the Board view; the toggle swaps to Calendar.
-  const [leftView, setLeftView] = useState<LeftView>('board');
-  // The /work-queue rows the situation bar summarizes (derived headline numbers,
-  // INV-11 spirit — never hardcoded). The WorkQueue component still fetches its
-  // own copy for the ranked list; this read feeds only the headline figures.
+  // The left surface defaults to the CALENDAR (the primary "find"); the toggle
+  // swaps to the demoted "all families" list.
+  const [leftView, setLeftView] = useState<LeftView>('calendar');
+  // The /work-queue rows the situation strip summarizes (derived headline
+  // numbers, INV-11 spirit — never hardcoded). The WorkQueue component still
+  // fetches its own copy for the ranked list; this read feeds only the headline.
   const [recoveryRows, setRecoveryRows] = useState<RecoverableRow[] | null>(
     null,
   );
@@ -105,8 +98,8 @@ export default function EnrollmentWorkspace(): JSX.Element {
     };
   }, []);
 
-  // Pull the work-queue once for the situation-bar headline figures. Read-only
-  // GET (INV-2); failures degrade silently to a hidden bar (the ranked list in
+  // Pull the work-queue once for the situation-strip headline figures. Read-only
+  // GET (INV-2); failures degrade silently to a hidden strip (the ranked list in
   // WorkQueue surfaces its own error state).
   useEffect(() => {
     let cancelled = false;
@@ -152,59 +145,45 @@ export default function EnrollmentWorkspace(): JSX.Element {
       );
     }
     return (
-      <Card style={{ display: 'grid', gap: 'var(--s-4)', minWidth: 0 }}>
+      <Card className="work-panel">
         <DealView familyId={selectedFamilyId} refreshKey={dealRefresh} />
-        <div style={{ height: 1, background: 'var(--line)' }} aria-hidden />
+        <div className="work-panel-rule" aria-hidden />
         <ActionPanel
           familyId={selectedFamilyId}
           onActionApproved={handleActionApproved}
         />
-        <div style={{ height: 1, background: 'var(--line)' }} aria-hidden />
+        <div className="work-panel-rule" aria-hidden />
         <CloseTipsPanel familyId={selectedFamilyId} />
-        <div style={{ height: 1, background: 'var(--line)' }} aria-hidden />
+        <div className="work-panel-rule" aria-hidden />
         <NotesTimeline ref={notesRef} familyId={selectedFamilyId} />
-        <div style={{ height: 1, background: 'var(--line)' }} aria-hidden />
+        <div className="work-panel-rule" aria-hidden />
         <FundingTracker familyId={selectedFamilyId} />
       </Card>
     );
   }
 
   const viewOptions = [
-    { key: 'board' as const, label: 'Board', icon: LayoutGrid },
     { key: 'calendar' as const, label: 'Calendar', icon: CalendarDays },
+    { key: 'all' as const, label: 'All families', icon: List },
   ];
 
   return (
     <section
       aria-label="Enrollment workspace"
       className="enrollment-workspace"
-      style={{ display: 'grid', gap: 'var(--s-5)' }}
     >
-      {/* Recovery-board front door: derived headline triage numbers, top of page */}
+      {/* Narrative beat 1 — "money on the table": a thin one-line strip at the
+          very top, derived from the /work-queue rows (INV-11 spirit). */}
       {recoveryRows !== null && <SituationBar rows={recoveryRows} />}
 
-      {/* KPI strip + seam ledger */}
-      <LandingDashboard />
-
-      {/* body: board ⇆ calendar surfaces | live deal panel */}
-      <div
-        style={{
-          display: 'grid',
-          gridTemplateColumns: 'minmax(0, 1.35fr) minmax(0, 1fr)',
-          gap: 'var(--s-4)',
-          alignItems: 'start',
-        }}
-      >
-        <div style={{ display: 'grid', gap: 'var(--s-5)', minWidth: 0 }}>
-          {/* Left-column header: a one-click Board ⇆ Calendar toggle so the
-              calendar is reachable without scrolling past the queue. */}
-          <div
-            style={{
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'flex-end',
-            }}
-          >
+      {/* The two primary surfaces: calendar (find) | family work-panel (act). */}
+      <div className="operator-grid">
+        <div className="operator-find">
+          {/* The left-surface header: a title + a one-click Calendar ⇆ All
+              toggle. The calendar is the default "find"; "All families" reveals
+              the demoted ranked list regardless of date. */}
+          <div className="find-head">
+            <span className="lab find-head-title">Find a stall</span>
             <div data-testid="enrollment-view-toggle">
               <WorkspaceToggle
                 options={viewOptions}
@@ -215,33 +194,30 @@ export default function EnrollmentWorkspace(): JSX.Element {
             </div>
           </div>
 
-          {leftView === 'board' ? (
-            <>
-              <PipelineBoard />
-              <WorkQueue
-                selectedFamilyId={selectedFamilyId ?? undefined}
-                onSelectFamily={setSelectedFamilyId}
-              />
-              <SeamView />
-            </>
-          ) : (
+          {leftView === 'calendar' ? (
             <EnrollmentCalendar
+              selectedFamilyId={selectedFamilyId ?? undefined}
+              onSelectFamily={setSelectedFamilyId}
+            />
+          ) : (
+            <WorkQueue
               selectedFamilyId={selectedFamilyId ?? undefined}
               onSelectFamily={setSelectedFamilyId}
             />
           )}
         </div>
 
-        {renderDealPanel()}
+        <div className="operator-act">{renderDealPanel()}</div>
       </div>
     </section>
   );
 }
 
-// The situation bar — a single row of derived headline numbers at the top of the
-// Enrollment workspace, computed client-side from the fetched /work-queue rows
-// (INV-11 spirit: nothing hardcoded). Reads as a triage headline:
-// "⚠ N stalled · N overdue · $X recoverable this week".
+// The situation strip — a single line of derived headline numbers at the very
+// top of the operator page, computed client-side from the fetched /work-queue
+// rows (INV-11 spirit: nothing hardcoded). Reads as a triage headline:
+// "⚠ N stalled · N overdue · $X recoverable this week". Per A-17, "stalled"
+// EXCLUDES brand-new fresh leads (still inside the contact window).
 function SituationBar({ rows }: { rows: readonly RecoverableRow[] }): JSX.Element {
   const { stalled, overdue, recoverableValue } = summarizeRecovery(rows);
   const dollars = recoverableValue.toLocaleString('en-US', {
@@ -251,57 +227,33 @@ function SituationBar({ rows }: { rows: readonly RecoverableRow[] }): JSX.Elemen
   });
   return (
     <div data-testid="situation-bar">
-      <Card
-        className="situation-bar"
-        style={{
-          display: 'flex',
-          alignItems: 'center',
-          flexWrap: 'wrap',
-          gap: 'var(--s-4)',
-          background: 'var(--signal-wash)',
-          borderColor: 'var(--signal)',
-        }}
-      >
-        <span
-          style={{
-            display: 'inline-flex',
-            alignItems: 'center',
-            gap: 'var(--s-2)',
-            color: 'var(--signal-ink)',
-            fontWeight: 600,
-          }}
-        >
+      <Card className="situation-bar">
+        <span className="situation-lead">
           <AlertTriangle size={16} aria-hidden />
-          <span className="mono" data-testid="situation-stalled">
+          <span className="mono situation-figure" data-testid="situation-stalled">
             {stalled}
           </span>{' '}
           stalled
         </span>
-        <span aria-hidden style={{ color: 'var(--line-strong)' }}>
+        <span className="situation-dot" aria-hidden>
           ·
         </span>
-        <span
-          style={{ display: 'inline-flex', alignItems: 'center', gap: 'var(--s-1)' }}
-        >
+        <span className="situation-item">
           <span
-            className="mono"
+            className="mono situation-figure"
             data-testid="situation-overdue"
-            style={{ fontWeight: 600, color: 'var(--signal-ink)' }}
           >
             {overdue}
           </span>{' '}
           overdue
         </span>
-        <span aria-hidden style={{ color: 'var(--line-strong)' }}>
+        <span className="situation-dot" aria-hidden>
           ·
         </span>
-        <span
-          style={{ display: 'inline-flex', alignItems: 'center', gap: 'var(--s-1)' }}
-        >
+        <span className="situation-item">
           <span
-            className="mono"
+            className="mono situation-figure situation-money"
             data-testid="situation-recoverable"
-            style={{ fontWeight: 600, color: 'var(--gate-ink)' }}
           >
             {dollars}
           </span>{' '}

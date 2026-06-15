@@ -86,16 +86,22 @@ const CALENDAR_PAYLOAD = {
     {
       family_id: FAM_ONE,
       display_name: 'The Alvarez Family',
-      apply_date: '2026-06-10T09:00:00Z',
+      stall_date: '2026-06-10T09:00:00Z',
+      apply_date: '2026-05-02T09:00:00Z',
       current_stage: 'enroll',
       contact_status: 'overdue',
+      value: 10474,
+      score: 0.91,
     },
     {
       family_id: FAM_TWO,
       display_name: 'The Bauer Family',
-      apply_date: '2026-06-18T09:00:00Z',
+      stall_date: '2026-06-18T09:00:00Z',
+      apply_date: '2026-05-09T09:00:00Z',
       current_stage: 'apply',
       contact_status: 'fresh',
+      value: 30000,
+      score: 0.74,
     },
   ],
 };
@@ -195,22 +201,40 @@ describe('EnrollmentWorkspace', () => {
     expect(urlsCalled().some((u) => u.includes('fam-a'))).toBe(false);
   });
 
-  it('switches the focused family when a work-queue row is clicked', async () => {
+  it('switches the focused family when a calendar chip is clicked', async () => {
     vi.stubGlobal('fetch', routedFetchMock());
     render(<EnrollmentWorkspace />);
 
-    // Wait for the second row to be available (work queue loaded).
-    const secondRow = await screen.findByTestId(`work-queue-row-${FAM_TWO}`);
+    // The calendar is the default "find" surface — click the second family's
+    // chip to focus it in the work-panel.
+    const chip = await screen.findByTestId(`calendar-chip-${FAM_TWO}`);
+    fireEvent.click(chip);
 
-    fireEvent.click(secondRow);
-
-    // Selecting the second row triggers a fetch for that family's id.
+    // Selecting that chip triggers a fetch for that family's id.
     await waitFor(() => {
       const urls = urlsCalled();
       expect(urls.some((u) => u.includes(`/families/${FAM_TWO}`))).toBe(true);
     });
 
     // Still never the placeholder.
+    expect(urlsCalled().some((u) => u.includes('fam-a'))).toBe(false);
+  });
+
+  it('switches the focused family from the demoted all-families list', async () => {
+    vi.stubGlobal('fetch', routedFetchMock());
+    render(<EnrollmentWorkspace />);
+
+    // Reveal the demoted ranked list, then click the second family's row.
+    const toggle = await screen.findByTestId('enrollment-view-toggle');
+    fireEvent.click(within(toggle).getByRole('tab', { name: /all families/i }));
+
+    const secondRow = await screen.findByTestId(`work-queue-row-${FAM_TWO}`);
+    fireEvent.click(secondRow);
+
+    await waitFor(() => {
+      const urls = urlsCalled();
+      expect(urls.some((u) => u.includes(`/families/${FAM_TWO}`))).toBe(true);
+    });
     expect(urlsCalled().some((u) => u.includes('fam-a'))).toBe(false);
   });
 
@@ -229,36 +253,38 @@ describe('EnrollmentWorkspace', () => {
     vi.stubGlobal('fetch', routedFetchMock());
     render(<EnrollmentWorkspace />);
 
-    // The situation bar renders, derived from the /work-queue rows (one overdue,
-    // one fresh — both un-followed-up ⇒ stalled=2; overdue=1; both recoverable ⇒
-    // recoverable $ = 10474 + 30000 = $40,474).
+    // The situation bar renders, derived from the /work-queue rows. A-17: a fresh
+    // lead is still inside its contact window, so it is NOT stalled — only the
+    // overdue row counts ⇒ stalled=1; overdue=1; both rows are still recoverable
+    // ⇒ recoverable $ = 10474 + 30000 = $40,474.
     const bar = await screen.findByTestId('situation-bar');
-    expect(within(bar).getByTestId('situation-stalled')).toHaveTextContent('2');
+    expect(within(bar).getByTestId('situation-stalled')).toHaveTextContent('1');
     expect(within(bar).getByTestId('situation-overdue')).toHaveTextContent('1');
     expect(within(bar).getByTestId('situation-recoverable')).toHaveTextContent(
       '$40,474',
     );
   });
 
-  it('toggles the left column between board and calendar in one click', async () => {
+  it('defaults to the calendar and toggles to the demoted all-families list', async () => {
     vi.stubGlobal('fetch', routedFetchMock());
     render(<EnrollmentWorkspace />);
 
-    // Board is the default: the work queue is visible, the calendar is not.
-    expect(await screen.findByTestId('work-queue')).toBeInTheDocument();
-    expect(screen.queryByTestId('enrollment-calendar')).not.toBeInTheDocument();
-
-    // One click on the Calendar segment swaps the column.
-    const toggle = screen.getByTestId('enrollment-view-toggle');
-    fireEvent.click(within(toggle).getByRole('tab', { name: /calendar/i }));
-
+    // Calendar is the default primary "find": it's visible, the ranked queue is
+    // demoted out of view.
     expect(await screen.findByTestId('enrollment-calendar')).toBeInTheDocument();
     expect(screen.queryByTestId('work-queue')).not.toBeInTheDocument();
 
-    // ...and back to the board.
-    fireEvent.click(within(toggle).getByRole('tab', { name: /board/i }));
+    // One click on "All families" swaps to the demoted ranked list.
+    const toggle = screen.getByTestId('enrollment-view-toggle');
+    fireEvent.click(within(toggle).getByRole('tab', { name: /all families/i }));
+
     expect(await screen.findByTestId('work-queue')).toBeInTheDocument();
     expect(screen.queryByTestId('enrollment-calendar')).not.toBeInTheDocument();
+
+    // ...and back to the calendar (still one action).
+    fireEvent.click(within(toggle).getByRole('tab', { name: /calendar/i }));
+    expect(await screen.findByTestId('enrollment-calendar')).toBeInTheDocument();
+    expect(screen.queryByTestId('work-queue')).not.toBeInTheDocument();
   });
 
   it('refreshes the deal view + notes after an approved follow-up', async () => {
