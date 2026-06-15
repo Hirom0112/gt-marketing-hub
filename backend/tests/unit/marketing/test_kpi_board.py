@@ -14,7 +14,7 @@ from app.core.params import Params, load_params
 from app.marketing.kpi_board import ChannelKpi, roll_up, summary
 
 # The committed example file is the authoritative params source for these tests.
-EXAMPLE_PARAMS = Path(__file__).resolve().parents[3] / "params" / "params.example.yaml"
+EXAMPLE_PARAMS = Path(__file__).resolve().parents[4] / "params" / "params.example.yaml"
 
 
 def _params() -> Params:
