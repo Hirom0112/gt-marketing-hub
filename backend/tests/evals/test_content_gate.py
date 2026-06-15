@@ -62,8 +62,12 @@ def _provenance() -> Provenance:
     return Provenance(generated_by=GeneratedBy.LLM, created_at="2026-06-14T00:00:00Z")
 
 
-def _candidate(*, copy_text: str, audience: AudienceTag = AudienceTag.PROSPECTIVE_PARENT,
-               claims: list[str] | None = None) -> ContentCandidate:
+def _candidate(
+    *,
+    copy_text: str,
+    audience: AudienceTag = AudienceTag.PROSPECTIVE_PARENT,
+    claims: list[str] | None = None,
+) -> ContentCandidate:
     return ContentCandidate(
         id="cand-1",
         batch_id="batch-1",
@@ -89,9 +93,7 @@ def test_validation_result_passed_is_and_of_v1_v4() -> None:
         for v2 in (RuleVerdict.PASS, RuleVerdict.FAIL):
             for v3 in (RuleVerdict.PASS, RuleVerdict.FAIL):
                 for v4 in (RuleVerdict.PASS, RuleVerdict.FAIL):
-                    expected = all(
-                        v is RuleVerdict.PASS for v in (v1, v2, v3, v4)
-                    )
+                    expected = all(v is RuleVerdict.PASS for v in (v1, v2, v3, v4))
                     result = ValidationResult(
                         v1_schema=v1,
                         v2_grounding=v2,
@@ -121,16 +123,17 @@ def test_validation_result_passed_is_and_of_v1_v4() -> None:
 # --------------------------------------------------------------------------- #
 # A ContentCandidate flows through the SAME gate (copy_text, audience_tag).
 # --------------------------------------------------------------------------- #
-def test_content_candidate_flows_through_gate(
-    params: Params, settings_no_key: Settings
-) -> None:
+def test_content_candidate_flows_through_gate(params: Params, settings_no_key: Settings) -> None:
     # Clean, adult-audience, sourced/empty claims, on-brand judge ⇒ passes.
     clean = _candidate(
         copy_text="Thanks for your interest in GT School — we'd love to help your "
         "family explore enrollment.",
     )
     ok = evaluate_message(
-        clean, settings=settings_no_key, params=params, brand_judge=on_brand_judge,
+        clean,
+        settings=settings_no_key,
+        params=params,
+        brand_judge=on_brand_judge,
         audience=clean.audience_tag.value,
     )
     assert isinstance(ok, ValidationResult)
@@ -145,7 +148,10 @@ def test_content_candidate_flows_through_gate(
         copy_text="Our students learn at 4X speed compared to traditional schools.",
     )
     blocked = evaluate_message(
-        multiplier, settings=settings_no_key, params=params, brand_judge=on_brand_judge,
+        multiplier,
+        settings=settings_no_key,
+        params=params,
+        brand_judge=on_brand_judge,
         audience=multiplier.audience_tag.value,
     )
     assert blocked.passed is False
@@ -157,7 +163,10 @@ def test_content_candidate_flows_through_gate(
         copy_text="Hey kids! Ask your 12-year-old @timmy_grade6 to sign up.",
     )
     minor_blocked = evaluate_message(
-        minor, settings=settings_no_key, params=params, brand_judge=on_brand_judge,
+        minor,
+        settings=settings_no_key,
+        params=params,
+        brand_judge=on_brand_judge,
         audience=minor.audience_tag.value,
     )
     assert minor_blocked.passed is False
@@ -168,9 +177,7 @@ def test_content_candidate_flows_through_gate(
 # --------------------------------------------------------------------------- #
 # V-4 wired to BrandRule: an ACTIVE `never` rule blocks absolutely.
 # --------------------------------------------------------------------------- #
-def test_v4_blocks_active_never_brand_rule(
-    params: Params, settings_no_key: Settings
-) -> None:
+def test_v4_blocks_active_never_brand_rule(params: Params, settings_no_key: Settings) -> None:
     active_never = BrandRule(
         id="rule-1",
         rule_type=RuleType.NEVER,
@@ -196,8 +203,12 @@ def test_v4_blocks_active_never_brand_rule(
 
     # Active never-rule violated ⇒ V-4 FAIL even with an on-brand judge.
     result = evaluate_message(
-        record, settings=settings_no_key, params=params, brand_judge=on_brand_judge,
-        audience=record.audience_tag.value, brand_rules=[active_never],
+        record,
+        settings=settings_no_key,
+        params=params,
+        brand_judge=on_brand_judge,
+        audience=record.audience_tag.value,
+        brand_rules=[active_never],
     )
     assert result.v4_onbrand == "fail"
     assert result.passed is False
@@ -205,8 +216,12 @@ def test_v4_blocks_active_never_brand_rule(
 
     # An INACTIVE never-rule does NOT block (judge decides; on-brand ⇒ pass).
     inactive_result = evaluate_message(
-        record, settings=settings_no_key, params=params, brand_judge=on_brand_judge,
-        audience=record.audience_tag.value, brand_rules=[inactive_never],
+        record,
+        settings=settings_no_key,
+        params=params,
+        brand_judge=on_brand_judge,
+        audience=record.audience_tag.value,
+        brand_rules=[inactive_never],
     )
     assert inactive_result.v4_onbrand == "pass"
     assert inactive_result.passed is True
@@ -222,7 +237,9 @@ def test_content_v4_denies_when_judge_unavailable(
         copy_text="Thanks for reaching out — we're glad to help your family enroll.",
     )
     result = evaluate_message(
-        record, settings=settings_no_key, params=params,
+        record,
+        settings=settings_no_key,
+        params=params,
         audience=record.audience_tag.value,
     )
     assert result.v4_onbrand == "fail"
