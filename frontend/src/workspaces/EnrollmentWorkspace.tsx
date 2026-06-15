@@ -6,6 +6,7 @@ import LandingDashboard from '../LandingDashboard';
 import PipelineBoard from '../PipelineBoard';
 import SeamView from '../SeamView';
 import WorkQueue from '../WorkQueue';
+import CloseTipsPanel from '../enrollment/CloseTipsPanel';
 import EnrollmentCalendar from '../enrollment/EnrollmentCalendar';
 import NotesTimeline, {
   type NotesTimelineHandle,
@@ -119,6 +120,8 @@ export default function EnrollmentWorkspace(): JSX.Element {
           familyId={selectedFamilyId}
           onActionApproved={handleActionApproved}
         />
+        <div style={{ height: 1, background: 'var(--line)' }} aria-hidden />
+        <CloseTipsPanel familyId={selectedFamilyId} />
         <div style={{ height: 1, background: 'var(--line)' }} aria-hidden />
         <NotesTimeline ref={notesRef} familyId={selectedFamilyId} />
         <div style={{ height: 1, background: 'var(--line)' }} aria-hidden />

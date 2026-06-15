@@ -23,7 +23,6 @@ import json
 from pathlib import Path
 
 import pytest
-from app.evals.suite import EvalRow, EvalSuiteResult, run_suite
 from pydantic import ValidationError
 
 from app.adapters.geo_sampling.base import GeoObservation
@@ -31,9 +30,11 @@ from app.adapters.geo_sampling.simulated import SimulatedGeoSamplingAdapter
 from app.ai.schemas.enrollment_draft import EnrollmentDraftProposal
 from app.core.params import Params, load_params
 from app.core.settings import Settings
+from app.evals.suite import EvalRow, EvalSuiteResult, run_suite
 
 EXAMPLE_PARAMS = Path(__file__).resolve().parents[3] / "params" / "params.example.yaml"
 GOLDEN = Path(__file__).resolve().parent / "golden" / "enrollment_drafts.jsonl"
+CLOSE_TIPS_GOLDEN = Path(__file__).resolve().parent / "golden" / "close_tips.jsonl"
 
 _PROMPT_SET = (
     "best gifted school online",
@@ -78,6 +79,10 @@ def _on_brand_judge(proposal: EnrollmentDraftProposal, never_rules: list[str]) -
 
 def _golden_drafts() -> list[dict[str, object]]:
     return [json.loads(line) for line in GOLDEN.read_text().splitlines() if line.strip()]
+
+
+def _close_tips_golden() -> list[dict[str, object]]:
+    return [json.loads(line) for line in CLOSE_TIPS_GOLDEN.read_text().splitlines() if line.strip()]
 
 
 def _geo_observations(min_samples: int) -> list[GeoObservation]:
@@ -164,6 +169,33 @@ def test_eval_suite_is_fail_closed_when_one_eval_is_red(
     assert _row_by_name(result, "geo_tracking").passed is True
     # One red eval ⇒ the whole scoreboard is red (fail-closed).
     assert result.overall_green is False
+
+
+def test_eval_suite_includes_close_tips_row_when_golden_supplied(
+    params: Params, settings_no_key: Settings
+) -> None:
+    """S9 W5: a supplied close-tips golden set appends a green ``close_tips`` row.
+
+    The row is ADDITIVE (existing 4-row callers are unchanged): with the committed
+    close-tips golden set + an on-brand judge, the row clears its
+    ``close_tips.min_grounding`` floor (INV-11) and the scoreboard stays green.
+    """
+    min_samples = params.eval_thresholds.geo_tracking.min_samples_per_prompt
+    result = run_suite(
+        settings=settings_no_key,
+        params=params,
+        golden_drafts=_golden_drafts(),
+        nudge_counts=_NUDGE_PASS,
+        doc_golden=(_DOC_PREDICTED, _DOC_GROUND_TRUTH),
+        geo_observations=_geo_observations(min_samples),
+        close_tips_golden=_close_tips_golden(),
+        brand_judge=_on_brand_judge,
+    )
+    assert len(result.rows) == 5
+    close_tips = _row_by_name(result, "close_tips")
+    assert close_tips.threshold == params.eval_thresholds.close_tips.min_grounding
+    assert close_tips.passed is True
+    assert result.overall_green is True
 
 
 def test_eval_row_is_frozen(params: Params, settings_no_key: Settings) -> None:

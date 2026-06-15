@@ -13,6 +13,7 @@ from uuid import UUID
 from pydantic import BaseModel, Field
 
 from app.ai.schemas.brand import LibraryAsset
+from app.ai.schemas.close_tips import CloseTipsProposal
 from app.ai.schemas.content import Channel, ContentCandidate, Decision
 from app.ai.schemas.enrollment_draft import DraftAction, EnrollmentDraftProposal
 from app.core.contact_status import ContactStatus
@@ -144,6 +145,31 @@ class DraftResponse(BaseModel):
     degraded: bool
     failed_rules: list[str] = Field(default_factory=list)
     proposal: EnrollmentDraftProposal | None = None
+    validation: ValidationResult | None = None
+
+
+class CloseTipsRequest(BaseModel):
+    """`POST /ai/enrollment/close-tips` body — which family (S9 W5; §6)."""
+
+    family_id: UUID
+
+
+class CloseTipsResponse(BaseModel):
+    """The §5.2 close-tips outcome surfaced to the client (INV-3/INV-4 boundary).
+
+    The tips body is surfaced **only** when ``surfaced`` is True (the eval passed
+    AND the close-tips grounding layer resolved). On a block/degrade ``proposal``
+    is ``None`` (no usable tips to act on) but ``proposal_id`` is always present so
+    the client can call the decision endpoint, and ``failed_rules`` carries the
+    gate's reasons (incl. ``close_tips_grounding`` for a fabricated citation) for
+    the audit-aware UI.
+    """
+
+    proposal_id: UUID
+    surfaced: bool
+    degraded: bool
+    failed_rules: list[str] = Field(default_factory=list)
+    proposal: CloseTipsProposal | None = None
     validation: ValidationResult | None = None
 
 

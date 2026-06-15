@@ -139,6 +139,20 @@ class MessageSafetyGrounding(_StrictModel):
     require_coppa_safe: bool
 
 
+class CloseTips(_StrictModel):
+    """S9 W5 "how to close" tips — grounded in app_form.extracted_fields (FR-4.3).
+
+    Same shape as :class:`MessageSafetyGrounding`: the close-tips proposal crosses
+    the SAME canonical grounding gate (A-10), so a hallucinated fact (a tip absent
+    from ``extracted_fields``) fails V-2 and is BLOCKED, not softened (INV-4). The
+    golden-set eval is gated by ``min_grounding`` (INV-3).
+    """
+
+    min_grounding: float
+    max_unverifiable_claims: int
+    require_coppa_safe: bool
+
+
 class GeoTracking(_StrictModel):
     """FR-4.4 GEO repeated-sampling thresholds."""
 
@@ -152,6 +166,7 @@ class EvalThresholds(_StrictModel):
     nudge_trigger: NudgeTrigger
     doc_extraction: DocExtraction
     message_safety_grounding: MessageSafetyGrounding
+    close_tips: CloseTips
     geo_tracking: GeoTracking
 
 

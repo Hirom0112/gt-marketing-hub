@@ -33,6 +33,7 @@ from uuid import UUID
 from pydantic import BaseModel, ConfigDict
 
 from app.adapters.geo_sampling.base import GeoObservation
+from app.ai.schemas.close_tips import CloseTip, CloseTipsProposal
 from app.ai.schemas.enrollment_draft import Claim, DraftAction, EnrollmentDraftProposal
 from app.core.eval_gate import BrandJudge, evaluate_message
 from app.core.params import Params
@@ -44,7 +45,13 @@ from app.evals.metrics import evaluate_doc_extraction, evaluate_nudge
 NUDGE_TRIGGER = "nudge_trigger"
 DOC_EXTRACTION = "doc_extraction"
 MESSAGE_SAFETY_GROUNDING = "message_safety_grounding"
+CLOSE_TIPS = "close_tips"
 GEO_TRACKING = "geo_tracking"
+
+# The operator-facing audience for close-tips advice (a COPPA-safe audience — the
+# tips are for the operator, never sent to a minor; a minor-targeting tip still
+# trips V-3 via the body text patterns regardless).
+_CLOSE_TIPS_AUDIENCE = "leadership"
 
 
 class NudgeCounts(TypedDict):
@@ -163,6 +170,58 @@ def _grounding_row(
     )
 
 
+def _close_tips_from_golden_row(row: Mapping[str, object]) -> CloseTipsProposal:
+    """Build a `CloseTipsProposal` from one close-tips golden jsonl row (S9 W5)."""
+    tips_raw = row["tips"]
+    assert isinstance(tips_raw, Sequence)
+    return CloseTipsProposal(
+        family_id=UUID(str(row["family_id"])),
+        tips=[CloseTip(text=str(t["text"]), source_ref=t["source_ref"]) for t in tips_raw],
+    )
+
+
+def _close_tips_row(
+    close_tips_golden: Sequence[Mapping[str, object]],
+    *,
+    settings: Settings,
+    params: Params,
+    brand_judge: BrandJudge | None,
+) -> EvalRow:
+    """Score the close-tips grounding accuracy over the golden set (S9 W5; FR-4.3).
+
+    Same approach as the grounding row: run `evaluate_message` per row (the
+    close-tips proposal crosses the SAME canonical gate — A-10) with the injected
+    on-brand judge and the operator audience, then accuracy = fraction of rows
+    where `result.passed == row["expected_passed"]`. `passed` is
+    `accuracy >= min_grounding` (the params `close_tips` floor, INV-11). An empty
+    golden set ⇒ no evidence ⇒ fail closed (INV-3).
+    """
+    min_grounding = params.eval_thresholds.close_tips.min_grounding
+    if not close_tips_golden:
+        return EvalRow(eval_name=CLOSE_TIPS, score=0.0, threshold=min_grounding, passed=False)
+
+    correct = 0
+    for row in close_tips_golden:
+        proposal = _close_tips_from_golden_row(row)
+        result = evaluate_message(
+            proposal,
+            settings=settings,
+            params=params,
+            brand_judge=brand_judge,
+            audience=_CLOSE_TIPS_AUDIENCE,
+        )
+        if result.passed == row["expected_passed"]:
+            correct += 1
+
+    accuracy = correct / len(close_tips_golden)
+    return EvalRow(
+        eval_name=CLOSE_TIPS,
+        score=accuracy,
+        threshold=min_grounding,
+        passed=accuracy >= min_grounding,
+    )
+
+
 def run_suite(
     *,
     settings: Settings,
@@ -171,6 +230,7 @@ def run_suite(
     nudge_counts: NudgeCounts,
     doc_golden: tuple[Mapping[str, object], Mapping[str, object]],
     geo_observations: Sequence[GeoObservation],
+    close_tips_golden: Sequence[Mapping[str, object]] = (),
     brand_judge: BrandJudge | None = None,
 ) -> EvalSuiteResult:
     """Run all four FR-4.x evals and fold them into one scoreboard (FR-4.5).
@@ -193,6 +253,10 @@ def run_suite(
         geo_observations: Already-sampled GEO observations (from the simulated
             adapter at a fixed seed) — at least `min_samples_per_prompt` runs
             for a non-red geo row (FR-4.4).
+        close_tips_golden: The close-tips grounding golden rows (S9 W5); when
+            non-empty a `close_tips` row is appended, scored via `evaluate_message`.
+            Empty (the default) ⇒ no close-tips row (existing 4-row callers
+            unchanged).
         brand_judge: An injected brand-conformance judge for the grounding
             gate's V-4; `None` ⇒ V-4 denies when no key (fail-closed).
 
@@ -233,6 +297,18 @@ def run_suite(
         brand_judge=brand_judge,
     )
 
+    # --- close_tips (S9 W5; FR-4.3) -----------------------------------------
+    # The "how to close" tips grounding row — included ONLY when a close-tips golden
+    # set is supplied, so existing 4-row callers are unchanged (the row is additive,
+    # not a new always-on gate). Crosses the SAME canonical gate (A-10).
+    close_tips_row = (
+        _close_tips_row(
+            close_tips_golden, settings=settings, params=params, brand_judge=brand_judge
+        )
+        if close_tips_golden
+        else None
+    )
+
     # --- geo_tracking (FR-4.4) ----------------------------------------------
     # `passed` reflects sufficient samples (`enabled`); `score` is coverage_mean
     # and `threshold` is the min_samples_per_prompt floor (as a float reference).
@@ -245,4 +321,6 @@ def run_suite(
     )
 
     rows = [nudge_row, doc_row, grounding_row, geo_row]
+    if close_tips_row is not None:
+        rows.append(close_tips_row)
     return EvalSuiteResult(rows=rows, overall_green=all(r.passed for r in rows))

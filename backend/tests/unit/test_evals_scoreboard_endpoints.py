@@ -30,7 +30,13 @@ from app.main import app
 
 client = TestClient(app)
 
-_EVAL_NAMES = {"nudge_trigger", "doc_extraction", "message_safety_grounding", "geo_tracking"}
+_EVAL_NAMES = {
+    "nudge_trigger",
+    "doc_extraction",
+    "message_safety_grounding",
+    "close_tips",
+    "geo_tracking",
+}
 
 
 @pytest.fixture(autouse=True)
@@ -51,7 +57,7 @@ def test_run_evals_returns_all_green_scoreboard() -> None:
     assert resp.status_code == 200
     data = resp.json()
 
-    assert len(data["rows"]) == 4
+    assert len(data["rows"]) == 5
     assert {row["eval_name"] for row in data["rows"]} == _EVAL_NAMES
     assert data["overall_green"] is True
     # Every row passed ⇒ no action disabled.

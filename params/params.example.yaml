@@ -36,6 +36,10 @@ eval_thresholds:            # FR-4.x — an action whose eval is below threshold
     min_grounding: 0.95
     max_unverifiable_claims: 0
     require_coppa_safe: true
+  close_tips:               # S9 W5 — "how to close" tips grounded in app_form.extracted_fields
+    min_grounding: 0.95     # golden-set accuracy floor; a hallucinated fact must be BLOCKED (V-2)
+    max_unverifiable_claims: 0
+    require_coppa_safe: true
   geo_tracking:             # FR-4.4 — repeated sampling, variance reported
     min_samples_per_prompt: 5
     report_variance: true

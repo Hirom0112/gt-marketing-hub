@@ -166,6 +166,7 @@ def _run_consolidated_suite(settings: Settings, params: Params) -> EvalSuiteResu
         nudge_counts=_NUDGE_PASS,
         doc_golden=(_DOC_PREDICTED, _DOC_GROUND_TRUTH),
         geo_observations=geo_observations,
+        close_tips_golden=_close_tips_golden(),
         brand_judge=_on_brand_judge,
     )
 
@@ -187,6 +188,20 @@ def _golden_drafts() -> list[dict[str, object]]:
         / "golden"
         / "enrollment_drafts.jsonl"
     )
+    return [json.loads(line) for line in golden.read_text().splitlines() if line.strip()]
+
+
+def _close_tips_golden() -> list[dict[str, object]]:
+    """Parse the committed close-tips grounding golden set (S9 W5; the locked contract).
+
+    The same file ``tests/evals/test_close_tips_grounding.py`` reads — the
+    close-tips row's golden inputs. Resolved relative to the backend root:
+    backend/app/api/evals.py → parents[2] is ``backend/``.
+    """
+    import json
+    from pathlib import Path
+
+    golden = Path(__file__).resolve().parents[2] / "tests" / "evals" / "golden" / "close_tips.jsonl"
     return [json.loads(line) for line in golden.read_text().splitlines() if line.strip()]
 
 

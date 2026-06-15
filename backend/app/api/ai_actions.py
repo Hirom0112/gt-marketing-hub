@@ -41,6 +41,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from app.adapters.hubspot.crm_adapter import CRMAdapter
 from app.ai.client import LLMClient
 from app.ai.cost import RunBudget
+from app.ai.graphs.close_tips import generate_close_tips
 from app.ai.graphs.enrollment_draft import draft_enrollment_message
 from app.api.deps import (
     get_brand_judge,
@@ -55,6 +56,8 @@ from app.api.deps import (
 )
 from app.api.schemas import (
     AuditResponse,
+    CloseTipsRequest,
+    CloseTipsResponse,
     DecisionRequest,
     DecisionResponse,
     DraftRequest,
@@ -85,6 +88,14 @@ DRAFT_GATING_EVAL = "message_safety_grounding"
 # The signal added to `failed_rules` when the suite-level kill suppresses a draft —
 # distinct from the per-message V-1..V-4 rule names so the UI can tell them apart.
 EVAL_SUITE_RED_RULE = "eval_suite_red"
+
+# S9 W5 close-tips audit head + the suite eval whose RED row kills the close-tips
+# action in the LIVE path, fail-closed (INV-3) — the same name the suite's
+# close-tips row reports under (`app.evals.suite.CLOSE_TIPS`).
+CLOSE_TIPS_FLOW = "close_tips"
+CLOSE_TIPS_SCHEMA_VERSION = "1"
+CLOSE_TIPS_GATING_EVAL = "close_tips"
+CLOSE_TIPS_EVAL_NAME = "close_tips_grounding"
 
 # --- dependency aliases (Annotated keeps the call in the type, not a default arg) ---
 RepositoryDep = Annotated[FamilyRepository, Depends(get_repository)]
@@ -180,6 +191,86 @@ def draft_enrollment(
         # Surface the body ONLY on pass AND when the suite is not red (§5.2 step 5;
         # FR-4.5). On block/degrade/kill the client gets no usable proposal — the
         # UI offers the deterministic template.
+        proposal=outcome.proposal if surfaced else None,
+        validation=validation,
+    )
+
+
+@router.post("/ai/enrollment/close-tips", response_model=CloseTipsResponse)
+def close_tips(
+    request: CloseTipsRequest,
+    repository: RepositoryDep,
+    params: ParamsDep,
+    settings: SettingsDep,
+    log: LogDep,
+    client: LLMClientDep,
+    brand_judge: BrandJudgeDep,
+    eval_state: EvalStateDep,
+) -> CloseTipsResponse:
+    """Generate eval-gated "how to close this family" tips, log, surface on pass.
+
+    Mirrors the §5.2 draft flow (INV-2/3/4): build the grounded context pack from
+    ``app_form.extracted_fields``, run the close-tips pipeline, LOG the proposal +
+    its eval REGARDLESS of pass/fail (INV-4 audit side), and surface the tips body
+    ONLY when the eval passed AND the consolidated ``close_tips`` suite row is not
+    RED. A red suite row disables the action in the LIVE path (FR-4.5; INV-3),
+    not merely the UI — the proposal is still produced + logged, but not surfaced
+    (``surfaced=False``, no body) with ``eval_suite_red`` added to ``failed_rules``.
+
+    Close-tips are advisory (read-only): there is no outbound send, so the proposal
+    is logged for the audit (NFR-6) but not routed through the send/decision path.
+    """
+    joined = repository.get_family(request.family_id)
+    if joined is None:
+        raise HTTPException(status_code=404, detail="family not found")
+
+    # Suite-level kill (FR-4.5; INV-3): a RED consolidated close-tips row disables
+    # surfacing in the live path. Computed BEFORE the pipeline so it can suppress an
+    # otherwise-passing proposal; the proposal is still produced + logged below.
+    eval_suite_red = not action_enabled(eval_state, CLOSE_TIPS_GATING_EVAL)
+
+    budget = RunBudget.from_config(settings=settings, params=params)
+    outcome = generate_close_tips(
+        joined,
+        client=client,
+        budget=budget,
+        settings=settings,
+        params=params,
+        brand_judge=brand_judge,
+    )
+
+    # LOG before a human sees anything (ARCH §10) — a new id per attempt.
+    proposal_id = uuid4()
+    payload: dict[str, object] = (
+        outcome.proposal.model_dump(mode="json") if outcome.proposal is not None else {}
+    )
+    log.log_proposal(
+        proposal_id=proposal_id,
+        flow=CLOSE_TIPS_FLOW,
+        schema_version=CLOSE_TIPS_SCHEMA_VERSION,
+        payload=payload,
+        family_id=request.family_id,
+    )
+    # Log the eval REGARDLESS of pass/fail — a blocked proposal is still logged with
+    # its failing eval (INV-4 audit side). A parse failure / degraded edge yields no
+    # validation (INV-2), recorded as a failed eval to keep the audit chain complete.
+    validation = outcome.validation
+    log.log_eval(
+        proposal_id=proposal_id,
+        eval_name=CLOSE_TIPS_EVAL_NAME,
+        passed=validation.passed if validation is not None else False,
+        score=validation.brand_score if validation is not None else None,
+    )
+
+    failed_rules = list(validation.failed_rules) if validation is not None else ["v1_schema"]
+    surfaced = outcome.surfaced and not eval_suite_red
+    if eval_suite_red and EVAL_SUITE_RED_RULE not in failed_rules:
+        failed_rules.append(EVAL_SUITE_RED_RULE)
+    return CloseTipsResponse(
+        proposal_id=proposal_id,
+        surfaced=surfaced,
+        degraded=outcome.degraded,
+        failed_rules=failed_rules,
         proposal=outcome.proposal if surfaced else None,
         validation=validation,
     )
