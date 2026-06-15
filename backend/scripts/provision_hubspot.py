@@ -8,12 +8,16 @@ schema only** — it NEVER writes a contact/deal record, so it cannot write PII
 
 What it does (ANALYSIS/hubspot-complement-plan.md §4/§6):
 
-1. **Reshape the single deal pipeline** (`default`) to the four cockpit stages
-   (interest → apply → enroll → tuition) by PATCHing the *labels* of four of the
-   six existing active stage ids (ascending displayOrder + probabilities) and
-   leaving Closed Lost. Relabel-in-place keeps the round-trip lossless and is
-   idempotent (re-running re-asserts the same labels). The two now-unused active
-   stage ids are left intact (no destructive deletes).
+1. **Reshape the single deal pipeline** (`default`) to EXACTLY the four cockpit
+   stages (interest → apply → enroll → tuition) + Closed Lost. It PATCHes the
+   *labels* of the first four active stage ids (ascending displayOrder +
+   probabilities), keeps the `closedlost` terminal stage, and **prunes** any
+   leftover stage (extra active stages beyond the four, and any non-`closedlost`
+   closed stage) via `DELETE /crm/v3/pipelines/deals/default/stages/{id}` so the
+   board shows a clean 4 + Closed Lost. Relabel-in-place keeps the round-trip
+   lossless and the prune makes re-runs idempotent: a leftover stage can never be
+   resurrected. The prune is guarded — it never deletes one of the four cockpit
+   stages or `closedlost`.
 2. **Create custom properties** idempotently (skip if present): on `deals`
    gt_synthetic_id / gt_funding_state / gt_stall_reason / gt_priority /
    gt_forms_signed / gt_apply_date; on `contacts` gt_synthetic_id. Reuses the
@@ -161,10 +165,13 @@ def _get_deal_pipeline(client: httpx.Client) -> dict[str, Any]:
 
 
 def reshape_pipeline(client: httpx.Client, *, dry_run: bool) -> dict[str, str]:
-    """Relabel the first four active stage ids to the cockpit stages (idempotent).
+    """Make the pipeline EXACTLY the four cockpit stages + Closed Lost (idempotent).
 
-    Returns the cockpit-value → HubSpot-stage-id map (incl. closed_lost) read
-    back from the live pipeline after the PATCH.
+    Relabels the first four active stage ids to the cockpit stages, keeps the
+    `closedlost` terminal stage, and prunes every leftover stage (extra active
+    stages beyond the four; any non-`closedlost` closed stage). Returns the
+    cockpit-value → HubSpot-stage-id map (incl. `closed_lost`) read back from the
+    live pipeline.
     """
     pipeline = _get_deal_pipeline(client)
     stages = sorted(pipeline["stages"], key=lambda s: s.get("displayOrder", 0))
@@ -183,10 +190,12 @@ def reshape_pipeline(client: httpx.Client, *, dry_run: bool) -> dict[str, str]:
         )
 
     stage_map: dict[str, str] = {}
+    cockpit_ids: set[str] = set()
     paired = zip(_COCKPIT_STAGES, active[: len(_COCKPIT_STAGES)], strict=True)
     for order, ((value, label, prob), stage) in enumerate(paired):
         stage_id = stage["id"]
         stage_map[value] = stage_id
+        cockpit_ids.add(stage_id)
         current_label = stage.get("label")
         if current_label == label and stage.get("displayOrder") == order:
             print(f"  · stage {stage_id} already '{label}' (order {order}) — skip")
@@ -211,7 +220,22 @@ def reshape_pipeline(client: httpx.Client, *, dry_run: bool) -> dict[str, str]:
     closed_lost = next((s for s in closed if s["id"] == "closedlost"), _fallback)
     if closed_lost is not None:
         stage_map["closed_lost"] = closed_lost["id"]
+        cockpit_ids.add(closed_lost["id"])
         print(f"  · kept terminal stage {closed_lost['id']} ('{closed_lost.get('label')}')")
+
+    # Prune every leftover stage so the board is EXACTLY 4 + Closed Lost and a
+    # re-run can never resurrect an old stage (idempotent). The keep-set is the
+    # four cockpit ids + the kept closed_lost id; everything else is deleted. The
+    # guard makes deleting a cockpit/closed-lost stage structurally impossible.
+    leftovers = [s for s in stages if s["id"] not in cockpit_ids]
+    for stage in leftovers:
+        stage_id = stage["id"]
+        if dry_run:
+            print(f"  ~ [dry-run] DELETE leftover stage {stage_id} ('{stage.get('label')}')")
+            continue
+        resp = client.delete(f"/crm/v3/pipelines/deals/{_DEAL_PIPELINE_ID}/stages/{stage_id}")
+        resp.raise_for_status()
+        print(f"  ✓ pruned leftover stage {stage_id} ('{stage.get('label')}')")
 
     return stage_map
 
