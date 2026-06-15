@@ -1,0 +1,47 @@
+# params/params.yaml — every magic number lives here. Cited as ARCHITECTURE.md §8.
+
+work_queue:                 # FR-2.5 — score = w_recoverability·recoverability + w_value·value
+  w_recoverability: 0.6
+  w_value: 0.4
+  recoverability:           # sub-factors, each normalized to [0,1]
+    stall_recency_weight: 0.5
+    stage_proximity_weight: 0.3     # closer to Tuition = more recoverable
+    responsiveness_weight: 0.2
+  value:
+    tuition_annual_default: 10400   # GT Anywhere $/yr (PROJECT.md §2) — value baseline
+    funded_multiplier: 1.0          # TEFA-funded vs self-pay value weighting
+  stall_window_days: 14             # stalled_since older than this ⇒ flagged (§5.1)
+
+funding:                    # FR-2.7 — RESEARCH.md Q1; amounts NEVER hardcoded elsewhere
+  award_amounts:
+    tefa_standard: 10474            # $/yr standard private-school student
+    tefa_disability: 30000          # up to $30,000/yr disability-IEP
+    tefa_homeschool: 2000           # up to $2,000/yr homeschool/other
+  installment_split: [0.25, 0.25, 0.50]   # ~Jul1 / Oct1 / Feb1
+  tuition_unlock_state: first_installment_received   # §5.4 gate threshold
+
+eval_thresholds:            # FR-4.x — an action whose eval is below threshold is BLOCKED/disabled
+  nudge_trigger:            # FR-4.1
+    min_precision: 0.85
+    min_recall: 0.70
+  doc_extraction:           # FR-4.2
+    min_accuracy: 0.90
+  message_safety_grounding: # FR-4.3 — gates §5.2 and §5.3; failing message blocked, not softened
+    min_grounding: 0.95
+    max_unverifiable_claims: 0
+    require_coppa_safe: true
+  geo_tracking:             # FR-4.4 — repeated sampling, variance reported
+    min_samples_per_prompt: 5
+    report_variance: true
+
+cost_caps:                  # NFR-5 — hard per-run cap; exceeding ⇒ deterministic/placeholder (§9)
+  anthropic_per_run_usd: 5.00       # detailed cost model in TECH_STACK.md §Cost
+  media_gen_per_run_usd: 0.00       # OUT-1 placeholder in v1
+
+latency_budget_ms:          # NFR-9
+  ai_proposal: 8000
+
+geo:                        # FR-3.7 / RESEARCH.md Q5
+  prompt_set_size: 30
+  cadence: weekly
+  baseline_coverage: 0.0            # the 0% baseline GT starts from
