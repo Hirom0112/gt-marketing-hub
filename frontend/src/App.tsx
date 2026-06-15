@@ -1,10 +1,12 @@
 import ActionPanel from './ActionPanel';
 import { apiBaseUrl } from './config';
+import EvalGate from './EvalGate';
 import FundingTracker from './FundingTracker';
 import LandingDashboard from './LandingDashboard';
 import ContentWorkspace from './marketing/ContentWorkspace';
 import GeoBoard from './marketing/GeoBoard';
 import MarketingBreadth from './marketing/MarketingBreadth';
+import Scoreboard from './Scoreboard';
 import SeamView from './SeamView';
 import WorkQueue from './WorkQueue';
 
@@ -32,6 +34,10 @@ export default function App(): JSX.Element {
         <ContentWorkspace />
         <GeoBoard />
         <MarketingBreadth />
+      </section>
+      <section aria-label="Leadership" className="leadership-workspace">
+        <EvalGate />
+        <Scoreboard />
       </section>
     </main>
   );
