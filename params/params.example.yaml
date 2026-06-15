@@ -13,6 +13,11 @@ work_queue:                 # FR-2.5 — score = w_recoverability·recoverabilit
     funded_multiplier: 1.0          # TEFA-funded vs self-pay value weighting
   stall_window_days: 14             # stalled_since older than this ⇒ flagged (§5.1)
 
+enrollment:                 # S9 — enrollment-depth deterministic core
+  contact:                  # contact-recency color thresholds (S9 W1); age measured from created_at
+    grey_window_days: 3       # uncontacted & age <= this  => fresh (grey)
+    overdue_days: 4           # uncontacted & age >= this  => overdue (red)
+
 funding:                    # FR-2.7 — RESEARCH.md Q1; amounts NEVER hardcoded elsewhere
   award_amounts:
     tefa_standard: 10474            # $/yr standard private-school student

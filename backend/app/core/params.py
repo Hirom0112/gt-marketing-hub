@@ -66,6 +66,26 @@ class WorkQueue(_StrictModel):
     stall_window_days: int
 
 
+class ContactWindows(_StrictModel):
+    """enrollment.contact — contact-recency color thresholds (S9 W1; INV-11).
+
+    The single home for the recency deriver's day windows. Age is measured in
+    whole days from a family's ``created_at``: an uncontacted family is *fresh*
+    (grey) while ``age_days <= grey_window_days`` and *overdue* (red) once
+    ``age_days >= overdue_days``. Read by ``core/contact_status.py`` — never
+    hardcoded.
+    """
+
+    grey_window_days: int
+    overdue_days: int
+
+
+class Enrollment(_StrictModel):
+    """S9 enrollment-depth tunables (§8). Currently the contact-recency windows."""
+
+    contact: ContactWindows
+
+
 class AwardAmounts(_StrictModel):
     """funding.award_amounts — TEFA tiers, $/yr (RESEARCH.md Q1)."""
 
@@ -257,6 +277,7 @@ class Params(_StrictModel):
     """Typed view of the whole params file — one field per §8 top-level block."""
 
     work_queue: WorkQueue
+    enrollment: Enrollment
     funding: Funding
     eval_thresholds: EvalThresholds
     cost_caps: CostCaps
