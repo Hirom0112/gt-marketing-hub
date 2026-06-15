@@ -212,6 +212,13 @@ def iter_files(roots: Iterable[Path]) -> Iterator[Path]:
                 # committed placeholder template and stays scanned.
                 if (name == ".env" or name.startswith(".env.")) and name != ".env.example":
                     continue
+                # The HubSpot CLI auth config holds a personal access key and is
+                # gitignored (`hubspot.config.yml`, `hubspot.config.*.yml`) — same
+                # rationale: a real key there must not fail the secret-scan.
+                if name == "hubspot.config.yml" or (
+                    name.startswith("hubspot.config.") and name.endswith(".yml")
+                ):
+                    continue
                 if p.suffix.lower() in SKIP_SUFFIXES:
                     continue
                 yield p

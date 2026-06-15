@@ -16,3 +16,8 @@ params/params.yaml
 !params/params.example.yaml
 # OS
 .DS_Store
+
+# HubSpot CLI auth config (holds the personal access key — never commit)
+hubspot.config.yml
+hubspot.config.*.yml
+.hscli/
