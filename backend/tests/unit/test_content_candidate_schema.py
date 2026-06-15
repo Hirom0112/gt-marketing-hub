@@ -14,8 +14,6 @@ audience**. A minor-targeted value is not representable.
 
 from __future__ import annotations
 
-from uuid import uuid4
-
 import pytest
 from pydantic import ValidationError
 
@@ -54,6 +52,7 @@ def test_accepts_wellformed() -> None:
     assert cand.format is ContentFormat.SHORT_CAPTION
     assert cand.audience_tag is AudienceTag.PROSPECTIVE_PARENT
     assert cand.lifecycle is LifecycleStage.CANDIDATE
+    assert cand.copy_text.startswith("GT School")  # §3 `copy`, aliased
     assert isinstance(cand.decision, HumanDecision)
     assert isinstance(cand.provenance, Provenance)
     # [opt] fields default empty / None.
@@ -113,7 +112,7 @@ def test_candidate_is_frozen() -> None:
     """The candidate is immutable once built — a proposal is not mutated (INV-2)."""
     cand = ContentCandidate(**_valid_kwargs())  # type: ignore[arg-type]
     with pytest.raises(ValidationError):
-        cand.copy = "rewritten"  # type: ignore[misc]
+        cand.copy_text = "rewritten"  # type: ignore[misc]
 
 
 def test_audience_tag_enum_excludes_minors() -> None:
