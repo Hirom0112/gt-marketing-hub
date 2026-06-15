@@ -1,0 +1,50 @@
+#!/usr/bin/env bash
+#
+# pre-push — the enforced-trunk quality gate (CLAUDE.md §5, INV-12).
+#
+# Runs the FULL check suite, failing fast in this order:
+#   1. PII / secret scan      (THREAT_MODEL.md §5, C-SYN-2 / C-SEC-3)
+#   2. runtime dep budget     (TECH_STACK.md §4.1, <= 15 deps)
+#   3. ruff lint              (backend)
+#   4. ruff format --check    (backend)
+#   5. mypy (strict)          (backend/app)
+#   6. pytest                 (backend)
+#
+# Never bypass with --no-verify (INV-12). If the hook is slow, fix the hook.
+# Activated once per clone:  git config core.hooksPath .githooks  (CLAUDE.md §8)
+
+set -euo pipefail
+
+# Resolve the repo root from this hook's location so it works regardless of CWD.
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$ROOT"
+
+# Portable Python: prefer python3, fall back to python (macOS dev / Linux CI).
+if command -v python3 >/dev/null 2>&1; then
+  PY=python3
+elif command -v python >/dev/null 2>&1; then
+  PY=python
+else
+  echo "pre-push: no python interpreter found on PATH" >&2
+  exit 1
+fi
+
+echo "==> [1/6] PII / secret scan"
+"$PY" scripts/pii_scan.py
+
+echo "==> [2/6] runtime dependency budget"
+"$PY" scripts/check_dep_budget.py
+
+echo "==> [3/6] ruff lint (backend)"
+( cd backend && uv run ruff check . )
+
+echo "==> [4/6] ruff format --check (backend)"
+( cd backend && uv run ruff format --check . )
+
+echo "==> [5/6] mypy strict (backend/app)"
+( cd backend && uv run mypy app )
+
+echo "==> [6/6] pytest (backend)"
+( cd backend && uv run pytest -q )
+
+echo "pre-push: all checks passed."

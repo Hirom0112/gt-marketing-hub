@@ -1,0 +1,42 @@
+#!/usr/bin/env bash
+#
+# commit-msg — enforce Conventional Commits (CLAUDE.md §5).
+#
+# Subject line must match:  type(scope): subject   (scope optional)
+# Allowed types: feat fix docs chore test refactor ci perf build
+#
+# Without this hook the convention is just drift, so it is committed and
+# activated via:  git config core.hooksPath .githooks  (CLAUDE.md §8)
+
+set -euo pipefail
+
+MSG_FILE="$1"
+
+# First non-comment, non-empty line is the subject.
+SUBJECT="$(grep -v '^#' "$MSG_FILE" | sed '/^[[:space:]]*$/d' | head -n1 || true)"
+
+# Allow merge / revert / fixup commits to pass through untouched.
+case "$SUBJECT" in
+  Merge\ * | Revert\ * | "fixup! "* | "squash! "*)
+    exit 0
+    ;;
+esac
+
+PATTERN='^(feat|fix|docs|chore|test|refactor|ci|perf|build)(\([a-z0-9._-]+\))?!?: .+'
+
+if printf '%s' "$SUBJECT" | grep -Eq "$PATTERN"; then
+  exit 0
+fi
+
+cat >&2 <<EOF
+commit-msg: REJECTED — not a Conventional Commit.
+
+  subject: ${SUBJECT:-<empty>}
+
+Expected:  type(scope): subject
+  types:   feat | fix | docs | chore | test | refactor | ci | perf | build
+  example: ci(security): add PII-scan gate
+
+(CLAUDE.md §5. Do not bypass with --no-verify, INV-12.)
+EOF
+exit 1
