@@ -30,6 +30,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
+from uuid import UUID
 
 from pydantic import ValidationError
 
@@ -69,7 +70,7 @@ class DraftOutcome:
 
 def _template_proposal(
     *,
-    family_id: object,
+    family_id: UUID,
     action: DraftAction,
     prompt: str,
 ) -> EnrollmentDraftProposal:
@@ -83,7 +84,7 @@ def _template_proposal(
     """
     return EnrollmentDraftProposal(
         action=action,
-        family_id=family_id,  # type: ignore[arg-type]  # validated by the schema (strict UUID)
+        family_id=family_id,
         body=deterministic_fallback(prompt),
         claims=[],
     )
