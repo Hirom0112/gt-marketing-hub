@@ -1,6 +1,8 @@
 import ActionPanel from './ActionPanel';
 import { apiBaseUrl } from './config';
+import FundingTracker from './FundingTracker';
 import LandingDashboard from './LandingDashboard';
+import SeamView from './SeamView';
 import WorkQueue from './WorkQueue';
 
 // App shell + the read-only S0 landing dashboard (FR-2.1) and the S1 enrollment
@@ -20,6 +22,8 @@ export default function App(): JSX.Element {
       <section aria-label="Enrollment workspace" className="enrollment-workspace">
         <WorkQueue />
         <ActionPanel familyId="fam-a" />
+        <FundingTracker familyId="fam-a" />
+        <SeamView />
       </section>
     </main>
   );
