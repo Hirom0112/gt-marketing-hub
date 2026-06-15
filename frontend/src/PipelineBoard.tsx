@@ -1,6 +1,12 @@
 import { useEffect, useState } from 'react';
 import { apiBaseUrl } from './config';
 import { Card } from './ui';
+import {
+  type ContactStatus,
+  recencyClass,
+  recencyLabel,
+  recencyVars,
+} from './enrollment/recency';
 
 // Pipeline board (FR-2.1). Renders the four funnel columns — Interest / Apply /
 // Enroll / Tuition — each with its per-stage count from GET /pipeline, using the
@@ -154,6 +160,67 @@ export default function PipelineBoard(): JSX.Element {
           </li>
         ))}
       </ol>
+
+      {/* Contact-recency legend (S9 Wave 4). The board is an aggregate count
+          surface, so the per-family tint lives on the work-queue rows, the deal
+          view, and the calendar; this legend documents the color system on the
+          board itself, using the same `--recency-*` tokens (visual INV-11). */}
+      <RecencyLegend />
     </section>
+  );
+}
+
+// The four-status recency legend — one swatch per ContactStatus, tinted by the
+// `--recency-*` tokens, each carrying its `recency-<status>` class.
+const RECENCY_STATUSES: readonly ContactStatus[] = [
+  'fresh',
+  'overdue',
+  'followed_up',
+  'closed',
+];
+
+function RecencyLegend(): JSX.Element {
+  return (
+    <div
+      data-testid="recency-legend"
+      style={{
+        display: 'flex',
+        flexWrap: 'wrap',
+        gap: 'var(--s-3)',
+        marginTop: 'var(--s-3)',
+        alignItems: 'center',
+      }}
+    >
+      <span className="lab">Contact recency</span>
+      {RECENCY_STATUSES.map((status) => {
+        const v = recencyVars(status);
+        return (
+          <span
+            key={status}
+            data-testid={`recency-legend-${status}`}
+            className={recencyClass(status)}
+            style={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: 'var(--s-1)',
+              fontSize: 'var(--fs-chip)',
+              color: 'var(--ink-soft)',
+            }}
+          >
+            <span
+              aria-hidden
+              style={{
+                width: 9,
+                height: 9,
+                borderRadius: 'var(--r-pill)',
+                background: v.solid,
+                border: `1px solid ${v.solid}`,
+              }}
+            />
+            {recencyLabel(status)}
+          </span>
+        );
+      })}
+    </div>
   );
 }

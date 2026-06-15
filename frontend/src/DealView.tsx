@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { AlertTriangle } from 'lucide-react';
 import { apiBaseUrl } from './config';
 import { Chip } from './ui';
+import RecencyChip from './enrollment/RecencyChip';
 
 // Deal view (FR-2.2). Fetches GET /families/{id} and surfaces the deal_view
 // summary: stall reason, funding type, MAP signal (map_score), attribution
@@ -20,6 +21,13 @@ interface DealViewData {
   map_score: number | null;
   attribution_source: string;
   crm_seam_status: string;
+  // S9 Wave 4 drop-off + recency projection (api-composed; may be null for an
+  // interest-stage family with no app_form / no recency yet).
+  completion_pct?: number | null;
+  forms_signed?: number | null;
+  forms_total?: number | null;
+  next_unsigned_form?: string | null;
+  contact_status?: string | null;
 }
 
 // We only read deal_view; the rest of the family response is ignored here.
@@ -29,6 +37,8 @@ interface FamilyResponse {
 
 interface DealViewProps {
   familyId: string;
+  // Bump to force a re-fetch (e.g. after an approved follow-up updates recency).
+  refreshKey?: number;
 }
 
 type LoadState =
@@ -75,7 +85,10 @@ function DealField({
   );
 }
 
-export default function DealView({ familyId }: DealViewProps): JSX.Element {
+export default function DealView({
+  familyId,
+  refreshKey,
+}: DealViewProps): JSX.Element {
   const [state, setState] = useState<LoadState>({ status: 'loading' });
 
   useEffect(() => {
@@ -98,7 +111,7 @@ export default function DealView({ familyId }: DealViewProps): JSX.Element {
     return () => {
       cancelled = true;
     };
-  }, [familyId]);
+  }, [familyId, refreshKey]);
 
   if (state.status === 'loading') {
     return (
@@ -138,7 +151,12 @@ export default function DealView({ familyId }: DealViewProps): JSX.Element {
         >
           {deal.display_name}
         </h2>
-        <Chip tone={isTefa ? 'gate' : 'flow'}>{deal.funding_type}</Chip>
+        <div style={{ display: 'inline-flex', alignItems: 'center', gap: 'var(--s-2)' }}>
+          {deal.contact_status != null && (
+            <RecencyChip status={deal.contact_status} testId="deal-recency" />
+          )}
+          <Chip tone={isTefa ? 'gate' : 'flow'}>{deal.funding_type}</Chip>
+        </div>
       </div>
 
       <div
@@ -172,6 +190,43 @@ export default function DealView({ familyId }: DealViewProps): JSX.Element {
           {display(deal.stall_reason)}
         </div>
       </div>
+
+      {/* Where they left off — application completion + form progress (FR-2.2;
+          S9 Wave 4). Rendered only when the family has application/form data. */}
+      {(deal.completion_pct != null || deal.forms_total != null) && (
+        <div
+          data-testid="deal-dropoff"
+          style={{
+            marginTop: 'var(--s-3)',
+            padding: 'var(--s-3) var(--s-4)',
+            background: 'var(--surface-2)',
+            border: '1px solid var(--line)',
+            borderRadius: 'var(--r-md)',
+          }}
+        >
+          <div className="lab">Where they left off</div>
+          <div
+            data-testid="deal-completion"
+            className="mono"
+            style={{ marginTop: 'var(--s-1)', fontSize: 'var(--fs-sm)', color: 'var(--ink)' }}
+          >
+            {deal.completion_pct == null
+              ? PLACEHOLDER
+              : `${deal.completion_pct}% application complete`}
+            {deal.forms_total != null
+              ? ` · ${deal.forms_signed ?? 0}/${deal.forms_total} forms signed`
+              : ''}
+          </div>
+          {deal.next_unsigned_form != null && (
+            <div
+              data-testid="deal-next-form"
+              style={{ marginTop: 'var(--s-1)', fontSize: 'var(--fs-sm)', color: 'var(--signal-ink)' }}
+            >
+              Stuck on: {deal.next_unsigned_form}
+            </div>
+          )}
+        </div>
+      )}
 
       <dl
         className="deal-fields"

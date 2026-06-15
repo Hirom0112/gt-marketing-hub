@@ -18,6 +18,8 @@ const WORK_QUEUE_PAYLOAD = [
     score: 0.91,
     recoverability: 0.95,
     value: 10474,
+    contact_status: 'overdue',
+    last_contact_at: null,
   },
   {
     family_id: 'fam-b',
@@ -72,6 +74,15 @@ describe('WorkQueue', () => {
     expect(within(first).getByTestId('row-recoverability')).toHaveTextContent(
       '0.95',
     );
+  });
+
+  it('tints a row by its contact_status (recency color system)', async () => {
+    render(<WorkQueue />);
+    const recencyChip = await screen.findByTestId(
+      'work-queue-recency-fam-a',
+    );
+    // The overdue family carries the overdue recency class (the red tint).
+    expect(recencyChip).toHaveClass('recency-overdue');
   });
 
   it('fetches the work queue endpoint read-only (GET)', async () => {

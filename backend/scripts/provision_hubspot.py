@@ -72,7 +72,7 @@ _DEAL_PROPERTIES: list[dict[str, Any]] = [
         "type": "string",
         "fieldType": "text",
         "groupName": "dealinformation",
-        "description": "Cockpit synthetic family id — the idempotency/upsert key (NEVER email; INV-1 guard 1).",
+        "description": "Cockpit synthetic family id — upsert key (NEVER email; INV-1 guard 1).",
     },
     {
         "name": "gt_funding_state",
@@ -80,7 +80,7 @@ _DEAL_PROPERTIES: list[dict[str, Any]] = [
         "type": "string",
         "fieldType": "text",
         "groupName": "dealinformation",
-        "description": "Cockpit FundingState mirror (none→applied→…→funded). Installment math never crosses.",
+        "description": "Cockpit FundingState mirror. Installment math never crosses.",
     },
     {
         "name": "gt_stall_reason",
@@ -96,7 +96,7 @@ _DEAL_PROPERTIES: list[dict[str, Any]] = [
         "type": "number",
         "fieldType": "number",
         "groupName": "dealinformation",
-        "description": "Cockpit work-queue score (params-derived). Renders a sorted Deal view in HubSpot.",
+        "description": "Cockpit work-queue score (params-derived) for a sorted Deal view.",
     },
     {
         "name": "gt_forms_signed",
@@ -104,7 +104,7 @@ _DEAL_PROPERTIES: list[dict[str, Any]] = [
         "type": "number",
         "fieldType": "number",
         "groupName": "dealinformation",
-        "description": "Six-form gauntlet progress (0–6). The gauntlet itself is Enterprise-walled, so only this flat count crosses.",
+        "description": "Six-form gauntlet progress 0-6; only this count crosses.",
     },
     {
         "name": "gt_apply_date",
@@ -126,7 +126,7 @@ _CONTACT_PROPERTIES: list[dict[str, Any]] = [
         "type": "string",
         "fieldType": "text",
         "groupName": "contactinformation",
-        "description": "Cockpit synthetic family/contact id — upsert key (NEVER email; INV-1 guard 1).",
+        "description": "Cockpit synthetic contact id — upsert key (NEVER email; INV-1 guard 1).",
     },
 ]
 
@@ -183,7 +183,8 @@ def reshape_pipeline(client: httpx.Client, *, dry_run: bool) -> dict[str, str]:
         )
 
     stage_map: dict[str, str] = {}
-    for order, ((value, label, prob), stage) in enumerate(zip(_COCKPIT_STAGES, active)):
+    paired = zip(_COCKPIT_STAGES, active[: len(_COCKPIT_STAGES)], strict=True)
+    for order, ((value, label, prob), stage) in enumerate(paired):
         stage_id = stage["id"]
         stage_map[value] = stage_id
         current_label = stage.get("label")
@@ -206,7 +207,8 @@ def reshape_pipeline(client: httpx.Client, *, dry_run: bool) -> dict[str, str]:
         print(f"  ✓ relabelled stage {stage_id}: '{current_label}' → '{label}'")
 
     # Closed Lost — kept, mapped for the adapter (not a cockpit funnel Stage).
-    closed_lost = next((s for s in closed if s["id"] == "closedlost"), closed[0] if closed else None)
+    _fallback = closed[0] if closed else None
+    closed_lost = next((s for s in closed if s["id"] == "closedlost"), _fallback)
     if closed_lost is not None:
         stage_map["closed_lost"] = closed_lost["id"]
         print(f"  · kept terminal stage {closed_lost['id']} ('{closed_lost.get('label')}')")
@@ -264,8 +266,8 @@ def write_stage_map_to_params(stage_map: dict[str, str], *, dry_run: bool) -> No
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Idempotent HubSpot portal provisioning (S10 W1).")
-    parser.add_argument("--portal", default=_DEFAULT_PORTAL, help="Portal id (for the summary only).")
+    parser = argparse.ArgumentParser(description="Idempotent HubSpot provisioning (S10 W1).")
+    parser.add_argument("--portal", default=_DEFAULT_PORTAL, help="Portal id (summary only).")
     parser.add_argument("--dry-run", action="store_true", help="Plan changes without writing.")
     args = parser.parse_args()
 

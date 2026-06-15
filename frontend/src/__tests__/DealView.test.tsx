@@ -16,6 +16,12 @@ const ENROLLED_PAYLOAD = {
     map_score: 0.82,
     attribution_source: 'Paid Search',
     crm_seam_status: 'synced',
+    completion_pct: 45.6,
+    forms_signed: 2,
+    forms_total: 6,
+    next_unsigned_form: 'media_authorization',
+    contact_status: 'followed_up',
+    last_contact_at: '2026-06-12T10:00:00Z',
   },
   family: {},
   lead: {},
@@ -80,6 +86,25 @@ describe('DealView', () => {
     const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit?];
     expect(url).toMatch(/\/families\/fam-123$/);
     expect(init?.method ?? 'GET').toBe('GET');
+  });
+
+  it('shows the recency tint + where-they-left-off drop-off', async () => {
+    render(<DealView familyId="fam-123" />);
+
+    // The contact recency chip carries the followed_up tone class (light-green).
+    const recency = await screen.findByTestId('deal-recency');
+    expect(recency).toHaveClass('recency-followed_up');
+
+    // The drop-off block surfaces completion %, form progress, and the stuck form.
+    expect(screen.getByTestId('deal-completion')).toHaveTextContent(
+      '45.6% application complete',
+    );
+    expect(screen.getByTestId('deal-completion')).toHaveTextContent(
+      '2/6 forms signed',
+    );
+    expect(screen.getByTestId('deal-next-form')).toHaveTextContent(
+      'media_authorization',
+    );
   });
 
   it('handles a null map_score and null stall_reason gracefully', async () => {

@@ -2,6 +2,8 @@ import { useEffect, useState } from 'react';
 import { ListOrdered } from 'lucide-react';
 import { apiBaseUrl } from './config';
 import { Card, Chip } from './ui';
+import RecencyChip from './enrollment/RecencyChip';
+import { isContactStatus, recencyVars } from './enrollment/recency';
 
 // Work queue (FR-2.5). Fetches GET /work-queue — a list the server has already
 // ranked by score desc — and renders the families IN THE ORDER RECEIVED. The
@@ -19,6 +21,9 @@ interface WorkQueueItem {
   score: number;
   recoverability: number;
   value: number;
+  // Contact-recency (S9 W3; A-14) — the recency color for the row tint.
+  contact_status?: string | null;
+  last_contact_at?: string | null;
 }
 
 type LoadState =
@@ -107,6 +112,15 @@ export default function WorkQueue({
           {state.items.map((item, i) => {
             const selectable = onSelectFamily !== undefined;
             const isActive = selectable && item.family_id === selectedFamilyId;
+            // Recency rail: a colored left border by contact_status when the row
+            // isn't the active (ink-railed) selection. Falls back to transparent
+            // for an unknown/absent status.
+            const status =
+              item.contact_status != null && isContactStatus(item.contact_status)
+                ? item.contact_status
+                : null;
+            const recencyRail =
+              status === null ? 'transparent' : recencyVars(status).solid;
             const innerStyle = {
               display: 'flex',
               alignItems: 'center',
@@ -123,7 +137,7 @@ export default function WorkQueue({
               border: 'none',
               borderLeft: isActive
                 ? '3px solid var(--ink)'
-                : '3px solid transparent',
+                : `3px solid ${recencyRail}`,
             };
             return (
               <li
@@ -192,6 +206,14 @@ function renderRowContent(item: WorkQueueItem, i: number): JSX.Element {
                 <span className="row-stage">
                   <Chip>{item.current_stage}</Chip>
                 </span>
+                {item.contact_status != null && (
+                  <span className="row-recency">
+                    <RecencyChip
+                      status={item.contact_status}
+                      testId={`work-queue-recency-${item.family_id}`}
+                    />
+                  </span>
+                )}
                 <span
                   className="row-value mono"
                   data-testid="row-value"

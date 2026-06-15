@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import ActionPanel from '../ActionPanel';
 import DealView from '../DealView';
 import FundingTracker from '../FundingTracker';
@@ -6,6 +6,10 @@ import LandingDashboard from '../LandingDashboard';
 import PipelineBoard from '../PipelineBoard';
 import SeamView from '../SeamView';
 import WorkQueue from '../WorkQueue';
+import EnrollmentCalendar from '../enrollment/EnrollmentCalendar';
+import NotesTimeline, {
+  type NotesTimelineHandle,
+} from '../enrollment/NotesTimeline';
 import { apiBaseUrl } from '../config';
 import { Card } from '../ui';
 
@@ -38,6 +42,17 @@ export default function EnrollmentWorkspace(): JSX.Element {
     status: 'loading',
   });
   const [selectedFamilyId, setSelectedFamilyId] = useState<string | null>(null);
+  // Bumped after an approved follow-up to force the deal view to re-pull the
+  // (now updated) recency; the notes timeline re-pulls via its imperative ref.
+  const [dealRefresh, setDealRefresh] = useState(0);
+  const notesRef = useRef<NotesTimelineHandle>(null);
+
+  // The follow-up loop: on an approved AI action, the backend stamped recency +
+  // wrote a deterministic auto-note. Re-pull both so they surface immediately.
+  const handleActionApproved = useCallback((): void => {
+    setDealRefresh((n) => n + 1);
+    notesRef.current?.refresh();
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -98,9 +113,14 @@ export default function EnrollmentWorkspace(): JSX.Element {
     }
     return (
       <Card style={{ display: 'grid', gap: 'var(--s-4)', minWidth: 0 }}>
-        <DealView familyId={selectedFamilyId} />
+        <DealView familyId={selectedFamilyId} refreshKey={dealRefresh} />
         <div style={{ height: 1, background: 'var(--line)' }} aria-hidden />
-        <ActionPanel familyId={selectedFamilyId} />
+        <ActionPanel
+          familyId={selectedFamilyId}
+          onActionApproved={handleActionApproved}
+        />
+        <div style={{ height: 1, background: 'var(--line)' }} aria-hidden />
+        <NotesTimeline ref={notesRef} familyId={selectedFamilyId} />
         <div style={{ height: 1, background: 'var(--line)' }} aria-hidden />
         <FundingTracker familyId={selectedFamilyId} />
       </Card>
@@ -128,6 +148,10 @@ export default function EnrollmentWorkspace(): JSX.Element {
         <div style={{ display: 'grid', gap: 'var(--s-5)', minWidth: 0 }}>
           <PipelineBoard />
           <WorkQueue
+            selectedFamilyId={selectedFamilyId ?? undefined}
+            onSelectFamily={setSelectedFamilyId}
+          />
+          <EnrollmentCalendar
             selectedFamilyId={selectedFamilyId ?? undefined}
             onSelectFamily={setSelectedFamilyId}
           />

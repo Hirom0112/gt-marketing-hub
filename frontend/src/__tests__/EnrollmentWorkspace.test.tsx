@@ -29,6 +29,8 @@ const WORK_QUEUE_PAYLOAD = [
     score: 0.91,
     recoverability: 0.95,
     value: 10474,
+    contact_status: 'overdue',
+    last_contact_at: null,
   },
   {
     family_id: FAM_TWO,
@@ -37,6 +39,8 @@ const WORK_QUEUE_PAYLOAD = [
     score: 0.74,
     recoverability: 0.6,
     value: 30000,
+    contact_status: 'fresh',
+    last_contact_at: null,
   },
 ];
 
@@ -57,12 +61,49 @@ function familyResponse(): unknown {
       map_score: 0.82,
       attribution_source: 'Paid Search',
       crm_seam_status: 'synced',
+      completion_pct: 45.6,
+      forms_signed: 0,
+      forms_total: 6,
+      next_unsigned_form: 'enrollment_agreement',
+      contact_status: 'overdue',
+      last_contact_at: null,
     },
     family: {},
     lead: {},
     app_form: {},
   };
 }
+
+const CALENDAR_PAYLOAD = {
+  month: '2026-06',
+  entries: [
+    {
+      family_id: FAM_ONE,
+      display_name: 'The Alvarez Family',
+      apply_date: '2026-06-10T09:00:00Z',
+      current_stage: 'enroll',
+      contact_status: 'overdue',
+    },
+    {
+      family_id: FAM_TWO,
+      display_name: 'The Bauer Family',
+      apply_date: '2026-06-18T09:00:00Z',
+      current_stage: 'apply',
+      contact_status: 'fresh',
+    },
+  ],
+};
+
+const NOTES_PAYLOAD = [
+  {
+    note_id: 'note-1',
+    family_id: FAM_ONE,
+    author: 'operator',
+    kind: 'manual',
+    body: 'Left a voicemail with the family.',
+    created_at: '2026-06-11T10:00:00Z',
+  },
+];
 
 function fundingResponse(familyId: string): unknown {
   return {
@@ -79,10 +120,14 @@ function routedFetchMock(): ReturnType<typeof vi.fn> {
   return vi.fn(async (url: string, init?: RequestInit) => {
     const u = String(url);
     let payload: unknown = {};
-    // Order matters: more specific (/funding) before the family base path.
+    // Order matters: more specific (/funding, /notes) before the family base path.
     const fundingMatch = /\/families\/([^/]+)\/funding$/.exec(u);
     if (fundingMatch !== null) {
       payload = fundingResponse(fundingMatch[1] ?? '');
+    } else if (/\/families\/[^/]+\/notes$/.test(u)) {
+      payload = init?.method === 'POST' ? NOTES_PAYLOAD[0] : NOTES_PAYLOAD;
+    } else if (/\/enrollment\/calendar/.test(u)) {
+      payload = CALENDAR_PAYLOAD;
     } else if (/\/families\/[^/]+$/.test(u)) {
       payload = familyResponse();
     } else if (/\/families$/.test(u)) {
@@ -93,6 +138,21 @@ function routedFetchMock(): ReturnType<typeof vi.fn> {
       payload = PIPELINE_PAYLOAD;
     } else if (/\/seam$/.test(u)) {
       payload = SEAM_PAYLOAD;
+    } else if (/\/ai\/enrollment\/draft$/.test(u)) {
+      payload = {
+        proposal_id: 'prop-1',
+        surfaced: true,
+        degraded: false,
+        failed_rules: [],
+        proposal: {
+          action: 'email',
+          family_id: FAM_ONE,
+          body: 'Draft outreach body.',
+          claims: [],
+        },
+      };
+    } else if (/\/proposals\/[^/]+\/decision$/.test(u)) {
+      payload = { decision_id: 'dec-1', action: 'approve', seam_status: 'synced' };
     } else {
       // Default — empty object/array tolerant.
       payload = init?.method === 'POST' ? {} : {};
@@ -146,5 +206,42 @@ describe('EnrollmentWorkspace', () => {
 
     // Still never the placeholder.
     expect(urlsCalled().some((u) => u.includes('fam-a'))).toBe(false);
+  });
+
+  it('renders the notes timeline in the deal panel', async () => {
+    vi.stubGlobal('fetch', routedFetchMock());
+    render(<EnrollmentWorkspace />);
+
+    // The notes timeline is mounted and shows the family's notes (FR-2.3).
+    expect(await screen.findByTestId('notes-timeline')).toBeInTheDocument();
+    expect(
+      await screen.findByText('Left a voicemail with the family.'),
+    ).toBeInTheDocument();
+  });
+
+  it('refreshes the deal view + notes after an approved follow-up', async () => {
+    vi.stubGlobal('fetch', routedFetchMock());
+    render(<EnrollmentWorkspace />);
+
+    // Request a draft, then approve it (the follow-up).
+    fireEvent.click(await screen.findByTestId('draft-email'));
+    fireEvent.click(await screen.findByTestId('approve-action'));
+
+    // The decision was recorded...
+    expect(await screen.findByTestId('decision-recorded')).toBeInTheDocument();
+
+    // ...and the approve triggered a re-pull of the deal view + notes (the loop):
+    // the family detail and the notes endpoint are fetched MORE THAN ONCE.
+    await waitFor(() => {
+      const urls = urlsCalled();
+      const dealPulls = urls.filter((u) =>
+        new RegExp(`/families/${FAM_ONE}$`).test(u),
+      ).length;
+      const notePulls = urls.filter((u) =>
+        new RegExp(`/families/${FAM_ONE}/notes$`).test(u),
+      ).length;
+      expect(dealPulls).toBeGreaterThan(1);
+      expect(notePulls).toBeGreaterThan(1);
+    });
   });
 });

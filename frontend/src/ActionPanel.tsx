@@ -81,9 +81,17 @@ type DraftState =
 
 interface ActionPanelProps {
   familyId: string;
+  // Fired after the operator APPROVES (or saves-and-approves) a proposal — the
+  // approve writes a deterministic auto-note + updates recency server-side
+  // (S9 Wave 2), so the deal panel re-pulls the timeline + deal view to surface
+  // them, closing the "tracks everything + auto-updates notes" loop (Wave 4).
+  onActionApproved?: () => void;
 }
 
-export default function ActionPanel({ familyId }: ActionPanelProps): JSX.Element {
+export default function ActionPanel({
+  familyId,
+  onActionApproved,
+}: ActionPanelProps): JSX.Element {
   const [state, setState] = useState<DraftState>({ status: 'idle' });
   const [editing, setEditing] = useState(false);
   const [editedBody, setEditedBody] = useState('');
@@ -129,7 +137,12 @@ export default function ActionPanel({ familyId }: ActionPanelProps): JSX.Element
         if (!res.ok) throw new Error(`decision request failed: ${res.status}`);
         return res.json() as Promise<DecisionResponse>;
       })
-      .then((data) => setDecision(data))
+      .then((data) => {
+        setDecision(data);
+        // An approve (or save-and-approve edit) is the follow-up that stamps
+        // recency + writes the auto-note server-side; tell the parent to refresh.
+        if (kind === 'approve' || kind === 'edit') onActionApproved?.();
+      })
       .catch((err: unknown) => {
         const message = err instanceof Error ? err.message : 'unknown error';
         setState({ status: 'error', message });
