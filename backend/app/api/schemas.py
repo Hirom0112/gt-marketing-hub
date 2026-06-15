@@ -7,6 +7,7 @@ deal view (FR-2.2 — the full deal view lands in S1).
 
 from __future__ import annotations
 
+from datetime import datetime
 from uuid import UUID
 
 from pydantic import BaseModel, Field
@@ -14,6 +15,7 @@ from pydantic import BaseModel, Field
 from app.ai.schemas.brand import LibraryAsset
 from app.ai.schemas.content import Channel, ContentCandidate, Decision
 from app.ai.schemas.enrollment_draft import DraftAction, EnrollmentDraftProposal
+from app.core.contact_status import ContactStatus
 from app.core.eval_gate import ValidationResult
 from app.core.family_record import DealView
 from app.data.models import (
@@ -81,6 +83,40 @@ class WorkQueueItem(BaseModel):
     score: float
     recoverability: float
     value: float
+    # Contact-recency (S9 W3; A-14) — composed in the API layer (now + audit log
+    # + params), NOT the pure scorer, so the board/queue can color a family
+    # without N extra calls. ``contact_status`` is the recency color;
+    # ``last_contact_at`` is the latest approved-outbound instant (None if never).
+    contact_status: ContactStatus
+    last_contact_at: datetime | None = None
+
+
+class CalendarEntry(BaseModel):
+    """One family on the enrollment calendar (S9 W3; ARCH §6 `GET /enrollment/calendar`).
+
+    The month-view + color-coded board (Wave 4) renders one of these per family
+    whose ``apply_date`` (``app_form.submitted_at`` else spine ``created_at``)
+    falls in the requested month. ``contact_status`` is composed in the API layer
+    (now + audit log + params), same as the deal view (INV-2 core purity).
+    """
+
+    family_id: UUID
+    display_name: str
+    apply_date: datetime
+    current_stage: Stage
+    contact_status: ContactStatus
+
+
+class CalendarResponse(BaseModel):
+    """The `GET /enrollment/calendar?month=YYYY-MM` payload (S9 W3; ARCH §6).
+
+    ``month`` echoes the requested ``YYYY-MM``; ``entries`` are the in-month
+    families sorted ascending by ``apply_date`` (empty list for a month with no
+    applications — never an error).
+    """
+
+    month: str
+    entries: list[CalendarEntry] = Field(default_factory=list)
 
 
 # --------------------------------------------------------------------------- #

@@ -25,7 +25,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 from pathlib import Path
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 from fastapi.testclient import TestClient
 
@@ -110,7 +110,7 @@ def test_calendar_returns_in_month_entries_sorted() -> None:
             "current_stage",
             "contact_status",
         }
-        joined = by_id[__import__("uuid").UUID(entry["family_id"])]
+        joined = by_id[UUID(entry["family_id"])]
         assert entry["display_name"] == joined.family.display_name
         assert entry["current_stage"] == joined.family.current_stage.value
         assert entry["contact_status"] in _VALID_STATUSES
@@ -143,13 +143,10 @@ def test_calendar_missing_month_is_422() -> None:
 def test_calendar_composes_contact_status_from_log() -> None:
     """An approved outbound ⇒ the entry's contact_status is followed_up (composed)."""
     params = _params()
-    repo = _seeded()
     # A non-funded family with an apply_date in a known populated month.
     target_month = "2025-11"
     candidates = _expected_in_month(target_month)
-    sample = next(
-        j.family for j in candidates if j.family.funding_state is not FundingState.FUNDED
-    )
+    sample = next(j.family for j in candidates if j.family.funding_state is not FundingState.FUNDED)
 
     deps.reset_observability_log()
     log = deps.get_observability_log()
@@ -165,9 +162,7 @@ def test_calendar_composes_contact_status_from_log() -> None:
     try:
         resp = client.get("/enrollment/calendar", params={"month": target_month})
         assert resp.status_code == 200
-        entry = next(
-            e for e in resp.json()["entries"] if e["family_id"] == str(sample.family_id)
-        )
+        entry = next(e for e in resp.json()["entries"] if e["family_id"] == str(sample.family_id))
         stamped = last_contact_at(log, sample.family_id)
         assert stamped is not None
         expected_status = derive_contact_status(

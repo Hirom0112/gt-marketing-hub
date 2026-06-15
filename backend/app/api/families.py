@@ -11,12 +11,18 @@ from datetime import UTC, datetime
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 
 from app.api.deps import get_observability_log, get_params, get_repository
-from app.api.schemas import FamilyDetailResponse, PipelineResponse, WorkQueueItem
+from app.api.schemas import (
+    CalendarEntry,
+    CalendarResponse,
+    FamilyDetailResponse,
+    PipelineResponse,
+    WorkQueueItem,
+)
 from app.core.contact_log import last_contact_at
-from app.core.contact_status import derive_contact_status
+from app.core.contact_status import ContactStatus, derive_contact_status
 from app.core.family_record import assemble_deal_view
 from app.core.params import Params
 from app.core.work_queue import (
@@ -59,6 +65,56 @@ def _work_queue_family(joined: JoinedFamily, params: Params) -> WorkQueueFamily:
         responsiveness=responsiveness_from_engagement(signals, params),
         funding_type=joined.family.funding_type,
     )
+
+
+def _recency_for(
+    joined: JoinedFamily,
+    *,
+    log: ObservabilityLog,
+    now: datetime,
+    params: Params,
+) -> tuple[ContactStatus, datetime | None]:
+    """Compose a family's (contact_status, last_contact_at) at the api layer (A-14).
+
+    The single recency composer shared by the calendar route and the work-queue
+    route (DRY): the deriver needs ``now`` + the audit log, neither of which the
+    pure core may touch (CLAUDE §3, INV-2), so this lives HERE — the composition
+    root — NOT in ``core/``. Reads ``last_contact_at`` (the latest approved
+    outbound) from the audit log, then derives the recency color against the
+    api-layer ``now``. ``funded`` short-circuits to CLOSED. Callers pass ONE
+    ``now`` read once per request so a whole response is internally consistent.
+
+    Args:
+        joined: The spine row joined to its source rows (for created_at/funded).
+        log: The NFR-6 audit spine — the ``last_contact_at`` source (A-14).
+        now: The request's reference time, read once at the api layer.
+        params: Loaded params — supplies the ``enrollment.contact`` day windows.
+
+    Returns:
+        ``(contact_status, last_contact_at)`` for the family.
+    """
+    family = joined.family
+    contacted_at = last_contact_at(log, family.family_id)
+    status = derive_contact_status(
+        created_at=family.created_at or now,
+        last_contact_at=contacted_at,
+        now=now,
+        funded=family.funding_state is FundingState.FUNDED,
+        params=params,
+    )
+    return status, contacted_at
+
+
+def _apply_date(joined: JoinedFamily) -> datetime | None:
+    """The family's application instant — ``app_form.submitted_at`` else spine ``created_at``.
+
+    Mirrors the FR-2.2 deal-view rule (``family_record.assemble_deal_view``) so
+    the calendar and the deal view never drift on what "apply_date" means.
+    """
+    apply_date = joined.app_form.submitted_at if joined.app_form is not None else None
+    if apply_date is None:
+        apply_date = joined.family.created_at
+    return apply_date
 
 
 @router.get("/pipeline", response_model=PipelineResponse)
@@ -134,14 +190,10 @@ def get_family(
         raise HTTPException(status_code=404, detail="family not found")
 
     # Recency composed at the api layer (NOT pure core): derive last_contact_at
-    # from the audit log (A-14) and the color status against an api-layer `now`.
-    contacted_at = last_contact_at(log, family_id)
-    contact_status = derive_contact_status(
-        created_at=joined.family.created_at or datetime.now(UTC),
-        last_contact_at=contacted_at,
-        now=datetime.now(UTC),
-        funded=joined.family.funding_state is FundingState.FUNDED,
-        params=params,
+    # from the audit log (A-14) and the color status against an api-layer `now`,
+    # through the shared composer (also used by /enrollment/calendar + /work-queue).
+    contact_status, contacted_at = _recency_for(
+        joined, log=log, now=datetime.now(UTC), params=params
     )
     deal_view = assemble_deal_view(joined).model_copy(
         update={"contact_status": contact_status, "last_contact_at": contacted_at}
@@ -157,28 +209,93 @@ def get_family(
 
 
 @router.get("/work-queue", response_model=list[WorkQueueItem])
-def get_work_queue(repository: RepositoryDep, params: ParamsDep) -> list[WorkQueueItem]:
+def get_work_queue(
+    repository: RepositoryDep, params: ParamsDep, log: LogDep
+) -> list[WorkQueueItem]:
     """Ranked work queue, highest deterministic score first (FR-2.5; §6).
 
     Reads the cohort joined (for the aggregate responsiveness signal — A-5),
     projects each family to the scorer's pure input, and delegates ordering to
     :func:`app.core.work_queue.rank_families` — the router never re-implements
     ranking. Each row carries the score plus its ``recoverability`` / ``value``
-    components so the UI can show why a family ranks where it does. No AI (INV-2).
+    components so the UI can show why a family ranks where it does, plus the
+    api-composed recency pair (``contact_status`` + ``last_contact_at``) so the
+    board can color a family without N extra calls (S9 W3). The recency is
+    composed HERE via :func:`_recency_for` against a single ``now`` read once
+    per request — never in the pure scorer (INV-2). No AI (INV-2).
     """
+    now = datetime.now(UTC)
     joined_by_id: dict[UUID, JoinedFamily] = {
         joined.family.family_id: joined for joined in repository.list_joined()
     }
     queue_families = [_work_queue_family(joined, params) for joined in joined_by_id.values()]
     ranked = rank_families(queue_families, params)
-    return [
-        WorkQueueItem(
-            family_id=family.family_id,
-            display_name=joined_by_id[family.family_id].family.display_name,
-            current_stage=family.current_stage,
-            score=score_family(family, params),
-            recoverability=recoverability(family, params),
-            value=value(family, params),
+    rows: list[WorkQueueItem] = []
+    for family in ranked:
+        joined = joined_by_id[family.family_id]
+        contact_status, contacted_at = _recency_for(joined, log=log, now=now, params=params)
+        rows.append(
+            WorkQueueItem(
+                family_id=family.family_id,
+                display_name=joined.family.display_name,
+                current_stage=family.current_stage,
+                score=score_family(family, params),
+                recoverability=recoverability(family, params),
+                value=value(family, params),
+                contact_status=contact_status,
+                last_contact_at=contacted_at,
+            )
         )
-        for family in ranked
+    return rows
+
+
+# YYYY-MM with month 01..12 — anchors the calendar query param's 422 validation.
+_MONTH_PATTERN = r"^\d{4}-(0[1-9]|1[0-2])$"
+
+
+@router.get("/enrollment/calendar", response_model=CalendarResponse)
+def get_enrollment_calendar(
+    repository: RepositoryDep,
+    params: ParamsDep,
+    log: LogDep,
+    month: Annotated[
+        str,
+        Query(
+            pattern=_MONTH_PATTERN,
+            description="Target month in YYYY-MM form (01-12); 422 on a bad format.",
+        ),
+    ],
+) -> CalendarResponse:
+    """Families whose apply_date falls in ``month``, for the Wave 4 month view (§6).
+
+    A family's ``apply_date`` is ``app_form.submitted_at`` else the spine
+    ``created_at`` (the FR-2.2 deal-view rule, via :func:`_apply_date`). Only the
+    in-month families are returned, sorted ascending by ``apply_date``; a month
+    with no applications yields ``entries: []`` (never an error). Each entry
+    carries the api-composed ``contact_status`` (now + audit log + params), the
+    same recency composition as the deal view and the work queue (INV-2 core
+    purity — the deriver's ``now``/log reads stay at the api layer). No AI (INV-2).
+    """
+    year_s, month_s = month.split("-")
+    year, mon = int(year_s), int(month_s)
+    now = datetime.now(UTC)
+
+    dated: list[tuple[datetime, JoinedFamily]] = []
+    for joined in repository.list_joined():
+        apply_date = _apply_date(joined)
+        if apply_date is None or apply_date.year != year or apply_date.month != mon:
+            continue
+        dated.append((apply_date, joined))
+    dated.sort(key=lambda pair: pair[0])
+
+    entries = [
+        CalendarEntry(
+            family_id=joined.family.family_id,
+            display_name=joined.family.display_name,
+            apply_date=apply_date,
+            current_stage=joined.family.current_stage,
+            contact_status=_recency_for(joined, log=log, now=now, params=params)[0],
+        )
+        for apply_date, joined in dated
     ]
+    return CalendarResponse(month=month, entries=entries)
