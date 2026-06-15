@@ -19,7 +19,7 @@ from pathlib import Path
 from typing import Any
 
 import yaml
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, field_validator
 
 # Default location of the params file, relative to the repo root, when neither
 # an explicit path nor the PARAMS_PATH env var is supplied.
@@ -80,6 +80,22 @@ class Funding(_StrictModel):
     award_amounts: AwardAmounts
     installment_split: list[float]
     tuition_unlock_state: str
+
+    @field_validator("installment_split")
+    @classmethod
+    def _split_sums_to_one(cls, value: list[float]) -> list[float]:
+        """The installment split must partition the award exactly (FR-2.7).
+
+        A split that does not sum to 1.0 would leave the award over- or
+        under-disbursed; drift here fails the build (CLAUDE.md INV-11, §4.1).
+        A tiny float-epsilon tolerance absorbs YAML decimal representation only.
+        """
+        total = sum(value)
+        if abs(total - 1.0) > 1e-9:
+            raise ValueError(
+                f"funding.installment_split must sum to 1.0, got {total!r} ({value!r})"
+            )
+        return value
 
 
 class NudgeTrigger(_StrictModel):
