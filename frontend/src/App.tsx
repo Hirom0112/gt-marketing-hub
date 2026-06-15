@@ -4,6 +4,7 @@ import FundingTracker from './FundingTracker';
 import LandingDashboard from './LandingDashboard';
 import ContentWorkspace from './marketing/ContentWorkspace';
 import GeoBoard from './marketing/GeoBoard';
+import MarketingBreadth from './marketing/MarketingBreadth';
 import SeamView from './SeamView';
 import WorkQueue from './WorkQueue';
 
@@ -30,6 +31,7 @@ export default function App(): JSX.Element {
       <section aria-label="Marketing workspace" className="marketing-workspace">
         <ContentWorkspace />
         <GeoBoard />
+        <MarketingBreadth />
       </section>
     </main>
   );
