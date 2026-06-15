@@ -27,6 +27,7 @@ from app.core.params import Params, load_params
 from app.core.settings import Settings
 from app.data.notes_repository import InMemoryNotesRepository, NotesRepository
 from app.data.repository import FamilyRepository, InMemoryFamilyRepository
+from app.evals.suite import EvalSuiteResult
 from app.marketing.library import ContentLibrary, InMemoryContentLibrary
 from app.observability.log_store import InMemoryObservabilityLog, ObservabilityLog
 
@@ -71,6 +72,13 @@ _settings: Settings = Settings.from_env()
 # pattern as `_repository`). Held in a one-slot list so `reset_observability_log`
 # can rebind it for test isolation without a `global` statement.
 _observability: list[ObservabilityLog] = [InMemoryObservabilityLog()]
+
+# Singleton consolidated eval-suite verdict (FR-4.5) — the last `run_suite(...)`
+# result, or `None` until a suite has run. Held in a one-slot list (the same
+# pattern as `_observability`) so `set_eval_state`/`reset_eval_state` can rebind
+# it without a `global` statement. This is the LIVE suite-level kill seam: a red
+# row disables the gated action in the running app, fail-closed (INV-3).
+_eval_state: list[EvalSuiteResult | None] = [None]
 
 
 def _build_brand_memory_store() -> BrandMemoryStore:
@@ -156,6 +164,27 @@ def reset_observability_log() -> None:
     proposal ids do not collide. Production never calls this.
     """
     _observability[0] = InMemoryObservabilityLog()
+
+
+def get_eval_state() -> EvalSuiteResult | None:
+    """FastAPI dependency yielding the last consolidated suite verdict (FR-4.5).
+
+    The suite-level kill seam (INV-3): ``None`` until ``POST /evals/run`` has run
+    a suite; thereafter the latest :class:`EvalSuiteResult`. The fail-closed gate
+    (``app.core.eval_gate.action_enabled``) reads this to disable a gated action
+    when its row went red — in the LIVE path, not just the UI.
+    """
+    return _eval_state[0]
+
+
+def set_eval_state(result: EvalSuiteResult | None) -> None:
+    """Rebind the consolidated suite verdict (the ``POST /evals/run`` write seam)."""
+    _eval_state[0] = result
+
+
+def reset_eval_state() -> None:
+    """Clear the consolidated suite verdict back to ``None`` (test isolation only)."""
+    _eval_state[0] = None
 
 
 def get_llm_client() -> LLMClient:

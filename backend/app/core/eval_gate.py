@@ -52,6 +52,7 @@ from pydantic import BaseModel, ConfigDict, Field
 if TYPE_CHECKING:
     from app.core.params import Params
     from app.core.settings import Settings
+    from app.evals.suite import EvalSuiteResult
 
 
 # The record contracts are consumed STRUCTURALLY (duck-typed), never imported
@@ -494,3 +495,43 @@ def evaluate_message(
         judge_model_ref=judge_model_ref,
         provenance_ref=provenance_ref if isinstance(provenance_ref, str) else None,
     )
+
+
+# --------------------------------------------------------------------------- #
+# Suite-level kill switch — the consolidated eval-suite gate (FR-4.5; INV-3).
+# --------------------------------------------------------------------------- #
+def action_enabled(suite: EvalSuiteResult | None, eval_name: str) -> bool:
+    """Suite-level kill: is the action gated by ``eval_name`` still enabled?
+
+    A pure read over the last consolidated :class:`~app.evals.suite.EvalSuiteResult`
+    (FR-4.5): the action is DISABLED (returns ``False``) iff the suite carries a
+    row for ``eval_name`` whose ``passed`` is False — a red eval fails closed and
+    disables the live action (INV-3), not merely the UI.
+
+    It returns ``True`` (enabled) when:
+
+    * the row for ``eval_name`` passed; OR
+    * no suite has run yet (``suite is None``) — the per-message V-1..V-4 gate
+      still guards each draft independently, so the suite-level kill only fires
+      on an ACTUAL red row, never on "never run"; OR
+    * the suite has run but holds no row named ``eval_name`` (nothing to kill on).
+
+    The :class:`EvalSuiteResult` type is imported under ``TYPE_CHECKING`` only so
+    ``app/core/`` stays import-light/pure (INV-2): the suite module pulls in
+    ``app.adapters``/``app.evals``, which core must never import at runtime.
+
+    Args:
+        suite: The last consolidated suite result, or ``None`` if none has run.
+        eval_name: The stable eval identifier to check (e.g.
+            ``"message_safety_grounding"``).
+
+    Returns:
+        ``False`` iff the suite has a matching row with ``passed is False``;
+        ``True`` otherwise.
+    """
+    if suite is None:
+        return True
+    for row in suite.rows:
+        if row.eval_name == eval_name:
+            return row.passed
+    return True

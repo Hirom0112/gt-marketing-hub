@@ -10,11 +10,13 @@ from mangum import Mangum
 
 from app.api.ai_actions import router as ai_actions_router
 from app.api.content import router as content_router
+from app.api.evals import router as evals_router
 from app.api.families import router as families_router
 from app.api.funding import router as funding_router
 from app.api.geo import router as geo_router
 from app.api.marketing import router as marketing_router
 from app.api.notes import router as notes_router
+from app.api.scoreboard import router as scoreboard_router
 from app.api.seam import router as seam_router
 
 app = FastAPI(title="GT Growth Cockpit", version="0.1.0")
@@ -66,6 +68,17 @@ app.include_router(geo_router)
 # schedule gate + pipeline guard are fail-closed (blocked vs simulated_sent, INV-3);
 # dispatch is SIMULATED, never live (INV-9); recipes attribute Tom Babb (INV-7).
 app.include_router(marketing_router)
+
+# Consolidated eval suite (FR-4.5; ARCH §6) — /evals/run POST (run all four FR-4.x
+# evals over deterministic offline inputs + record the live suite-level kill state)
+# + /evals GET (the green/red scoreboard + per-row disabled map). A red row disables
+# the gated action in the LIVE path, fail-closed (INV-3); no live LLM call (INV-9).
+app.include_router(evals_router)
+
+# Leadership scoreboard (FR-6.1; ARCH §6) — /scoreboard GET. A pure deterministic
+# rollup over the append-only audit spine (enrollment funnel, GEO lift vs the 0%
+# baseline, per-eval green/red). Read-only; nothing is logged.
+app.include_router(scoreboard_router)
 
 
 # AWS Lambda + API Gateway entrypoint (ARCHITECTURE.md §12).

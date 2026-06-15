@@ -44,6 +44,7 @@ from app.ai.graphs.enrollment_draft import draft_enrollment_message
 from app.api.deps import (
     get_brand_judge,
     get_crm_adapter_dep,
+    get_eval_state,
     get_llm_client,
     get_observability_log,
     get_params,
@@ -57,11 +58,12 @@ from app.api.schemas import (
     DraftRequest,
     DraftResponse,
 )
-from app.core.eval_gate import BrandJudge
+from app.core.eval_gate import BrandJudge, action_enabled
 from app.core.params import Params
 from app.core.seam import derive_seam_status
 from app.core.settings import Settings
 from app.data.repository import FamilyRepository
+from app.evals.suite import EvalSuiteResult
 from app.observability.log_store import DecisionAction, ObservabilityLog
 
 router = APIRouter(tags=["ai-actions"])
@@ -72,6 +74,14 @@ DRAFT_SCHEMA_VERSION = "1"
 # The audited reviewer identity. v1 has no auth; the operator is a fixed seam (A-3).
 DEFAULT_HUMAN = "operator"
 
+# The consolidated suite eval whose RED row kills the enrollment-draft action,
+# fail-closed in the LIVE path (FR-4.5; INV-3) — the same eval name the per-draft
+# grounding eval logs under, lifted to the suite-level kill.
+DRAFT_GATING_EVAL = "message_safety_grounding"
+# The signal added to `failed_rules` when the suite-level kill suppresses a draft —
+# distinct from the per-message V-1..V-4 rule names so the UI can tell them apart.
+EVAL_SUITE_RED_RULE = "eval_suite_red"
+
 # --- dependency aliases (Annotated keeps the call in the type, not a default arg) ---
 RepositoryDep = Annotated[FamilyRepository, Depends(get_repository)]
 ParamsDep = Annotated[Params, Depends(get_params)]
@@ -80,6 +90,8 @@ LogDep = Annotated[ObservabilityLog, Depends(get_observability_log)]
 LLMClientDep = Annotated[LLMClient, Depends(get_llm_client)]
 BrandJudgeDep = Annotated["BrandJudge | None", Depends(get_brand_judge)]
 CRMAdapterDep = Annotated[CRMAdapter, Depends(get_crm_adapter_dep)]
+# Injected as a Depends so tests can override the live suite-level kill state.
+EvalStateDep = Annotated["EvalSuiteResult | None", Depends(get_eval_state)]
 
 
 @router.post("/ai/enrollment/draft", response_model=DraftResponse)
@@ -91,11 +103,25 @@ def draft_enrollment(
     log: LogDep,
     client: LLMClientDep,
     brand_judge: BrandJudgeDep,
+    eval_state: EvalStateDep,
 ) -> DraftResponse:
-    """Draft an enrollment message, eval-gate it, log it, surface only on pass (§5.2)."""
+    """Draft an enrollment message, eval-gate it, log it, surface only on pass (§5.2).
+
+    The SUITE-LEVEL kill rides on top of the per-message gate (FR-4.5; INV-3): if
+    the last consolidated suite has the ``message_safety_grounding`` row RED, the
+    action is disabled in the LIVE path — the proposal is still produced and LOGGED
+    (INV-4 audit side), but it is NOT surfaced (``surfaced=False``, no body) and
+    ``eval_suite_red`` is added to ``failed_rules``. Fail-closed: a red eval
+    disables the action, not merely the UI.
+    """
     joined = repository.get_family(request.family_id)
     if joined is None:
         raise HTTPException(status_code=404, detail="family not found")
+
+    # Suite-level kill (FR-4.5; INV-3): a RED consolidated row disables surfacing
+    # in the live path. Computed BEFORE the gate so it can suppress an otherwise
+    # passing proposal; the proposal is still produced + logged below (INV-4).
+    eval_suite_red = not action_enabled(eval_state, DRAFT_GATING_EVAL)
 
     # Per-run budget (INV-8) — built per request, never a singleton.
     budget = RunBudget.from_config(settings=settings, params=params)
@@ -135,14 +161,21 @@ def draft_enrollment(
     )
 
     failed_rules = list(validation.failed_rules) if validation is not None else ["v1_schema"]
+    # A RED consolidated suite kills surfacing even when the per-message gate passed
+    # (FR-4.5; INV-3 fail-closed). The proposal was already LOGGED above (INV-4) —
+    # the kill suppresses SURFACING, not logging.
+    surfaced = outcome.surfaced and not eval_suite_red
+    if eval_suite_red and EVAL_SUITE_RED_RULE not in failed_rules:
+        failed_rules.append(EVAL_SUITE_RED_RULE)
     return DraftResponse(
         proposal_id=proposal_id,
-        surfaced=outcome.surfaced,
+        surfaced=surfaced,
         degraded=outcome.degraded,
         failed_rules=failed_rules,
-        # Surface the body ONLY on pass (§5.2 step 5). On block/degrade the client
-        # gets no usable proposal — the UI offers the deterministic template.
-        proposal=outcome.proposal if outcome.surfaced else None,
+        # Surface the body ONLY on pass AND when the suite is not red (§5.2 step 5;
+        # FR-4.5). On block/degrade/kill the client gets no usable proposal — the
+        # UI offers the deterministic template.
+        proposal=outcome.proposal if surfaced else None,
         validation=validation,
     )
 
