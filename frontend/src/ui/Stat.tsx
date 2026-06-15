@@ -11,6 +11,9 @@ export interface StatProps {
   value: ReactNode;
   note?: ReactNode;
   tone?: Tone;
+  // Optional funnel-share: renders a 4px mini-bar (track --line-2, fill --flow)
+  // at `barPct`% width — the leadership KPI's share-of-funnel rail. Clamped 0–100.
+  barPct?: number;
 }
 
 export function Stat({
@@ -18,8 +21,11 @@ export function Stat({
   value,
   note,
   tone = 'neutral',
+  barPct,
 }: StatProps): JSX.Element {
   const color = tone === 'neutral' ? 'var(--ink)' : toneVars(tone).solid;
+  const clampedPct =
+    barPct === undefined ? undefined : Math.max(0, Math.min(100, barPct));
   return (
     <div>
       <div className="lab">{label}</div>
@@ -35,6 +41,27 @@ export function Stat({
       >
         {value}
       </div>
+      {clampedPct !== undefined ? (
+        <div
+          data-testid="stat-bar"
+          style={{
+            height: 4,
+            borderRadius: 'var(--r-pill)',
+            background: 'var(--line-2)',
+            marginTop: 'var(--s-3)',
+            overflow: 'hidden',
+          }}
+        >
+          <div
+            data-testid="stat-bar-fill"
+            style={{
+              height: '100%',
+              width: `${clampedPct}%`,
+              background: 'var(--flow)',
+            }}
+          />
+        </div>
+      ) : null}
       {note ? (
         <div
           style={{

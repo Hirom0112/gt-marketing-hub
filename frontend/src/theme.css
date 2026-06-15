@@ -20,30 +20,32 @@
   /* ---- neutral base -------------------------------------------------------- */
   --ink: #122130; /* near-black blue — primary text + active fills            */
   --ink-soft: #2c3e4f; /* secondary text on paper (AA: 9.0:1)                 */
-  --paper: #f4f6f4; /* off-white app background                               */
+  --paper: #eceff2; /* off-white app background (cockpit retune, cooler)      */
   --surface: #ffffff; /* cards / raised surfaces                             */
-  --surface-2: #fafbfa; /* recessed inputs / inset wells                     */
+  --surface-2: #f7f9fa; /* recessed inputs / inset wells (cockpit retune)    */
   --line: #d8ded9; /* hairline borders                                       */
+  --line-2: #eaeff2; /* internal hairline (dividers inside a surface)         */
   --line-strong: #c2cac4; /* emphasised hairline (hover/focus rails)         */
   --muted: #5f6f6c; /* mono micro-labels (AA on paper: 5.0:1)                 */
   --on-ink: #f4f6f4; /* text on an --ink fill                                 */
+  --on-ink-accent: #7fd8cb; /* bright teal accent on a dark (--ink) bar       */
 
-  /* ---- signal · needs-attention ------------------------------------------- */
-  --signal: #c0512a; /* AA on white: 4.6:1                                    */
-  --signal-strong: #a4421f;
+  /* ---- signal · needs-attention (cockpit retune, more saturated) ---------- */
+  --signal: #b5331c; /* AA on white: 5.0:1                                    */
+  --signal-strong: #8a2a16;
   --signal-wash: #fbeae2;
   --signal-ink: #8a3415; /* AA text on --signal-wash: 6.4:1                   */
 
-  /* ---- flow · healthy ----------------------------------------------------- */
-  --flow: #1f6e57; /* AA on white: 4.8:1                                      */
-  --flow-strong: #155844;
+  /* ---- flow · healthy (cockpit retune — instrument teal) ------------------ */
+  --flow: #0f766e; /* AA on white: 4.8:1                                      */
+  --flow-strong: #0b5651;
   --flow-wash: #e3f0eb;
   --flow-ink: #14543f; /* AA text on --flow-wash: 6.9:1                       */
 
-  /* ---- gate · funding / placeholder --------------------------------------- */
-  --gate: #9a6a14; /* AA on white: 4.8:1                                      */
+  /* ---- gate · funding / placeholder (cockpit retune, deeper amber) -------- */
+  --gate: #a35b07; /* AA on white: 4.9:1                                      */
   --gate-strong: #7e560f;
-  --gate-wash: #f6ebd5;
+  --gate-wash: #fbf0e0;
   --gate-ink: #6f4c0c; /* AA text on --gate-wash: 7.2:1                       */
 
   /* ---- recency · contact color system (S9 Wave 4) ------------------------- */
@@ -56,7 +58,7 @@
        · closed       → neutral/flow base (won — quiet, off the worklist)        */
   --recency-fresh-wash: var(--surface-2);
   --recency-fresh-ink: var(--muted);
-  --recency-fresh-solid: var(--line-strong);
+  --recency-fresh-solid: var(--ink); /* sharp fresh tick (cockpit retune)     */
   --recency-overdue-wash: var(--signal-wash);
   --recency-overdue-ink: var(--signal-ink);
   --recency-overdue-solid: var(--signal);
@@ -66,6 +68,31 @@
   --recency-closed-wash: var(--paper);
   --recency-closed-ink: var(--ink-soft);
   --recency-closed-solid: var(--line);
+
+  /* ---- cockpit / telemetry instrument tokens (S12 W3) --------------------- */
+  /* Heat gradient as RGB CHANNELS (not hex) so a heat cell can interpolate
+     opacity inline: rgba(var(--heat-from), calc(.55 + var(--i)*.35)). The two
+     stops are deliberately the existing amber (--gate) and red (--signal) of the
+     palette, expressed as channels — one canonical heat ramp, no new colours. */
+  --heat-from: 163, 91, 7; /* == --gate #a35b07 */
+  --heat-to: 181, 51, 28; /* == --signal #b5331c */
+  --heat-cell-ink: #ffffff; /* white ink on a saturated heat tile (AA on ramp) */
+
+  /* Disabled-action hatch (a blocked AI action reads as struck-through, INV-3/4).
+     --hatch-stripe is the faint warm stripe; --disabled-hatch composes the full
+     repeating gradient so a disabled control just sets `background`. */
+  --hatch-stripe: #fcf4f2;
+  --disabled-hatch: repeating-linear-gradient(
+    -45deg,
+    var(--surface),
+    var(--surface) 7px,
+    var(--hatch-stripe) 7px,
+    var(--hatch-stripe) 14px
+  );
+
+  /* Conic completion ring — track (unfilled) + fill (progress). */
+  --ring-track: var(--line);
+  --ring-fill: var(--flow);
 
   /* ---- focus ring --------------------------------------------------------- */
   --focus: #2f6df0;
@@ -84,9 +111,13 @@
   --fs-lg: 17px;
   --fs-stat: 28px; /* KPI / big mono metrics  */
   --fs-stat-lg: 34px;
+  --fs-stat-xl: 38px; /* leadership KPI numerals (cockpit) */
+  --fs-heat: 20px; /* the big mono count on a heat cell */
+  --fs-panel-title: 19px; /* the family-panel <h3> title      */
 
   --lh-body: 1.5;
   --tracking-lab: 0.08em;
+  --tracking-eyebrow: 0.13em; /* the cockpit mono eyebrow tracking */
 
   /* ---- radius ------------------------------------------------------------- */
   --r-xs: 5px;

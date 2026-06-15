@@ -4,7 +4,12 @@ import type { LucideIcon } from 'lucide-react';
 // A mono action button in three variants. `icon` takes a lucide-react icon
 // component (rendered at a label-appropriate size). Hover/active states are
 // handled in JS so the primitive stays self-contained (no global .btn CSS).
-export type ButtonVariant = 'default' | 'primary' | 'signal';
+export type ButtonVariant =
+  | 'default'
+  | 'primary'
+  | 'signal'
+  | 'flow'
+  | 'on-ink';
 
 export interface ButtonProps
   extends ButtonHTMLAttributes<HTMLButtonElement> {
@@ -25,6 +30,21 @@ function variantStyle(variant: ButtonVariant): {
         bg: 'var(--signal)',
         fg: 'var(--on-ink)',
         border: 'var(--signal)',
+      };
+    case 'flow':
+      // Teal primary — the cockpit's affirmative action (Capture / send).
+      return {
+        bg: 'var(--flow)',
+        fg: 'var(--on-ink)',
+        border: 'var(--flow)',
+      };
+    case 'on-ink':
+      // A ghost button that lives ON a dark (--ink) dock: transparent fill,
+      // white text, faint white border (the bulk-bar action buttons).
+      return {
+        bg: 'transparent',
+        fg: 'var(--on-ink)',
+        border: 'rgba(255, 255, 255, 0.25)',
       };
     case 'default':
     default:
