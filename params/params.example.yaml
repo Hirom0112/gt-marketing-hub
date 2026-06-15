@@ -28,11 +28,11 @@ bulk:                       # S12 W2 — bulk action governance (A-20; INV-8 per
 back_to_school:             # S12 W2 — the SEPARATE deterministic volume cohort (A-21; INV-1/INV-11)
   count: 348                  # ~active stalls in the back-to-school surge (mock v2 shape)
   seed: 2024                  # the cohort's own RNG seed (isolated from the default June stream)
-  spike_year: 2025            # the Aug-24 spike anchor year (stalled_since clusters here)
-  spike_month: 8              # August
-  spike_day: 24               # the single-day spike (the mock's ~184-in-one-day shape)
+  spike_year: 2026            # surge anchor near the demo "now" (_EPOCH 2026-06-15)
+  spike_month: 6              # June (the surge "just happened" → the spike day reads FRESH)
+  spike_day: 13               # the single-day spike (the mock's ~184-in-one-day shape), 2d before now
   spike_share: 0.53           # fraction of the cohort whose stall_date lands on the spike day
-  spread_days: 21             # the non-spike families spread across +/- this many days of the anchor
+  spread_days: 40             # off-spike families spread BACKWARD this many days (the overdue tail)
 
 funding:                    # FR-2.7 — RESEARCH.md Q1; amounts NEVER hardcoded elsewhere
   award_amounts:

@@ -583,17 +583,19 @@ def _stall_date_for(
     anchor: datetime,
     spread_days: int,
 ) -> datetime:
-    """A back-to-school family's ``stalled_since`` — the spike day or a band around it.
+    """A back-to-school family's ``stalled_since`` — the spike day or a band before it.
 
-    Spike families land exactly on ``anchor`` (a single-day spike). Off-spike
-    families spread uniformly across ``[-spread_days, +spread_days]`` of the
-    anchor with a deterministic minute-of-day jitter, so the surrounding calendar
-    days fill in without a second clustered peak. All draws come from ``rng``.
+    Spike families land exactly on ``anchor`` (a single-day spike — the surge that
+    "just happened"). Off-spike families spread BACKWARD across
+    ``[anchor - spread_days, anchor]`` with a deterministic minute-of-day jitter,
+    so ``anchor`` is the MOST-RECENT stall day (the calendar opens on the spike
+    month and the surge is the freshest cluster, with an overdue tail trailing
+    back). Backward-only — no family stalls after the surge. All draws from ``rng``.
     """
     if on_spike:
         offset_days = 0
     else:
-        offset_days = rng.randint(-spread_days, spread_days)
+        offset_days = -rng.randint(0, spread_days)
     return anchor + timedelta(days=offset_days, minutes=rng.randint(0, 1439))
 
 
@@ -627,7 +629,10 @@ def _build_back_to_school_family(
     attribution_source = rng.choice(_ATTRIBUTION_SOURCES)
     email = _synthetic_email(rng, surname)
     # created_at precedes the stall anchor so the family existed before it stalled.
-    created = stalled_since - timedelta(days=rng.randint(7, 60), minutes=rng.randint(0, 1439))
+    # A tight 0-30d band (vs the lead age) so the freshest surge families (stalled
+    # within the contact window of "now") read FRESH while the trailing tail reads
+    # OVERDUE — the mock's fresh-surge-plus-overdue-stragglers recency mix.
+    created = stalled_since - timedelta(days=rng.randint(0, 30), minutes=rng.randint(0, 1439))
     utm = _synthetic_utm(rng, attribution_source)
 
     # Stall reason mapped so the recovery-deriver stall-stage equals current_stage
