@@ -19,6 +19,8 @@ from app.adapters.brand_memory.base import BrandMemoryStore
 from app.adapters.brand_memory.sqlite_store import SqliteBrandMemoryStore
 from app.adapters.funding.base import FundingSignalAdapter
 from app.adapters.funding.simulated import SimulatedFundingSignalAdapter
+from app.adapters.geo_sampling.base import GeoSamplingAdapter
+from app.adapters.geo_sampling.simulated import SimulatedGeoSamplingAdapter
 from app.adapters.hubspot.crm_adapter import CRMAdapter, SimulatedCRMAdapter
 from app.core.settings import get_settings
 
@@ -72,6 +74,32 @@ def get_funding_signal_adapter() -> FundingSignalAdapter:
         "No production FundingSignalAdapter in v1: SEND_MODE='live' is reserved "
         "for a supplied GT-controlled signal source (ARCHITECTURE.md §7.2; "
         "INV-9/INV-10 fail-loud). v1 is locked to SEND_MODE='simulate'."
+    )
+
+
+def get_geo_sampling_adapter() -> GeoSamplingAdapter:
+    """Return the GEO sampling adapter for the current mode (§7.6, FR-3.7, FR-4.4).
+
+    The §7.6 boundary does **repeated, variance-reported** sampling of an AI
+    engine's citations (CONTENT_SPEC §7.4). Live polling of real AI engines is
+    OUT in v1 (PROJECT §7), so it shares the v1 ``SEND_MODE`` lock as its mode
+    seam (read only through :func:`app.core.settings.get_settings`):
+
+    - ``simulate`` (v1 lock) ⇒ a fresh :class:`SimulatedGeoSamplingAdapter`
+      (synthetic, offline, no live engine; INV-9).
+    - ``live`` ⇒ ``NotImplementedError`` — no production GEO sampling impl in v1;
+      fail loud rather than silently poll a live AI engine (INV-9).
+
+    Raises:
+        NotImplementedError: when ``SEND_MODE=live`` (no production impl in v1).
+    """
+    mode = get_settings().send_mode
+    if mode == "simulate":
+        return SimulatedGeoSamplingAdapter()
+    raise NotImplementedError(
+        "No production GeoSamplingAdapter in v1: SEND_MODE='live' is reserved "
+        "for a supplied live AI-engine sampling impl (ARCHITECTURE.md §7.6; "
+        "INV-9 fail-loud). v1 is locked to SEND_MODE='simulate'."
     )
 
 
