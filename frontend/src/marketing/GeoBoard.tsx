@@ -1,5 +1,7 @@
 import { useEffect, useState } from 'react';
+import { Globe, Lock, RefreshCw, Sparkles } from 'lucide-react';
 import { apiBaseUrl } from '../config';
+import { Button, Card, Chip, Stat } from '../ui';
 
 // GEO board (FR-3.7 / INV-3 fail-closed).
 //
@@ -101,13 +103,23 @@ export default function GeoBoard(): JSX.Element {
   }
 
   if (state.status === 'loading') {
-    return <p data-testid="geo-loading">Loading GEO board…</p>;
+    return (
+      <p data-testid="geo-loading" className="lab">
+        Loading GEO board…
+      </p>
+    );
   }
   if (state.status === 'error') {
     return (
-      <p data-testid="geo-error" role="alert">
-        Could not load GEO board: {state.message}
-      </p>
+      <Card style={{ borderColor: 'var(--signal)' }}>
+        <p
+          data-testid="geo-error"
+          role="alert"
+          style={{ color: 'var(--signal-ink)', margin: 0 }}
+        >
+          Could not load GEO board: {state.message}
+        </p>
+      </Card>
     );
   }
 
@@ -116,67 +128,189 @@ export default function GeoBoard(): JSX.Element {
   // A simple ± confidence band: standard deviation (√variance) as a percent.
   // On too few samples we never assert a point estimate — the CI is widened.
   const ci = pct(Math.sqrt(Math.max(geo.variance, 0)));
+  const liftTone = geo.lift > 0 ? 'flow' : geo.lift < 0 ? 'signal' : 'neutral';
 
   return (
-    <section aria-label="GEO board" data-testid="geo-board">
-      <h2>GEO — generative engine coverage</h2>
+    <section
+      aria-label="GEO board"
+      data-testid="geo-board"
+      style={{ display: 'grid', gap: 'var(--s-4)' }}
+    >
+      <header
+        style={{ display: 'flex', alignItems: 'center', gap: 'var(--s-2)' }}
+      >
+        <Globe size={16} aria-hidden style={{ color: 'var(--flow)' }} />
+        <h2 style={{ fontSize: 'var(--fs-lg)', fontWeight: 700, margin: 0 }}>
+          GEO — generative engine coverage
+        </h2>
+        <span style={{ marginLeft: 'auto' }}>
+          <Chip tone={evalGreen ? 'flow' : 'signal'}>
+            {evalGreen ? 'EVAL GREEN' : 'EVAL RED'}
+          </Chip>
+        </span>
+      </header>
 
-      <dl className="geo-fields">
-        <dt>Baseline</dt>
-        <dd data-testid="geo-baseline">{pct(geo.baseline)}</dd>
+      <p className="lab" style={{ margin: 0 }}>
+        Coverage measured against the 0% baseline GT starts from
+      </p>
 
-        <dt>Coverage (vs 0% baseline)</dt>
-        <dd data-testid="geo-coverage">{pct(geo.coverage_mean)}</dd>
+      {/* Metric strip — the headline GEO figures as big mono Stats. */}
+      <div
+        style={{
+          display: 'grid',
+          gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))',
+          gap: 'var(--s-3)',
+        }}
+      >
+        <Card>
+          <Stat label="Baseline" value={<span data-testid="geo-baseline">{pct(geo.baseline)}</span>} />
+        </Card>
+        <Card>
+          <Stat
+            label="Coverage (vs 0% baseline)"
+            value={<span data-testid="geo-coverage">{pct(geo.coverage_mean)}</span>}
+            tone={geo.coverage_mean > 0 ? 'flow' : 'signal'}
+          />
+        </Card>
+        <Card>
+          <Stat
+            label="Lift trend"
+            value={<span data-testid="geo-lift">{signedPct(geo.lift)}</span>}
+            tone={liftTone}
+          />
+        </Card>
+        <Card>
+          <Stat
+            label="Samples"
+            value={<span data-testid="geo-sample-count">{geo.sample_count}</span>}
+            note={
+              <span data-testid="geo-variance">
+                variance {geo.variance.toFixed(4)} (±{ci})
+              </span>
+            }
+          />
+        </Card>
+      </div>
 
-        <dt>Lift trend</dt>
-        <dd data-testid="geo-lift">{signedPct(geo.lift)}</dd>
+      <Card>
+        <div
+          style={{
+            display: 'flex',
+            alignItems: 'baseline',
+            gap: 'var(--s-2)',
+          }}
+        >
+          <span className="lab">Engine</span>
+          <span className="mono" data-testid="geo-engine" style={{ fontSize: 'var(--fs-sm)' }}>
+            {geo.engine || PLACEHOLDER}
+          </span>
+        </div>
 
-        <dt>Variance (± CI)</dt>
-        <dd data-testid="geo-variance">
-          {geo.variance.toFixed(4)} (±{ci})
-        </dd>
+        {geo.insufficient_samples && (
+          <div
+            data-testid="geo-insufficient"
+            role="status"
+            style={{
+              marginTop: 'var(--s-3)',
+              padding: 'var(--s-3)',
+              borderRadius: 'var(--r-sm)',
+              background: 'var(--gate-wash)',
+              border: '1px solid var(--gate)',
+              color: 'var(--gate-ink)',
+              fontSize: 'var(--fs-sm)',
+            }}
+          >
+            <strong>Insufficient samples</strong> — the CI is widened; this is
+            not a point estimate. Run more sampling before trusting the coverage
+            figure.
+          </div>
+        )}
 
-        <dt>Samples</dt>
-        <dd data-testid="geo-sample-count">{geo.sample_count}</dd>
-
-        <dt>Engine</dt>
-        <dd data-testid="geo-engine">{geo.engine || PLACEHOLDER}</dd>
-      </dl>
-
-      {geo.insufficient_samples && (
-        <p data-testid="geo-insufficient" role="status">
-          <strong>Insufficient samples</strong> — the CI is widened; this is not
-          a point estimate. Run more sampling before trusting the coverage
-          figure.
-        </p>
-      )}
-
-      {geo.prompt_set.length > 0 && (
-        <ul className="geo-prompt-set" data-testid="geo-prompt-set">
-          {geo.prompt_set.map((prompt) => (
-            <li key={prompt}>{prompt}</li>
-          ))}
-        </ul>
-      )}
+        {geo.prompt_set.length > 0 && (
+          <>
+            <p className="lab" style={{ marginTop: 'var(--s-4)' }}>
+              Buyer prompt set
+            </p>
+            <ul
+              className="geo-prompt-set"
+              data-testid="geo-prompt-set"
+              style={{
+                listStyle: 'none',
+                margin: 0,
+                padding: 0,
+                display: 'grid',
+                gap: 'var(--s-2)',
+                marginTop: 'var(--s-2)',
+              }}
+            >
+              {geo.prompt_set.map((prompt) => (
+                <li
+                  key={prompt}
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 'var(--s-2)',
+                    padding: '8px 10px',
+                    borderRadius: 'var(--r-sm)',
+                    background: 'var(--surface-2)',
+                    border: '1px solid var(--line)',
+                    fontSize: 'var(--fs-body)',
+                  }}
+                >
+                  <Sparkles
+                    size={13}
+                    aria-hidden
+                    style={{ color: 'var(--muted)', flexShrink: 0 }}
+                  />
+                  <span>{prompt}</span>
+                </li>
+              ))}
+            </ul>
+          </>
+        )}
+      </Card>
 
       {evalGreen ? (
-        <button
-          type="button"
-          data-testid="geo-run-sampling"
-          onClick={runSampling}
-          disabled={sampling}
-        >
-          {sampling ? 'Running sampling…' : 'Run sampling (generate-to-win)'}
-        </button>
+        <div>
+          <Button
+            variant="primary"
+            icon={sampling ? RefreshCw : Sparkles}
+            data-testid="geo-run-sampling"
+            onClick={runSampling}
+            disabled={sampling}
+          >
+            {sampling ? 'Running sampling…' : 'Run sampling (generate-to-win)'}
+          </Button>
+        </div>
       ) : (
         // INV-3 fail closed: a red GEO eval disables the generate-to-win action.
         // There is deliberately NO actionable control here — only the blocked
         // notice explaining why.
-        <p data-testid="geo-eval-blocked" role="alert">
-          The GEO eval is <strong>red</strong> — the generate-to-win action is
-          disabled until the eval passes. Coverage cannot be acted on while the
-          eval gate is failing (fail closed).
-        </p>
+        <Card
+          style={{
+            borderColor: 'var(--signal)',
+            background: 'var(--signal-wash)',
+          }}
+        >
+          <div
+            data-testid="geo-eval-blocked"
+            role="alert"
+            style={{
+              display: 'flex',
+              alignItems: 'flex-start',
+              gap: 'var(--s-2)',
+              color: 'var(--signal-ink)',
+              fontSize: 'var(--fs-sm)',
+            }}
+          >
+            <Lock size={15} aria-hidden style={{ flexShrink: 0, marginTop: 2 }} />
+            <span>
+              The GEO eval is <strong>red</strong> — the generate-to-win action
+              is disabled until the eval passes. Coverage cannot be acted on
+              while the eval gate is failing (fail closed).
+            </span>
+          </div>
+        </Card>
       )}
     </section>
   );

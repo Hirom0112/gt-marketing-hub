@@ -1,5 +1,17 @@
 import { useEffect, useState } from 'react';
+import {
+  BarChart3,
+  CalendarDays,
+  Ban,
+  FileText,
+  MapPin,
+  MessageSquare,
+  Play,
+  Plus,
+  Users,
+} from 'lucide-react';
 import { apiBaseUrl } from '../config';
+import { Button, Card, Chip, PlaceholderBadge, Stat } from '../ui';
 
 // Marketing-breadth workspace (S6 / FR-3.8/3.9, OUT-1/2/5, INV-3/4/6/7).
 //
@@ -156,6 +168,80 @@ function signed(value: number): string {
 }
 
 // ---------------------------------------------------------------------------
+// Small shared panel chrome.
+// ---------------------------------------------------------------------------
+
+interface PanelProps {
+  title: string;
+  icon: typeof Users;
+  testid: string;
+  children: React.ReactNode;
+  badge?: React.ReactNode;
+}
+
+function Panel({
+  title,
+  icon: Icon,
+  testid,
+  children,
+  badge,
+}: PanelProps): JSX.Element {
+  return (
+    <Card
+      className="mb-panel"
+      data-testid={testid}
+      style={{ display: 'grid', gap: 'var(--s-3)' }}
+    >
+      <div
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: 'var(--s-2)',
+        }}
+      >
+        <Icon size={15} aria-hidden style={{ color: 'var(--ink-soft)' }} />
+        <h3 style={{ fontSize: 'var(--fs-md)', fontWeight: 600, margin: 0 }}>
+          {title}
+        </h3>
+        {badge ? <span style={{ marginLeft: 'auto' }}>{badge}</span> : null}
+      </div>
+      {children}
+    </Card>
+  );
+}
+
+const errStyle: React.CSSProperties = {
+  color: 'var(--signal-ink)',
+  margin: 0,
+  fontSize: 'var(--fs-sm)',
+};
+
+const emptyStyle: React.CSSProperties = {
+  color: 'var(--muted)',
+  margin: 0,
+  fontSize: 'var(--fs-sm)',
+};
+
+const rowStyle: React.CSSProperties = {
+  display: 'flex',
+  alignItems: 'center',
+  gap: 'var(--s-3)',
+  flexWrap: 'wrap',
+  padding: '10px 12px',
+  borderRadius: 'var(--r-sm)',
+  background: 'var(--surface-2)',
+  border: '1px solid var(--line)',
+};
+
+const listStyle: React.CSSProperties = {
+  listStyle: 'none',
+  margin: 0,
+  padding: 0,
+  display: 'grid',
+  gap: 'var(--s-2)',
+};
+
+// ---------------------------------------------------------------------------
 // Workspace surface.
 // ---------------------------------------------------------------------------
 
@@ -165,8 +251,16 @@ export default function MarketingBreadth(): JSX.Element {
       aria-label="Marketing breadth"
       data-testid="marketing-breadth"
       className="marketing-breadth"
+      style={{ display: 'grid', gap: 'var(--s-4)' }}
     >
-      <h2>Marketing breadth</h2>
+      <header
+        style={{ display: 'flex', alignItems: 'center', gap: 'var(--s-2)' }}
+      >
+        <BarChart3 size={16} aria-hidden style={{ color: 'var(--ink-soft)' }} />
+        <h2 style={{ fontSize: 'var(--fs-lg)', fontWeight: 700, margin: 0 }}>
+          Marketing breadth
+        </h2>
+      </header>
       <CreatorPanel />
       <SentimentPanel />
       <KpiPanel />
@@ -182,33 +276,57 @@ export default function MarketingBreadth(): JSX.Element {
 function CreatorPanel(): JSX.Element {
   const state = useGet<Creator[]>('/creators');
   return (
-    <div className="mb-panel" data-testid="creator-panel">
-      <h3>Creator discovery</h3>
+    <Panel title="Creator discovery" icon={Users} testid="creator-panel">
       {state.status === 'loading' && (
-        <p data-testid="creator-loading">Loading creators…</p>
+        <p data-testid="creator-loading" className="lab">
+          Loading creators…
+        </p>
       )}
       {state.status === 'error' && (
-        <p data-testid="creator-error" role="alert">
+        <p data-testid="creator-error" role="alert" style={errStyle}>
           Could not load creators: {state.message}
         </p>
       )}
       {state.status === 'ready' &&
         (state.data.length === 0 ? (
-          <p data-testid="creator-empty">No creators discovered yet.</p>
+          <p data-testid="creator-empty" style={emptyStyle}>
+            No creators discovered yet.
+          </p>
         ) : (
-          <ul className="creator-list">
+          <ul className="creator-list" style={listStyle}>
             {state.data.map((c) => (
               <li
                 key={c.id}
                 className="creator-row"
                 data-testid={`creator-${c.id}`}
+                style={rowStyle}
               >
-                <span className="creator-handle">{c.display_handle}</span>
-                <span className="creator-channel">{c.channel}</span>
-                <span data-testid={`creator-fit-${c.id}`}>
+                <div style={{ flex: 1, minWidth: 160 }}>
+                  <div
+                    className="creator-handle mono"
+                    style={{ fontSize: 'var(--fs-body)', fontWeight: 600 }}
+                  >
+                    {c.display_handle}
+                  </div>
+                  <div
+                    className="creator-channel lab"
+                    style={{ marginTop: 2 }}
+                  >
+                    {c.channel}
+                  </div>
+                </div>
+                <span
+                  className="mono"
+                  data-testid={`creator-fit-${c.id}`}
+                  style={{ fontSize: 'var(--fs-sm)', color: 'var(--flow)' }}
+                >
                   Fit {pct(c.fit_score)}
                 </span>
-                <span data-testid={`creator-authenticity-${c.id}`}>
+                <span
+                  className="mono"
+                  data-testid={`creator-authenticity-${c.id}`}
+                  style={{ fontSize: 'var(--fs-sm)', color: 'var(--muted)' }}
+                >
                   Authenticity {pct(c.authenticity_score)}
                 </span>
                 {/* INV-6: aggregate-only; the data_mode badge makes the trust
@@ -217,13 +335,13 @@ function CreatorPanel(): JSX.Element {
                   className="badge badge-aggregate"
                   data-testid={`creator-data-mode-${c.id}`}
                 >
-                  {c.data_mode}
+                  <Chip tone="flow">{c.data_mode}</Chip>
                 </span>
               </li>
             ))}
           </ul>
         ))}
-    </div>
+    </Panel>
   );
 }
 
@@ -231,44 +349,79 @@ function CreatorPanel(): JSX.Element {
 function SentimentPanel(): JSX.Element {
   const state = useGet<SentimentResponse>('/sentiment');
   return (
-    <div className="mb-panel" data-testid="sentiment-panel">
-      <h3>Sentiment monitor</h3>
-      {state.status === 'loading' && (
-        <p data-testid="sentiment-loading">Loading sentiment…</p>
-      )}
-      {state.status === 'error' && (
-        <p data-testid="sentiment-error" role="alert">
-          Could not load sentiment: {state.message}
-        </p>
-      )}
-      {state.status === 'ready' && (
-        <div className="sentiment-summary" data-testid="sentiment-summary">
-          {/* OUT-5: not a live feed — the source_mode placeholder badge says so. */}
+    <Panel
+      title="Sentiment monitor"
+      icon={MessageSquare}
+      testid="sentiment-panel"
+      badge={
+        state.status === 'ready' ? (
+          // OUT-5: not a live feed — the source_mode placeholder badge says so.
           <span
             className="badge badge-placeholder"
             data-testid="sentiment-source-mode"
           >
-            {state.data.summary.source_mode}
+            <PlaceholderBadge label={state.data.summary.source_mode} />
           </span>
-          <dl className="sentiment-counts">
-            <dt>Positive</dt>
-            <dd data-testid="sentiment-positive">
-              {state.data.summary.positive}
-            </dd>
-            <dt>Neutral</dt>
-            <dd data-testid="sentiment-neutral">
-              {state.data.summary.neutral}
-            </dd>
-            <dt>Negative</dt>
-            <dd data-testid="sentiment-negative">
-              {state.data.summary.negative}
-            </dd>
-            <dt>Total</dt>
-            <dd data-testid="sentiment-total">{state.data.summary.total}</dd>
-          </dl>
+        ) : undefined
+      }
+    >
+      {state.status === 'loading' && (
+        <p data-testid="sentiment-loading" className="lab">
+          Loading sentiment…
+        </p>
+      )}
+      {state.status === 'error' && (
+        <p data-testid="sentiment-error" role="alert" style={errStyle}>
+          Could not load sentiment: {state.message}
+        </p>
+      )}
+      {state.status === 'ready' && (
+        <div
+          className="sentiment-summary"
+          data-testid="sentiment-summary"
+          style={{
+            display: 'grid',
+            gridTemplateColumns: 'repeat(auto-fit, minmax(110px, 1fr))',
+            gap: 'var(--s-3)',
+          }}
+        >
+          <Stat
+            label="Positive"
+            tone="flow"
+            value={
+              <span data-testid="sentiment-positive">
+                {state.data.summary.positive}
+              </span>
+            }
+          />
+          <Stat
+            label="Neutral"
+            value={
+              <span data-testid="sentiment-neutral">
+                {state.data.summary.neutral}
+              </span>
+            }
+          />
+          <Stat
+            label="Negative"
+            tone="signal"
+            value={
+              <span data-testid="sentiment-negative">
+                {state.data.summary.negative}
+              </span>
+            }
+          />
+          <Stat
+            label="Total"
+            value={
+              <span data-testid="sentiment-total">
+                {state.data.summary.total}
+              </span>
+            }
+          />
         </div>
       )}
-    </div>
+    </Panel>
   );
 }
 
@@ -276,50 +429,82 @@ function SentimentPanel(): JSX.Element {
 function KpiPanel(): JSX.Element {
   const state = useGet<KpiRow[]>('/kpi');
   return (
-    <div className="mb-panel" data-testid="kpi-panel">
-      <h3>KPI board</h3>
+    <Panel title="KPI board" icon={BarChart3} testid="kpi-panel">
       {state.status === 'loading' && (
-        <p data-testid="kpi-loading">Loading KPIs…</p>
+        <p data-testid="kpi-loading" className="lab">
+          Loading KPIs…
+        </p>
       )}
       {state.status === 'error' && (
-        <p data-testid="kpi-error" role="alert">
+        <p data-testid="kpi-error" role="alert" style={errStyle}>
           Could not load KPIs: {state.message}
         </p>
       )}
       {state.status === 'ready' &&
         (state.data.length === 0 ? (
-          <p data-testid="kpi-empty">No KPIs yet.</p>
+          <p data-testid="kpi-empty" style={emptyStyle}>
+            No KPIs yet.
+          </p>
         ) : (
-          <ul className="kpi-list">
+          <ul className="kpi-list" style={listStyle}>
             {state.data.map((k) => (
               <li
                 key={`${k.channel}-${k.metric}`}
                 className="kpi-row"
                 data-testid={`kpi-${k.channel}`}
+                style={rowStyle}
               >
-                <span className="kpi-channel">{k.channel}</span>
-                <span className="kpi-metric">{k.metric}</span>
-                <span data-testid={`kpi-baseline-${k.channel}`}>
+                <div style={{ flex: 1, minWidth: 140 }}>
+                  <div
+                    className="kpi-channel mono"
+                    style={{ fontSize: 'var(--fs-body)', fontWeight: 600 }}
+                  >
+                    {k.channel}
+                  </div>
+                  <div className="kpi-metric lab" style={{ marginTop: 2 }}>
+                    {k.metric}
+                  </div>
+                </div>
+                <span
+                  className="mono"
+                  data-testid={`kpi-baseline-${k.channel}`}
+                  style={{ fontSize: 'var(--fs-sm)', color: 'var(--muted)' }}
+                >
                   Baseline {k.baseline}
                 </span>
-                <span data-testid={`kpi-target-${k.channel}`}>
+                <span
+                  className="mono"
+                  data-testid={`kpi-target-${k.channel}`}
+                  style={{ fontSize: 'var(--fs-sm)', color: 'var(--muted)' }}
+                >
                   Target {k.target}
                 </span>
                 {/* The lever delta, signed, vs baseline. */}
-                <span data-testid={`kpi-lever-${k.channel}`}>
+                <span
+                  className="mono"
+                  data-testid={`kpi-lever-${k.channel}`}
+                  style={{
+                    fontSize: 'var(--fs-sm)',
+                    fontWeight: 600,
+                    color:
+                      k.lever_delta >= 0 ? 'var(--flow)' : 'var(--signal)',
+                  }}
+                >
                   Lever {signed(k.lever_delta)}
                 </span>
                 <span
                   data-testid={`kpi-met-${k.channel}`}
                   className={k.target_met ? 'kpi-met' : 'kpi-unmet'}
                 >
-                  {k.target_met ? 'Target met' : 'Below target'}
+                  <Chip tone={k.target_met ? 'flow' : 'signal'}>
+                    {k.target_met ? 'Target met' : 'Below target'}
+                  </Chip>
                 </span>
               </li>
             ))}
           </ul>
         ))}
-    </div>
+    </Panel>
   );
 }
 
@@ -327,21 +512,40 @@ function KpiPanel(): JSX.Element {
 function PipelinePanel(): JSX.Element {
   const state = useGet<PipelineResponse>('/content/pipeline');
   return (
-    <div className="mb-panel" data-testid="pipeline-panel">
-      <h3>Staged pipeline</h3>
+    <Panel title="Staged pipeline" icon={Play} testid="pipeline-panel">
       {state.status === 'loading' && (
-        <p data-testid="pipeline-loading">Loading pipeline…</p>
+        <p data-testid="pipeline-loading" className="lab">
+          Loading pipeline…
+        </p>
       )}
       {state.status === 'error' && (
-        <p data-testid="pipeline-error" role="alert">
+        <p data-testid="pipeline-error" role="alert" style={errStyle}>
           Could not load pipeline: {state.message}
         </p>
       )}
       {state.status === 'ready' && (
-        <ol className="pipeline-stages">
-          <li className="pipeline-stage" data-testid="pipeline-concept">
-            <span className="stage-name">Concept</span>
-            <span className="stage-status">{state.data.concept.status}</span>
+        <ol
+          className="pipeline-stages"
+          style={{
+            listStyle: 'none',
+            margin: 0,
+            padding: 0,
+            display: 'grid',
+            gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))',
+            gap: 'var(--s-2)',
+          }}
+        >
+          <li
+            className="pipeline-stage"
+            data-testid="pipeline-concept"
+            style={{ ...rowStyle, justifyContent: 'space-between' }}
+          >
+            <span className="stage-name" style={{ fontWeight: 600 }}>
+              Concept
+            </span>
+            <span className="stage-status">
+              <Chip tone="flow">{state.data.concept.status}</Chip>
+            </span>
           </li>
           <PlaceholderStage
             name="Image"
@@ -355,7 +559,7 @@ function PipelinePanel(): JSX.Element {
           />
         </ol>
       )}
-    </div>
+    </Panel>
   );
 }
 
@@ -371,16 +575,29 @@ function PlaceholderStage({
   testid: string;
 }): JSX.Element {
   return (
-    <li className="pipeline-stage" data-testid={testid}>
-      <span className="stage-name">{name}</span>
-      <span
-        className="badge badge-placeholder"
-        data-testid={`${testid}-badge`}
-      >
-        {stage.status === 'placeholder' ? 'placeholder' : stage.status}
+    <li
+      className="pipeline-stage"
+      data-testid={testid}
+      style={{ ...rowStyle, justifyContent: 'space-between' }}
+    >
+      <span className="stage-name" style={{ fontWeight: 600 }}>
+        {name}
+      </span>
+      <span className="badge badge-placeholder" data-testid={`${testid}-badge`}>
+        <PlaceholderBadge
+          label={stage.status === 'placeholder' ? 'placeholder' : stage.status}
+        />
       </span>
       {stage.placeholder_uri && (
-        <span className="stage-uri" data-testid={`${testid}-uri`}>
+        <span
+          className="stage-uri mono"
+          data-testid={`${testid}-uri`}
+          style={{
+            fontSize: 'var(--fs-micro)',
+            color: 'var(--muted)',
+            flexBasis: '100%',
+          }}
+        >
           {stage.placeholder_uri}
         </span>
       )}
@@ -413,30 +630,36 @@ function SchedulerPanel(): JSX.Element {
   }
 
   return (
-    <div className="mb-panel" data-testid="scheduler-panel">
-      <h3>Scheduler</h3>
+    <Panel title="Scheduler" icon={CalendarDays} testid="scheduler-panel">
       {state.status === 'loading' && (
-        <p data-testid="scheduler-loading">Loading schedule…</p>
+        <p data-testid="scheduler-loading" className="lab">
+          Loading schedule…
+        </p>
       )}
       {state.status === 'error' && (
-        <p data-testid="scheduler-error" role="alert">
+        <p data-testid="scheduler-error" role="alert" style={errStyle}>
           Could not load schedule: {state.message}
         </p>
       )}
       {state.status === 'ready' && (
         <>
-          <button
-            type="button"
-            data-testid="scheduler-add"
-            onClick={schedule}
-            disabled={scheduling}
-          >
-            {scheduling ? 'Scheduling…' : 'Schedule post'}
-          </button>
+          <div>
+            <Button
+              variant="primary"
+              icon={Plus}
+              data-testid="scheduler-add"
+              onClick={schedule}
+              disabled={scheduling}
+            >
+              {scheduling ? 'Scheduling…' : 'Schedule post'}
+            </Button>
+          </div>
           {state.data.length === 0 ? (
-            <p data-testid="scheduler-empty">No scheduled posts yet.</p>
+            <p data-testid="scheduler-empty" style={emptyStyle}>
+              No scheduled posts yet.
+            </p>
           ) : (
-            <ul className="schedule-list">
+            <ul className="schedule-list" style={listStyle}>
               {state.data.map((post) => (
                 <ScheduledPostRow key={post.id} post={post} />
               ))}
@@ -444,7 +667,7 @@ function SchedulerPanel(): JSX.Element {
           )}
         </>
       )}
-    </div>
+    </Panel>
   );
 }
 
@@ -455,15 +678,30 @@ function ScheduledPostRow({ post }: { post: ScheduledPost }): JSX.Element {
       className={`schedule-row ${blocked ? 'blocked' : ''}`}
       data-testid={`schedule-${post.id}`}
       data-status={post.dispatch_status}
+      style={{
+        ...rowStyle,
+        borderColor: blocked ? 'var(--signal)' : 'var(--line)',
+        background: blocked ? 'var(--signal-wash)' : 'var(--surface-2)',
+      }}
     >
-      <span className="schedule-channel">{post.channel}</span>
-      <span className="schedule-when">{post.scheduled_for}</span>
+      <span
+        className="schedule-channel mono"
+        style={{ fontWeight: 600, fontSize: 'var(--fs-sm)' }}
+      >
+        {post.channel}
+      </span>
+      <span
+        className="schedule-when lab"
+        style={{ flex: 1, minWidth: 120 }}
+      >
+        {post.scheduled_for}
+      </span>
       {/* OUT-2: every v1 dispatch is simulated — badge it. */}
       <span
         className="badge badge-simulated"
         data-testid={`schedule-mode-${post.id}`}
       >
-        {post.dispatch_mode}
+        <PlaceholderBadge label={post.dispatch_mode} />
       </span>
       {blocked ? (
         // Fail-closed (INV-3/INV-4): a blocked post shows a red blocked status
@@ -472,17 +710,24 @@ function ScheduledPostRow({ post }: { post: ScheduledPost }): JSX.Element {
           className="schedule-status blocked"
           data-testid={`schedule-blocked-${post.id}`}
           role="alert"
+          style={{
+            display: 'inline-flex',
+            alignItems: 'center',
+            gap: 'var(--s-1)',
+            color: 'var(--signal-ink)',
+            fontSize: 'var(--fs-sm)',
+            fontWeight: 600,
+          }}
         >
-          Blocked — not dispatched
+          <Ban size={13} aria-hidden /> Blocked — not dispatched
         </span>
       ) : (
-        <span
-          className="schedule-status"
-          data-testid={`schedule-status-${post.id}`}
-        >
-          {post.dispatch_status === 'simulated_sent'
-            ? `Simulated sent${post.simulated_result ? ` — ${post.simulated_result}` : ''}`
-            : 'Queued'}
+        <span className="schedule-status" data-testid={`schedule-status-${post.id}`}>
+          <Chip tone={post.dispatch_status === 'simulated_sent' ? 'flow' : 'neutral'}>
+            {post.dispatch_status === 'simulated_sent'
+              ? `Simulated sent${post.simulated_result ? ` — ${post.simulated_result}` : ''}`
+              : 'Queued'}
+          </Chip>
         </span>
       )}
     </li>
@@ -495,20 +740,32 @@ function ScheduledPostRow({ post }: { post: ScheduledPost }): JSX.Element {
 // to make the trust property explicit. No fabricated data is rendered.
 function GeoTargetingPanel(): JSX.Element {
   return (
-    <div className="mb-panel" data-testid="geo-targeting-panel">
-      <h3>Geo targeting</h3>
+    <Panel
+      title="Geo targeting"
+      icon={MapPin}
+      testid="geo-targeting-panel"
+      badge={
+        <span
+          className="badge badge-aggregate"
+          data-testid="geo-targeting-aggregate-badge"
+        >
+          <Chip tone="flow">Aggregate-only — no child-keyed targeting</Chip>
+        </span>
+      }
+    >
       <p
-        className="badge badge-aggregate"
-        data-testid="geo-targeting-aggregate-badge"
+        data-testid="geo-targeting-note"
+        style={{
+          fontSize: 'var(--fs-sm)',
+          color: 'var(--ink-soft)',
+          margin: 0,
+        }}
       >
-        Aggregate-only — no child-keyed targeting
-      </p>
-      <p data-testid="geo-targeting-note">
         Geo segments are derived from aggregate region signals only. Per the
         threat model (INV-6), GT never keys targeting to an individual minor and
         never scrapes minors; only aggregate, de-identified geo data is used.
       </p>
-    </div>
+    </Panel>
   );
 }
 
@@ -537,56 +794,90 @@ function RecipeRunner(): JSX.Element {
   }
 
   return (
-    <div className="mb-panel" data-testid="recipe-runner">
-      <h3>Recipe runner</h3>
+    <Panel title="Recipe runner" icon={FileText} testid="recipe-runner">
       {state.status === 'loading' && (
-        <p data-testid="recipe-loading">Loading recipes…</p>
+        <p data-testid="recipe-loading" className="lab">
+          Loading recipes…
+        </p>
       )}
       {state.status === 'error' && (
-        <p data-testid="recipe-error" role="alert">
+        <p data-testid="recipe-error" role="alert" style={errStyle}>
           Could not load recipes: {state.message}
         </p>
       )}
       {state.status === 'ready' &&
         (state.data.length === 0 ? (
-          <p data-testid="recipe-empty">No recipes yet.</p>
+          <p data-testid="recipe-empty" style={emptyStyle}>
+            No recipes yet.
+          </p>
         ) : (
-          <ul className="recipe-list">
+          <ul className="recipe-list" style={listStyle}>
             {state.data.map((recipe) => (
               <li
                 key={recipe.id}
                 className="recipe-row"
                 data-testid={`recipe-${recipe.id}`}
+                style={{ ...rowStyle, alignItems: 'flex-start' }}
               >
-                <span className="recipe-name">{recipe.name}</span>
-                <span className="recipe-description">{recipe.description}</span>
-                {/* INV-7: Tom Babb's marketing skills are attributed in the UI,
-                    never claimed as the builder's authorship. */}
-                <span
-                  className="recipe-attribution"
-                  data-testid={`recipe-attribution-${recipe.id}`}
-                >
-                  Marketing skills by {recipe.attribution}
-                </span>
-                <button
-                  type="button"
-                  data-testid={`recipe-run-${recipe.id}`}
-                  onClick={() => run(recipe.id)}
-                >
-                  Run recipe
-                </button>
-                {ran[recipe.id] && (
-                  <span
-                    role="status"
-                    data-testid={`recipe-ran-${recipe.id}`}
+                <div style={{ flex: 1, minWidth: 200 }}>
+                  <div
+                    className="recipe-name"
+                    style={{ fontSize: 'var(--fs-body)', fontWeight: 600 }}
                   >
-                    Recipe run (simulated)
-                  </span>
-                )}
+                    {recipe.name}
+                  </div>
+                  <div
+                    className="recipe-description"
+                    style={{
+                      fontSize: 'var(--fs-sm)',
+                      color: 'var(--muted)',
+                      marginTop: 2,
+                    }}
+                  >
+                    {recipe.description}
+                  </div>
+                  {/* INV-7: Tom Babb's marketing skills are attributed in the
+                      UI, never claimed as the builder's authorship. */}
+                  <div
+                    className="recipe-attribution"
+                    data-testid={`recipe-attribution-${recipe.id}`}
+                    style={{
+                      fontSize: 'var(--fs-sm)',
+                      color: 'var(--flow-ink)',
+                      marginTop: 'var(--s-2)',
+                      fontStyle: 'italic',
+                    }}
+                  >
+                    Marketing skills by {recipe.attribution}
+                  </div>
+                </div>
+                <div
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 'var(--s-2)',
+                  }}
+                >
+                  <Button
+                    icon={Play}
+                    data-testid={`recipe-run-${recipe.id}`}
+                    onClick={() => run(recipe.id)}
+                  >
+                    Run recipe
+                  </Button>
+                  {ran[recipe.id] && (
+                    <span
+                      role="status"
+                      data-testid={`recipe-ran-${recipe.id}`}
+                    >
+                      <Chip tone="flow">Recipe run (simulated)</Chip>
+                    </span>
+                  )}
+                </div>
               </li>
             ))}
           </ul>
         ))}
-    </div>
+    </Panel>
   );
 }

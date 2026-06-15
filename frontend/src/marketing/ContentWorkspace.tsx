@@ -1,5 +1,15 @@
 import { useEffect, useState } from 'react';
+import {
+  Ban,
+  Check,
+  FileText,
+  FolderOpen,
+  Image as ImageIcon,
+  Sparkles,
+  Trash2,
+} from 'lucide-react';
 import { apiBaseUrl } from '../config';
+import { Button, Card, Chip, PlaceholderBadge } from '../ui';
 
 // Content workspace (FR-3.1/3.4/3.5, FR-4.5 / INV-3 / INV-4 fail-closed).
 //
@@ -137,35 +147,93 @@ export default function ContentWorkspace(): JSX.Element {
   }
 
   return (
-    <section aria-label="Content workspace" data-testid="content-workspace">
-      <h2>Content workspace</h2>
+    <section
+      aria-label="Content workspace"
+      data-testid="content-workspace"
+      style={{ display: 'grid', gap: 'var(--s-4)' }}
+    >
+      <header
+        style={{ display: 'flex', alignItems: 'center', gap: 'var(--s-2)' }}
+      >
+        <Sparkles size={16} aria-hidden style={{ color: 'var(--signal)' }} />
+        <h2 style={{ fontSize: 'var(--fs-lg)', fontWeight: 700, margin: 0 }}>
+          Content workspace
+        </h2>
+      </header>
 
-      <div className="content-generate">
+      {/* The generator prompt + the staged-pipeline chip row. */}
+      <Card style={{ display: 'grid', gap: 'var(--s-3)' }}>
+        <p className="lab" style={{ margin: 0 }}>
+          Tell the generator what you want — generate many, keep the good ones
+        </p>
         <textarea
           data-testid="content-prompt"
           aria-label="Content prompt"
           value={prompt}
           onChange={(e) => setPrompt(e.target.value)}
           placeholder="Describe the content to generate…"
+          rows={3}
+          style={{
+            fontFamily: 'var(--sans)',
+            fontSize: 'var(--fs-body)',
+            width: '100%',
+            border: '1px solid var(--line)',
+            borderRadius: 'var(--r-md)',
+            padding: 'var(--s-3)',
+            background: 'var(--surface-2)',
+            color: 'var(--ink)',
+            resize: 'vertical',
+          }}
         />
-        <button
-          type="button"
-          data-testid="content-generate"
-          onClick={generate}
-          disabled={batch.status === 'loading'}
+        <div
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: 'var(--s-3)',
+            flexWrap: 'wrap',
+          }}
         >
-          Generate batch
-        </button>
-      </div>
+          <Button
+            variant="primary"
+            icon={Sparkles}
+            data-testid="content-generate"
+            onClick={generate}
+            disabled={batch.status === 'loading'}
+          >
+            Generate batch
+          </Button>
+          <div
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: 'var(--s-2)',
+              flexWrap: 'wrap',
+            }}
+          >
+            <span className="lab">Pipeline</span>
+            <Chip tone="flow">Concepts · live</Chip>
+            <Chip tone="gate">Images · placeholder</Chip>
+            <Chip tone="gate">Video · placeholder</Chip>
+          </div>
+        </div>
+      </Card>
 
       {batch.status === 'loading' && (
-        <p data-testid="batch-loading">Generating candidates…</p>
+        <p data-testid="batch-loading" className="lab">
+          Generating candidates…
+        </p>
       )}
 
       {batch.status === 'error' && (
-        <p data-testid="batch-error" role="alert">
-          Could not generate: {batch.message}
-        </p>
+        <Card style={{ borderColor: 'var(--signal)' }}>
+          <p
+            data-testid="batch-error"
+            role="alert"
+            style={{ color: 'var(--signal-ink)', margin: 0 }}
+          >
+            Could not generate: {batch.message}
+          </p>
+        </Card>
       )}
 
       {batch.status === 'ready' && (
@@ -176,6 +244,8 @@ export default function ContentWorkspace(): JSX.Element {
           onDiscard={(id) => decide(id, 'discard')}
         />
       )}
+
+      <ImageBatchPlaceholder />
 
       <LibraryPanel state={library} />
     </section>
@@ -196,16 +266,51 @@ function BatchResult({
   onDiscard,
 }: BatchResultProps): JSX.Element {
   return (
-    <div className="content-batch" data-testid="content-batch">
+    <div
+      className="content-batch"
+      data-testid="content-batch"
+      style={{ display: 'grid', gap: 'var(--s-3)' }}
+    >
       {data.degraded && (
-        <p data-testid="batch-degraded" role="status">
-          Generation is in <strong>degraded mode</strong> (no-LLM / kill-switch
-          / cost cap). These are deterministic fallback candidates, not a live
-          AI batch.
-        </p>
+        <Card
+          style={{
+            borderColor: 'var(--gate)',
+            background: 'var(--gate-wash)',
+          }}
+        >
+          <div
+            data-testid="batch-degraded"
+            role="status"
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: 'var(--s-2)',
+              flexWrap: 'wrap',
+              color: 'var(--gate-ink)',
+              fontSize: 'var(--fs-sm)',
+            }}
+          >
+            <PlaceholderBadge label="DEGRADED" />
+            <span>
+              Generation is in <strong>degraded mode</strong> (no-LLM /
+              kill-switch / cost cap). These are deterministic fallback
+              candidates, not a live AI batch.
+            </span>
+          </div>
+        </Card>
       )}
 
-      <ul className="candidate-list">
+      <ul
+        className="candidate-list"
+        style={{
+          listStyle: 'none',
+          margin: 0,
+          padding: 0,
+          display: 'grid',
+          gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))',
+          gap: 'var(--s-3)',
+        }}
+      >
         {data.candidates.map((candidate) =>
           candidate.surfaced && candidate.validation?.passed ? (
             <SurfacedCandidate
@@ -243,28 +348,60 @@ function SurfacedCandidate({
       className="candidate surfaced"
       data-testid={`candidate-${id}`}
       data-decision={decision ?? 'pending'}
+      style={{ listStyle: 'none' }}
     >
-      <p className="candidate-copy" data-testid={`candidate-copy-${id}`}>
-        {candidate.copy}
-      </p>
-      {decision ? (
-        <p data-testid={`candidate-decided-${id}`} role="status">
-          {decision === 'approve' ? 'Kept — added to library' : 'Discarded'}
-        </p>
-      ) : (
-        <div className="candidate-controls">
-          <button type="button" data-testid={`keep-${id}`} onClick={onKeep}>
-            Keep
-          </button>
-          <button
-            type="button"
-            data-testid={`discard-${id}`}
-            onClick={onDiscard}
-          >
-            Discard
-          </button>
+      <Card style={{ display: 'grid', gap: 'var(--s-3)', height: '100%' }}>
+        <div
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            gap: 'var(--s-2)',
+          }}
+        >
+          <Chip tone="neutral">{candidate.channel}</Chip>
+          {candidate.degraded && <PlaceholderBadge label="FALLBACK" />}
         </div>
-      )}
+        <p
+          className="candidate-copy"
+          data-testid={`candidate-copy-${id}`}
+          style={{ fontSize: 'var(--fs-body)', margin: 0 }}
+        >
+          {candidate.copy}
+        </p>
+        {decision ? (
+          <p
+            data-testid={`candidate-decided-${id}`}
+            role="status"
+            className="mono"
+            style={{
+              fontSize: 'var(--fs-sm)',
+              margin: 0,
+              color:
+                decision === 'approve' ? 'var(--flow-ink)' : 'var(--muted)',
+            }}
+          >
+            {decision === 'approve' ? '✓ Kept — added to library' : 'Discarded'}
+          </p>
+        ) : (
+          <div
+            className="candidate-controls"
+            style={{ display: 'flex', gap: 'var(--s-2)' }}
+          >
+            <Button
+              variant="signal"
+              icon={Check}
+              data-testid={`keep-${id}`}
+              onClick={onKeep}
+            >
+              Keep → library
+            </Button>
+            <Button icon={Trash2} data-testid={`discard-${id}`} onClick={onDiscard}>
+              Discard
+            </Button>
+          </div>
+        )}
+      </Card>
     </li>
   );
 }
@@ -283,51 +420,189 @@ function BlockedCandidate({
       className="candidate blocked"
       data-testid={`candidate-blocked-${id}`}
       role="alert"
+      style={{ listStyle: 'none' }}
     >
-      <p>
-        This candidate was <strong>blocked by the content gate</strong> and
-        cannot be kept.
-      </p>
-      {candidate.failed_rules.length > 0 && (
-        <ul className="failed-rules" data-testid={`failed-rules-${id}`}>
-          {candidate.failed_rules.map((rule) => (
-            <li key={rule}>{rule}</li>
-          ))}
-        </ul>
-      )}
+      <Card
+        style={{
+          borderColor: 'var(--signal)',
+          background: 'var(--signal-wash)',
+          display: 'grid',
+          gap: 'var(--s-2)',
+          height: '100%',
+        }}
+      >
+        <div
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: 'var(--s-2)',
+            color: 'var(--signal-ink)',
+            fontSize: 'var(--fs-sm)',
+            fontWeight: 600,
+          }}
+        >
+          <Ban size={15} aria-hidden style={{ flexShrink: 0 }} />
+          Blocked by the content gate — cannot be kept
+        </div>
+        {candidate.failed_rules.length > 0 && (
+          <ul
+            className="failed-rules"
+            data-testid={`failed-rules-${id}`}
+            style={{
+              listStyle: 'none',
+              margin: 0,
+              padding: 0,
+              display: 'flex',
+              flexWrap: 'wrap',
+              gap: 'var(--s-1)',
+            }}
+          >
+            {candidate.failed_rules.map((rule) => (
+              <li key={rule}>
+                <Chip tone="signal">{rule}</Chip>
+              </li>
+            ))}
+          </ul>
+        )}
+      </Card>
     </li>
+  );
+}
+
+// Image-batch placeholder grid (OUT-1 / INV-9): live media gen is not in v1.
+// The PlaceholderBadge marks the surface as simulated; we render no fabricated
+// asset, only the dashed tile grid that production would fill.
+function ImageBatchPlaceholder(): JSX.Element {
+  return (
+    <Card style={{ display: 'grid', gap: 'var(--s-3)' }}>
+      <div
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          gap: 'var(--s-2)',
+        }}
+      >
+        <span className="lab">Image batch · keep what you want</span>
+        <PlaceholderBadge />
+      </div>
+      <div
+        style={{
+          display: 'grid',
+          gridTemplateColumns: 'repeat(auto-fill, minmax(72px, 1fr))',
+          gap: 'var(--s-2)',
+        }}
+      >
+        {Array.from({ length: 8 }, (_, i) => (
+          <div
+            key={i}
+            style={{
+              aspectRatio: '1',
+              borderRadius: 'var(--r-md)',
+              background: 'var(--surface-2)',
+              border: '1px dashed var(--line-strong)',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              color: 'var(--muted)',
+            }}
+          >
+            <ImageIcon size={18} aria-hidden />
+          </div>
+        ))}
+      </div>
+      <p style={{ fontSize: 'var(--fs-sm)', color: 'var(--muted)', margin: 0 }}>
+        A media-gen batch lands here in production; keepers flow to the library
+        as brand references.
+      </p>
+    </Card>
   );
 }
 
 function LibraryPanel({ state }: { state: LibraryState }): JSX.Element {
   return (
-    <div className="content-library" data-testid="content-library">
-      <h3>Library</h3>
+    <Card
+      className="content-library"
+      data-testid="content-library"
+      style={{ display: 'grid', gap: 'var(--s-3)' }}
+    >
+      <div
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: 'var(--s-2)',
+        }}
+      >
+        <FolderOpen size={15} aria-hidden style={{ color: 'var(--flow)' }} />
+        <h3 style={{ fontSize: 'var(--fs-md)', fontWeight: 600, margin: 0 }}>
+          Library
+        </h3>
+      </div>
       {state.status === 'loading' && (
-        <p data-testid="library-loading">Loading library…</p>
+        <p data-testid="library-loading" className="lab">
+          Loading library…
+        </p>
       )}
       {state.status === 'error' && (
-        <p data-testid="library-error" role="alert">
+        <p
+          data-testid="library-error"
+          role="alert"
+          style={{ color: 'var(--signal-ink)', margin: 0 }}
+        >
           Could not load library: {state.message}
         </p>
       )}
       {state.status === 'ready' &&
         (state.assets.length === 0 ? (
-          <p data-testid="library-empty">No kept assets yet.</p>
+          <p
+            data-testid="library-empty"
+            style={{ fontSize: 'var(--fs-sm)', color: 'var(--muted)', margin: 0 }}
+          >
+            No kept assets yet.
+          </p>
         ) : (
-          <ul className="library-list">
+          <ul
+            className="library-list"
+            style={{
+              listStyle: 'none',
+              margin: 0,
+              padding: 0,
+              display: 'grid',
+              gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))',
+              gap: 'var(--s-2)',
+            }}
+          >
             {state.assets.map((asset) => (
               <li
                 key={asset.id}
                 className="library-asset"
                 data-testid={`library-asset-${asset.id}`}
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 'var(--s-2)',
+                  padding: '8px 10px',
+                  borderRadius: 'var(--r-sm)',
+                  background: 'var(--surface-2)',
+                  border: '1px solid var(--line)',
+                }}
               >
-                <span className="library-asset-title">{asset.title}</span>
-                <span className="library-asset-type">{asset.asset_type}</span>
+                <FileText
+                  size={14}
+                  aria-hidden
+                  style={{ color: 'var(--muted)', flexShrink: 0 }}
+                />
+                <span
+                  className="library-asset-title"
+                  style={{ flex: 1, fontSize: 'var(--fs-sm)', fontWeight: 600 }}
+                >
+                  {asset.title}
+                </span>
+                <Chip tone="neutral">{asset.asset_type}</Chip>
               </li>
             ))}
           </ul>
         ))}
-    </div>
+    </Card>
   );
 }
