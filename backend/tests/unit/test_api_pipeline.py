@@ -15,10 +15,11 @@ from __future__ import annotations
 
 from collections import Counter
 
+from fastapi.testclient import TestClient
+
 from app.data.repository import DEFAULT_FAMILY_COUNT, DEFAULT_SEED
 from app.data.synthetic import generate
 from app.main import app
-from fastapi.testclient import TestClient
 
 client = TestClient(app)
 
