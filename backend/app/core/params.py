@@ -19,7 +19,7 @@ from pathlib import Path
 from typing import Any
 
 import yaml
-from pydantic import BaseModel, ConfigDict, field_validator
+from pydantic import BaseModel, ConfigDict, field_validator, model_validator
 
 # Default location of the params file, relative to the repo root, when neither
 # an explicit path nor the PARAMS_PATH env var is supplied.
@@ -168,6 +168,91 @@ class BrandMemory(_StrictModel):
     weight_step: float
 
 
+class CreatorScoringFit(_StrictModel):
+    """FR-3.8 creator-discovery fit sub-weights (CONTENT_SPEC §8.1).
+
+    Each weight multiplies a [0,1] sub-factor; together they form the fit
+    score. They MUST partition to 1.0 so the consumer can trust the fit score
+    stays in [0,1] — a drifted set fails to load (INV-11, §4.1).
+    """
+
+    topic_match_weight: float
+    audience_match_weight: float
+    brand_alignment_weight: float
+
+    @model_validator(mode="after")
+    def _weights_sum_to_one(self) -> CreatorScoringFit:
+        total = self.topic_match_weight + self.audience_match_weight + self.brand_alignment_weight
+        if abs(total - 1.0) > 1e-9:
+            raise ValueError(f"creator_scoring.fit weights must sum to 1.0, got {total!r}")
+        return self
+
+
+class CreatorScoringAuthenticity(_StrictModel):
+    """FR-3.8 creator-discovery authenticity sub-weights (CONTENT_SPEC §8.1).
+
+    Sub-weights over [0,1] sub-factors; MUST sum to 1.0. The consumer applies
+    `spam_signal_weight` as a penalty (higher spam signal LOWERS authenticity).
+    """
+
+    follower_authenticity_weight: float
+    engagement_consistency_weight: float
+    spam_signal_weight: float
+
+    @model_validator(mode="after")
+    def _weights_sum_to_one(self) -> CreatorScoringAuthenticity:
+        total = (
+            self.follower_authenticity_weight
+            + self.engagement_consistency_weight
+            + self.spam_signal_weight
+        )
+        if abs(total - 1.0) > 1e-9:
+            raise ValueError(f"creator_scoring.authenticity weights must sum to 1.0, got {total!r}")
+        return self
+
+
+class CreatorScoring(_StrictModel):
+    """FR-3.8 creator-discovery fit + authenticity + surface threshold."""
+
+    fit: CreatorScoringFit
+    authenticity: CreatorScoringAuthenticity
+    # Minimum fit score for a creator to surface in the discovery list.
+    surface_threshold: float
+
+
+class KpiLever(_StrictModel):
+    """FR-3.11 per-channel KPI lever: baseline (current) + target.
+
+    `lever delta = metric - baseline`; the consumer rolls these up vs target.
+    """
+
+    baseline: float
+    target: float
+
+
+class Kpi(_StrictModel):
+    """FR-3.11 per-channel KPI rollup vs baseline/target."""
+
+    # Channel-name keyed (keys are the `Channel` tokens).
+    levers: dict[str, KpiLever]
+
+
+class Scheduler(_StrictModel):
+    """FR-3.6 / OUT-2 content scheduler — dispatch is SIMULATED in v1."""
+
+    # Never 'live' in v1 (INV-9, OUT-2): the field is typed shut to simulated.
+    dispatch_mode: str
+
+    @field_validator("dispatch_mode")
+    @classmethod
+    def _dispatch_is_simulated(cls, value: str) -> str:
+        if value != "simulated":
+            raise ValueError(
+                f"scheduler.dispatch_mode must be 'simulated' in v1, got {value!r} (INV-9, OUT-2)"
+            )
+        return value
+
+
 class Params(_StrictModel):
     """Typed view of the whole params file — one field per §8 top-level block."""
 
@@ -178,6 +263,9 @@ class Params(_StrictModel):
     latency_budget_ms: LatencyBudgetMs
     geo: Geo
     brand_memory: BrandMemory
+    creator_scoring: CreatorScoring
+    kpi: Kpi
+    scheduler: Scheduler
 
 
 def _resolve_path(path: Path | None) -> Path:

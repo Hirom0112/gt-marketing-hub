@@ -49,3 +49,28 @@ geo:                        # FR-3.7 / RESEARCH.md Q5
 
 brand_memory:               # FR-3.2 / CONTENT_SPEC §8.3.2 — the keep/discard learning loop
   weight_step: 1.0                  # affirm (+) / discard (-) conditioning weight delta (INV-11)
+
+creator_scoring:            # FR-3.8 / CONTENT_SPEC §8.1 — creator-discovery fit + authenticity
+  fit:                      # sub-weights over [0,1] sub-factors; MUST sum to 1.0
+    topic_match_weight: 0.5
+    audience_match_weight: 0.3
+    brand_alignment_weight: 0.2
+  authenticity:             # sub-weights over [0,1] sub-factors; MUST sum to 1.0
+    follower_authenticity_weight: 0.5
+    engagement_consistency_weight: 0.3
+    spam_signal_weight: 0.2           # higher spam signal LOWERS authenticity (consumer applies as penalty)
+  surface_threshold: 0.6            # min fit score for a creator to surface in the discovery list
+
+kpi:                        # FR-3.11 — per-channel KPI rollup vs baseline/target
+  levers:                   # per-channel baseline (current) + target; lever delta = metric - baseline
+    instagram: { baseline: 0.0, target: 0.05 }
+    tiktok:    { baseline: 0.0, target: 0.05 }
+    x:         { baseline: 0.0, target: 0.04 }
+    linkedin:  { baseline: 0.0, target: 0.03 }
+    email:     { baseline: 0.0, target: 0.10 }
+    blog:      { baseline: 0.0, target: 0.06 }
+    landing_page: { baseline: 0.0, target: 0.08 }
+    geo:       { baseline: 0.0, target: 0.02 }
+
+scheduler:                  # FR-3.6 / OUT-2 — dispatch is SIMULATED in v1
+  dispatch_mode: simulated          # never 'live' in v1 (INV-9, OUT-2)
