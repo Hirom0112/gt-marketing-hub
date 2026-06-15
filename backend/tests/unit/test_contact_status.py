@@ -19,9 +19,13 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
-from app.core.contact_status import ContactStatus, derive_contact_status
-
+from app.core.contact_status import (
+    ContactStatus,
+    contact_stall_reason,
+    derive_contact_status,
+)
 from app.core.params import Params, load_params
+from app.data.models import StallReason
 
 # The committed example file is the authoritative params source for these tests.
 EXAMPLE_PARAMS = Path(__file__).resolve().parents[3] / "params" / "params.example.yaml"
@@ -136,3 +140,28 @@ def test_threshold_read_from_params_not_hardcoded() -> None:
         params=drifted,
     )
     assert status is ContactStatus.OVERDUE
+
+
+def test_overdue_maps_to_no_response_stall_reason() -> None:
+    """An OVERDUE (uncontacted, aged-out) family surfaces `no_response` (S9 W1).
+
+    Wires the previously-unwired `StallReason.NO_RESPONSE`: an uncontacted family
+    aged past `overdue_days` is OVERDUE, and that contact status maps to the
+    `no_response` stall label — *we let the lead sit, no reply*.
+    """
+    params = _params()
+    overdue = derive_contact_status(
+        created_at=_created(4),
+        last_contact_at=None,
+        now=NOW,
+        funded=False,
+        params=params,
+    )
+    assert overdue is ContactStatus.OVERDUE
+    assert contact_stall_reason(overdue) is StallReason.NO_RESPONSE
+
+
+def test_non_overdue_statuses_have_no_contact_stall_reason() -> None:
+    """FRESH / FOLLOWED_UP / CLOSED map to no contact-stall reason (None)."""
+    for status in (ContactStatus.FRESH, ContactStatus.FOLLOWED_UP, ContactStatus.CLOSED):
+        assert contact_stall_reason(status) is None
