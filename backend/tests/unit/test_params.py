@@ -11,7 +11,11 @@ not created): they pass the committed `params/params.example.yaml` explicitly.
 
 from __future__ import annotations
 
+import textwrap
 from pathlib import Path
+
+import pytest
+from pydantic import ValidationError
 
 from app.core.params import load_params
 
@@ -27,3 +31,119 @@ def test_loads_work_queue_and_funding_and_thresholds() -> None:
     assert params.funding.award_amounts.tefa_standard == 10474
     assert params.funding.installment_split == [0.25, 0.25, 0.50]
     assert params.eval_thresholds.message_safety_grounding.min_grounding == 0.95
+
+
+def test_missing_required_key_raises(tmp_path: Path) -> None:
+    """A params doc missing a required key fails loudly — drift fails the build.
+
+    `funding.award_amounts` drops `tefa_standard`; strict validation must raise
+    a clear, typed `ValidationError` naming the offending field, never silently
+    default it (CLAUDE.md §4.1, INV-11).
+    """
+    broken = textwrap.dedent(
+        """\
+        work_queue:
+          w_recoverability: 0.6
+          w_value: 0.4
+          recoverability:
+            stall_recency_weight: 0.5
+            stage_proximity_weight: 0.3
+            responsiveness_weight: 0.2
+          value:
+            tuition_annual_default: 10400
+            funded_multiplier: 1.0
+          stall_window_days: 14
+        funding:
+          award_amounts:
+            tefa_disability: 30000
+            tefa_homeschool: 2000
+          installment_split: [0.25, 0.25, 0.50]
+          tuition_unlock_state: first_installment_received
+        eval_thresholds:
+          nudge_trigger:
+            min_precision: 0.85
+            min_recall: 0.70
+          doc_extraction:
+            min_accuracy: 0.90
+          message_safety_grounding:
+            min_grounding: 0.95
+            max_unverifiable_claims: 0
+            require_coppa_safe: true
+          geo_tracking:
+            min_samples_per_prompt: 5
+            report_variance: true
+        cost_caps:
+          anthropic_per_run_usd: 5.00
+          media_gen_per_run_usd: 0.00
+        latency_budget_ms:
+          ai_proposal: 8000
+        geo:
+          prompt_set_size: 30
+          cadence: weekly
+          baseline_coverage: 0.0
+        """
+    )
+    broken_path = tmp_path / "params.yaml"
+    broken_path.write_text(broken, encoding="utf-8")
+
+    with pytest.raises(ValidationError) as excinfo:
+        load_params(broken_path)
+    assert "tefa_standard" in str(excinfo.value)
+
+
+def test_wrong_type_raises(tmp_path: Path) -> None:
+    """A value of the wrong type fails validation too (drift fails the build).
+
+    `w_recoverability` is set to a non-numeric string; strict typing must raise
+    a clear, typed `ValidationError` naming the field.
+    """
+    broken = textwrap.dedent(
+        """\
+        work_queue:
+          w_recoverability: not_a_number
+          w_value: 0.4
+          recoverability:
+            stall_recency_weight: 0.5
+            stage_proximity_weight: 0.3
+            responsiveness_weight: 0.2
+          value:
+            tuition_annual_default: 10400
+            funded_multiplier: 1.0
+          stall_window_days: 14
+        funding:
+          award_amounts:
+            tefa_standard: 10474
+            tefa_disability: 30000
+            tefa_homeschool: 2000
+          installment_split: [0.25, 0.25, 0.50]
+          tuition_unlock_state: first_installment_received
+        eval_thresholds:
+          nudge_trigger:
+            min_precision: 0.85
+            min_recall: 0.70
+          doc_extraction:
+            min_accuracy: 0.90
+          message_safety_grounding:
+            min_grounding: 0.95
+            max_unverifiable_claims: 0
+            require_coppa_safe: true
+          geo_tracking:
+            min_samples_per_prompt: 5
+            report_variance: true
+        cost_caps:
+          anthropic_per_run_usd: 5.00
+          media_gen_per_run_usd: 0.00
+        latency_budget_ms:
+          ai_proposal: 8000
+        geo:
+          prompt_set_size: 30
+          cadence: weekly
+          baseline_coverage: 0.0
+        """
+    )
+    broken_path = tmp_path / "params.yaml"
+    broken_path.write_text(broken, encoding="utf-8")
+
+    with pytest.raises(ValidationError) as excinfo:
+        load_params(broken_path)
+    assert "w_recoverability" in str(excinfo.value)
