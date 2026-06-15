@@ -232,6 +232,21 @@ def _timestamp(rng: random.Random, max_days_ago: int) -> datetime:
     return _EPOCH - timedelta(days=rng.randint(0, max_days_ago), minutes=rng.randint(0, 1439))
 
 
+def _synthetic_utm(rng: random.Random, attribution_source: str) -> dict[str, object]:
+    """A synthetic utm/click-id blob (FR-1.4) — opaque IDs, no PII."""
+    return {
+        "utm_source": attribution_source,
+        "utm_medium": rng.choice(("cpc", "email", "social", "organic")),
+        "utm_campaign": rng.choice(_UTM_CAMPAIGNS),
+        "click_id": f"clk_{rng.getrandbits(32):08x}",
+    }
+
+
+def _seam_status(rng: random.Random) -> SeamStatus:
+    """A simulated CRM seam status (§4.7) — mostly synced, a conflict tail."""
+    return rng.choices(list(SeamStatus), weights=[0.6, 0.3, 0.1], k=1)[0]
+
+
 def _build_family(
     rng: random.Random,
 ) -> tuple[FamilyRecord, LeadsNew, AppForm, EnrollmentForms, CommunityProfile]:
@@ -252,12 +267,7 @@ def _build_family(
     email = _synthetic_email(rng, surname)
     created = _timestamp(rng, max_days_ago=120)
 
-    utm: dict[str, object] = {
-        "utm_source": attribution_source,
-        "utm_medium": rng.choice(("cpc", "email", "social", "organic")),
-        "utm_campaign": rng.choice(_UTM_CAMPAIGNS),
-        "click_id": f"clk_{rng.getrandbits(32):08x}",
-    }
+    utm = _synthetic_utm(rng, attribution_source)
 
     # ~38% of families are stalled at their current stage — signal for the queue.
     is_stalled = rng.random() < 0.38
@@ -282,7 +292,7 @@ def _build_family(
         funding_state=funding_state,
         attribution_source=attribution_source,
         attribution_utm=utm,
-        crm_seam_status=rng.choices(list(SeamStatus), weights=[0.6, 0.3, 0.1], k=1)[0],
+        crm_seam_status=_seam_status(rng),
         work_queue_score=round(rng.uniform(0.0, 1.0), 4),
         created_at=created,
         updated_at=created + timedelta(days=rng.randint(0, 30)),
