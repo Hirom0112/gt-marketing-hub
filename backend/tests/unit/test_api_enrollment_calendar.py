@@ -165,9 +165,7 @@ def _most_recent_stall_month() -> str:
     log = InMemoryObservabilityLog()
     params = _params()
     now = datetime.now(UTC)
-    latest = max(
-        _stall_date(j, log=log, now=now, params=params) for j in repo.list_joined()
-    )
+    latest = max(_stall_date(j, log=log, now=now, params=params) for j in repo.list_joined())
     return f"{latest.year:04d}-{latest.month:02d}"
 
 
