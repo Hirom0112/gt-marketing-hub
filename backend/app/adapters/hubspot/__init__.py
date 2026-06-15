@@ -11,5 +11,18 @@ from app.adapters.hubspot.crm_adapter import (
     SimulatedCRMAdapter,
     SyncResult,
 )
+from app.adapters.hubspot.stage_map import (
+    StageMappingError,
+    cockpit_stage_to_hubspot_id,
+    hubspot_id_to_cockpit_stage,
+)
 
-__all__ = ["CRMAdapter", "SendResult", "SimulatedCRMAdapter", "SyncResult"]
+__all__ = [
+    "CRMAdapter",
+    "SendResult",
+    "SimulatedCRMAdapter",
+    "StageMappingError",
+    "SyncResult",
+    "cockpit_stage_to_hubspot_id",
+    "hubspot_id_to_cockpit_stage",
+]
