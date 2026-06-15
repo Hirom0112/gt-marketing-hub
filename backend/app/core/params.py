@@ -156,6 +156,18 @@ class Geo(_StrictModel):
     baseline_coverage: float
 
 
+class BrandMemory(_StrictModel):
+    """FR-3.2 brand-memory conditioning loop tunables (CONTENT_SPEC §8.3.2).
+
+    `weight_step` is the affirm/discard weight delta — keeping a candidate adds
+    it to the conditioning weight, discarding subtracts it. It is the canonical
+    home for the value the brand store currently defaults in code
+    (`SqliteBrandMemoryStore`'s `_DEFAULT_WEIGHT_STEP`), closing that INV-11 gap.
+    """
+
+    weight_step: float
+
+
 class Params(_StrictModel):
     """Typed view of the whole params file — one field per §8 top-level block."""
 
@@ -165,6 +177,7 @@ class Params(_StrictModel):
     cost_caps: CostCaps
     latency_budget_ms: LatencyBudgetMs
     geo: Geo
+    brand_memory: BrandMemory
 
 
 def _resolve_path(path: Path | None) -> Path:

@@ -46,3 +46,6 @@ geo:                        # FR-3.7 / RESEARCH.md Q5
   prompt_set_size: 30
   cadence: weekly
   baseline_coverage: 0.0            # the 0% baseline GT starts from
+
+brand_memory:               # FR-3.2 / CONTENT_SPEC §8.3.2 — the keep/discard learning loop
+  weight_step: 1.0                  # affirm (+) / discard (-) conditioning weight delta (INV-11)

@@ -34,6 +34,7 @@ from app.ai.schemas.brand import BrandMemoryKind, BrandMemorySignal
 from app.ai.schemas.content import (
     AudienceTag,
     Channel,
+    ContentCandidate,
     ContentFormat,
     Decision,
     GeneratedBy,
@@ -41,7 +42,6 @@ from app.ai.schemas.content import (
     LifecycleStage,
     Provenance,
 )
-from app.ai.schemas.content import ContentCandidate
 from app.core.params import load_params
 from app.data.synthetic import generate_brand_memory
 
@@ -144,9 +144,7 @@ def test_keep_affirms_existing_exemplar_using_weight_step(tmp_path: Path) -> Non
     store = _seed_store(tmp_path)
     params = load_params(EXAMPLE_PARAMS)
 
-    existing = next(
-        i for i in store.list_active() if i.kind is BrandMemoryKind.EXEMPLAR
-    )
+    existing = next(i for i in store.list_active() if i.kind is BrandMemoryKind.EXEMPLAR)
     candidate = _candidate(copy_text=existing.content, channel=Channel.INSTAGRAM)
 
     item = apply_keep(store, candidate, params)
