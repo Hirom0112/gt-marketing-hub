@@ -206,6 +206,10 @@ figure {
 
 .operator-find {
   display: grid;
+  /* Constrain the single implicit column to the track (minmax(0,1fr)) so the
+     calendar shrinks to fit instead of sizing to its max-content and bleeding
+     under the work-panel — the grid-blowout fix. */
+  grid-template-columns: minmax(0, 1fr);
   gap: var(--s-3);
   min-width: 0;
 }

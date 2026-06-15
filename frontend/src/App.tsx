@@ -81,7 +81,7 @@ export default function App(): JSX.Element {
 
       <main
         style={{
-          maxWidth: 1200,
+          maxWidth: 1360,
           margin: '0 auto',
           padding: '20px 20px 64px',
         }}
