@@ -124,6 +124,25 @@ class DecisionRecord(BaseModel):
     created_at: datetime
 
 
+class DismissRecord(BaseModel):
+    """A recovery-dismiss event — the ONE new write the S12 state machine adds (A-19).
+
+    Dismiss is the only MANUAL removal of a family from the active recovery board
+    (recovered is DETECTED, never a button). It is family-keyed (not
+    proposal-keyed) and carries a REQUIRED ``reason`` so the audit always records
+    *why* a family was set aside (INV-2: still a logged event on the spine, never a
+    silent state mutation). Reversible: a later re-stall (a new ``stall_date``)
+    supersedes it (see :meth:`ObservabilityLog.is_dismissed`).
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    family_id: UUID
+    human: str
+    reason: str = Field(min_length=1)
+    created_at: datetime
+
+
 @dataclass(frozen=True, slots=True)
 class AuditView:
     """The joined audit chain for one proposal (NFR-6 reconstruction).
@@ -215,6 +234,37 @@ class ObservabilityLog(ABC):
         """Every logged proposal, in append order (the audit index)."""
         raise NotImplementedError
 
+    @abstractmethod
+    def log_dismiss(
+        self,
+        *,
+        family_id: UUID,
+        human: str,
+        reason: str,
+        created_at: datetime | None = None,
+    ) -> DismissRecord:
+        """Append a recovery-dismiss event for a family (A-19). Append-only.
+
+        Raises ``ValueError`` if ``reason`` is blank — a dismiss must say why.
+        """
+        raise NotImplementedError
+
+    @abstractmethod
+    def list_dismissals(self) -> list[DismissRecord]:
+        """Every logged dismiss event, in append order (the dismiss audit index)."""
+        raise NotImplementedError
+
+    @abstractmethod
+    def is_dismissed(self, family_id: UUID, *, restalled_after: datetime | None = None) -> bool:
+        """Whether the family's latest dismiss still holds (A-19).
+
+        True when a dismiss event exists for the family AND no later re-stall
+        supersedes it. ``restalled_after`` is the family's current ``stall_date``
+        (the API layer's derived re-stall instant): if it is strictly later than
+        the latest dismiss, the family has re-stalled and is active again ⇒ False.
+        """
+        raise NotImplementedError
+
 
 class InMemoryObservabilityLog(ObservabilityLog):
     """In-memory append-only audit log (v1; ASSUMPTIONS A-3).
@@ -231,6 +281,8 @@ class InMemoryObservabilityLog(ObservabilityLog):
         # Append-only per-proposal histories (edit → re-eval is just more appends).
         self._evals: dict[UUID, list[EvalRecord]] = defaultdict(list)
         self._decisions: dict[UUID, list[DecisionRecord]] = defaultdict(list)
+        # Append-only family-keyed dismiss events (A-19) — the one new write.
+        self._dismissals: list[DismissRecord] = []
 
     def log_proposal(
         self,
@@ -314,6 +366,44 @@ class InMemoryObservabilityLog(ObservabilityLog):
 
     def list_proposals(self) -> list[ProposalRecord]:
         return list(self._proposals.values())
+
+    def log_dismiss(
+        self,
+        *,
+        family_id: UUID,
+        human: str,
+        reason: str,
+        created_at: datetime | None = None,
+    ) -> DismissRecord:
+        if not reason.strip():
+            # A dismiss must record WHY (A-19); a blank reason is a programming
+            # error, not a silent no-reason removal.
+            raise ValueError("dismiss requires a non-blank reason (A-19)")
+        record = DismissRecord(
+            family_id=family_id,
+            human=human,
+            reason=reason,
+            created_at=created_at if created_at is not None else _now(),
+        )
+        self._dismissals.append(record)
+        return record
+
+    def list_dismissals(self) -> list[DismissRecord]:
+        return list(self._dismissals)
+
+    def is_dismissed(self, family_id: UUID, *, restalled_after: datetime | None = None) -> bool:
+        latest: datetime | None = None
+        for record in self._dismissals:
+            if record.family_id != family_id:
+                continue
+            if latest is None or record.created_at > latest:
+                latest = record.created_at
+        if latest is None:
+            return False
+        # A re-stall strictly after the latest dismiss supersedes it (A-19).
+        if restalled_after is not None and restalled_after > latest:
+            return False
+        return True
 
     def _require_proposal(self, proposal_id: UUID) -> None:
         """Enforce ARCH §10 causality: no eval/decision before the proposal."""

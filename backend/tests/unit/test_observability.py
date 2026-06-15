@@ -29,6 +29,7 @@ import pytest
 from app.observability.log_store import (
     DecisionAction,
     DecisionRecord,
+    DismissRecord,
     EvalRecord,
     InMemoryObservabilityLog,
     ProposalRecord,
@@ -219,3 +220,61 @@ def test_blocked_proposal_is_still_logged() -> None:
     assert audit.evals[0].passed is False
     # Blocked ⇒ no decision yet, but the proposal + failing eval are auditable.
     assert audit.decisions == []
+
+
+# ---------------------------------------------------------------------------
+# S12 W1 — dismiss event (the one new write on the spine; A-19).
+# ---------------------------------------------------------------------------
+
+
+def test_dismiss_event_recorded_and_queryable() -> None:
+    """A dismiss event carries a required reason and is queryable as the latest state.
+
+    Dismiss is the ONLY manual recovery removal (A-19): it appends a
+    :class:`DismissRecord` (reason required) to the append-only spine and
+    ``is_dismissed`` returns True for that family thereafter.
+    """
+    log = InMemoryObservabilityLog()
+    family_id = uuid4()
+
+    # No dismiss yet ⇒ not dismissed.
+    assert log.is_dismissed(family_id) is False
+
+    record = log.log_dismiss(
+        family_id=family_id,
+        human="operator@example.invalid",
+        reason="enrolled elsewhere",
+        created_at=_T0,
+    )
+    assert isinstance(record, DismissRecord)
+    assert record.family_id == family_id
+    assert record.reason == "enrolled elsewhere"
+    assert record.created_at == _T0
+
+    # Now dismissed, and the event is listed.
+    assert log.is_dismissed(family_id) is True
+    assert family_id in {d.family_id for d in log.list_dismissals()}
+
+
+def test_dismiss_requires_a_reason() -> None:
+    """A dismiss with an empty reason is rejected — the audit needs a why (A-19)."""
+    log = InMemoryObservabilityLog()
+    with pytest.raises(ValueError):
+        log.log_dismiss(family_id=uuid4(), human="op@example.invalid", reason="   ")
+
+
+def test_latest_dismiss_is_superseded_by_a_later_restall() -> None:
+    """A re-stall AFTER a dismiss supersedes it (the family is active again; A-19).
+
+    ``is_dismissed`` takes an optional ``restalled_after`` instant: if the family
+    re-stalled after the latest dismiss, the dismiss no longer holds.
+    """
+    log = InMemoryObservabilityLog()
+    family_id = uuid4()
+    log.log_dismiss(
+        family_id=family_id, human="op@example.invalid", reason="went cold", created_at=_T0
+    )
+    # A re-stall after the dismiss supersedes it.
+    assert log.is_dismissed(family_id, restalled_after=_T2) is False
+    # A re-stall BEFORE the dismiss does not.
+    assert log.is_dismissed(family_id, restalled_after=_T0) is True

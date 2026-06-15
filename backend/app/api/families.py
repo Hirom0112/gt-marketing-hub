@@ -25,15 +25,17 @@ from app.core.contact_log import last_contact_at
 from app.core.contact_status import ContactStatus, derive_contact_status
 from app.core.family_record import assemble_deal_view
 from app.core.params import Params
+from app.core.recovery_state import RecoveryState, derive_recovery_state
 from app.core.work_queue import (
     WorkQueueFamily,
-    rank_families,
+    freshness,
     recoverability,
+    recoverable_now,
     responsiveness_from_engagement,
     score_family,
     value,
 )
-from app.data.models import FamilyRecord, FundingState, SeamStatus, Stage
+from app.data.models import FamilyRecord, FundingState, SeamStatus, Stage, StallReason
 from app.data.repository import FamilyRepository, JoinedFamily
 from app.observability.log_store import ObservabilityLog
 
@@ -62,6 +64,7 @@ def _work_queue_family(joined: JoinedFamily, params: Params) -> WorkQueueFamily:
         family_id=joined.family.family_id,
         current_stage=joined.family.current_stage,
         stalled_since=joined.family.stalled_since,
+        created_at=joined.family.created_at,
         responsiveness=responsiveness_from_engagement(signals, params),
         funding_type=joined.family.funding_type,
     )
@@ -163,6 +166,63 @@ def _stall_date(
     return created_at + timedelta(days=params.enrollment.contact.overdue_days)
 
 
+# §5.1 stall_reason → the funnel stage the family was stuck at, the baseline for
+# the recovery "advanced past the stall stage" check (A-19). A stall reason maps
+# to exactly one stage (the deterministic §5.1 rule table); a family with no
+# stall_reason falls back to its current stage (so "advanced" reads False — it has
+# not moved off where it is). Kept here (the composition root), not in pure core.
+_STALL_REASON_STAGE: dict[StallReason, Stage] = {
+    StallReason.INFO_SESSION_NO_SHOW: Stage.INTEREST,
+    StallReason.NO_RESPONSE: Stage.INTEREST,
+    StallReason.APP_INCOMPLETE: Stage.APPLY,
+    StallReason.FORMS_PARTIAL: Stage.ENROLL,
+    StallReason.FUNDING_PENDING: Stage.ENROLL,
+}
+
+
+def _recovery_state_for(
+    joined: JoinedFamily,
+    *,
+    log: ObservabilityLog,
+    now: datetime,
+    params: Params,
+) -> RecoveryState:
+    """Compose a family's derived :class:`RecoveryState` at the API layer (A-19).
+
+    Resolves the log-derived facts the pure :func:`derive_recovery_state` must NOT
+    read itself (CLAUDE §3, INV-2) — ``last_contact_at`` (A-14) and ``dismissed``
+    (the S12 dismiss event, netted against a superseding re-stall via the family's
+    derived ``stall_date``) — plus the ``stall_stage`` baseline mapped from the
+    spine's ``stall_reason``, then delegates to the pure deriver. The same
+    composition-root rationale as :func:`_recency_for` / :func:`_stall_date`.
+
+    Args:
+        joined: The spine row joined to its source rows.
+        log: The NFR-6 audit spine — the dismiss + last-contact source.
+        now: The request's reference time, read once at the api layer.
+        params: Loaded params (§8).
+
+    Returns:
+        The family's :class:`RecoveryState`.
+    """
+    family = joined.family
+    contacted_at = last_contact_at(log, family.family_id)
+    stall_date = _stall_date(joined, log=log, now=now, params=params)
+    dismissed = log.is_dismissed(family.family_id, restalled_after=stall_date)
+    stall_stage = (
+        _STALL_REASON_STAGE[family.stall_reason]
+        if family.stall_reason is not None
+        else family.current_stage
+    )
+    return derive_recovery_state(
+        joined=joined,
+        last_contact_at=contacted_at,
+        dismissed=dismissed,
+        stall_stage=stall_stage,
+        params=params,
+    )
+
+
 @router.get("/pipeline", response_model=PipelineResponse)
 def get_pipeline(repository: RepositoryDep) -> PipelineResponse:
     """Per-stage pipeline counts + CRM-seam summary (FR-2.1, FR-2.6)."""
@@ -238,11 +298,15 @@ def get_family(
     # Recency composed at the api layer (NOT pure core): derive last_contact_at
     # from the audit log (A-14) and the color status against an api-layer `now`,
     # through the shared composer (also used by /enrollment/calendar + /work-queue).
-    contact_status, contacted_at = _recency_for(
-        joined, log=log, now=datetime.now(UTC), params=params
-    )
+    now = datetime.now(UTC)
+    contact_status, contacted_at = _recency_for(joined, log=log, now=now, params=params)
+    recovery_state = _recovery_state_for(joined, log=log, now=now, params=params)
     deal_view = assemble_deal_view(joined).model_copy(
-        update={"contact_status": contact_status, "last_contact_at": contacted_at}
+        update={
+            "contact_status": contact_status,
+            "last_contact_at": contacted_at,
+            "recovery_state": recovery_state,
+        }
     )
     return FamilyDetailResponse(
         family=joined.family,
@@ -258,16 +322,17 @@ def get_family(
 def get_work_queue(
     repository: RepositoryDep, params: ParamsDep, log: LogDep
 ) -> list[WorkQueueItem]:
-    """Ranked work queue, highest deterministic score first (FR-2.5; §6).
+    """Ranked work queue, highest recoverable_now first (FR-2.5; S12 W1; §6).
 
     Reads the cohort joined (for the aggregate responsiveness signal — A-5),
-    projects each family to the scorer's pure input, and delegates ordering to
-    :func:`app.core.work_queue.rank_families` — the router never re-implements
-    ranking. Each row carries the score plus its ``recoverability`` / ``value``
-    components so the UI can show why a family ranks where it does, plus the
-    api-composed recency pair (``contact_status`` + ``last_contact_at``) so the
-    board can color a family without N extra calls (S9 W3). The recency is
-    composed HERE via :func:`_recency_for` against a single ``now`` read once
+    projects each family to the scorer's pure input, and orders by the S12
+    ``recoverable_now`` key (``value × variance × score × freshness``) descending,
+    ties broken by ascending ``family_id`` so the order is total and stable. Each
+    row carries that key plus its ``freshness`` factor and the existing ``score`` /
+    ``recoverability`` / ``value`` components so the UI can show why a family ranks
+    where it does, the api-composed recency pair (``contact_status`` +
+    ``last_contact_at``, S9 W3), and the derived ``recovery_state`` (A-19). The
+    recency + recovery facts are composed HERE against a single ``now`` read once
     per request — never in the pure scorer (INV-2). No AI (INV-2).
     """
     now = datetime.now(UTC)
@@ -275,7 +340,11 @@ def get_work_queue(
         joined.family.family_id: joined for joined in repository.list_joined()
     }
     queue_families = [_work_queue_family(joined, params) for joined in joined_by_id.values()]
-    ranked = rank_families(queue_families, params)
+    # Order by recoverable_now desc; ascending family_id breaks ties stably (S12).
+    ranked = sorted(
+        queue_families,
+        key=lambda f: (-recoverable_now(f, params, now=now), f.family_id),
+    )
     rows: list[WorkQueueItem] = []
     for family in ranked:
         joined = joined_by_id[family.family_id]
@@ -285,11 +354,14 @@ def get_work_queue(
                 family_id=family.family_id,
                 display_name=joined.family.display_name,
                 current_stage=family.current_stage,
-                score=score_family(family, params),
-                recoverability=recoverability(family, params),
+                score=score_family(family, params, now=now),
+                recoverability=recoverability(family, params, now=now),
                 value=value(family, params),
+                recoverable_now=recoverable_now(family, params, now=now),
+                freshness=freshness(family, params, now=now),
                 contact_status=contact_status,
                 last_contact_at=contacted_at,
+                recovery_state=_recovery_state_for(joined, log=log, now=now, params=params),
             )
         )
     return rows
@@ -315,6 +387,18 @@ def get_enrollment_calendar(
             ),
         ),
     ] = None,
+    day: Annotated[
+        int | None,
+        Query(
+            ge=1,
+            le=31,
+            description=(
+                "Optional day-of-month (1-31) drill (S12 W1): when set, returns only "
+                "the resolved month's entries whose stall_date falls on that day — the "
+                "heat-calendar drill list. Omitted ⇒ the whole month (unchanged)."
+            ),
+        ),
+    ] = None,
 ) -> CalendarResponse:
     """Families whose ``stall_date`` falls in ``month``, for the Wave 4 month view (§6).
 
@@ -326,12 +410,15 @@ def get_enrollment_calendar(
     of the most-recent ``stall_date`` across all families (so the surface opens
     non-empty), falling back to the month of ``now`` if there are zero families.
     Only the in-month families are returned, sorted ascending by ``stall_date``; a
-    month with no stalls yields ``entries: []`` (never an error). Each entry keeps
-    ``apply_date`` for reference and carries the api-composed ``contact_status``
-    (now + audit log + params — the same recency composition as the deal view and
-    the work queue, INV-2 core purity) plus ``value``/``score`` from the pure
-    work-queue scorer. ``CalendarResponse.month`` echoes the **resolved** month.
-    No AI (INV-2).
+    month with no stalls yields ``entries: []`` (never an error). The optional
+    ``day`` param (S12 W1) narrows to a single day-of-month — the heat-calendar
+    drill list — within the resolved month (omitted ⇒ the whole month). Each entry
+    keeps ``apply_date`` for reference and carries the api-composed
+    ``contact_status`` (now + audit log + params — the same recency composition as
+    the deal view and the work queue, INV-2 core purity), the derived
+    ``recovery_state`` (A-19), and ``value``/``score``/``recoverable_now``/
+    ``freshness`` from the pure work-queue scorer. ``CalendarResponse.month``
+    echoes the **resolved** month. No AI (INV-2).
     """
     now = datetime.now(UTC)
 
@@ -355,7 +442,10 @@ def get_enrollment_calendar(
     in_month = [
         (stall_date, joined)
         for stall_date, joined in stalled
-        if stall_date.year == year and stall_date.month == mon
+        if stall_date.year == year
+        and stall_date.month == mon
+        # S12 W1 drill: when `day` is set, keep only that day-of-month.
+        and (day is None or stall_date.day == day)
     ]
     in_month.sort(key=lambda pair: pair[0])
 
@@ -369,6 +459,9 @@ def get_enrollment_calendar(
             contact_status=_recency_for(joined, log=log, now=now, params=params)[0],
             value=value(_work_queue_family(joined, params), params),
             score=score_family(_work_queue_family(joined, params), params, now=now),
+            recoverable_now=recoverable_now(_work_queue_family(joined, params), params, now=now),
+            freshness=freshness(_work_queue_family(joined, params), params, now=now),
+            recovery_state=_recovery_state_for(joined, log=log, now=now, params=params),
         )
         for stall_date, joined in in_month
     ]

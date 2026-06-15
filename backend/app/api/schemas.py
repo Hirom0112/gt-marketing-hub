@@ -19,6 +19,7 @@ from app.ai.schemas.enrollment_draft import DraftAction, EnrollmentDraftProposal
 from app.core.contact_status import ContactStatus
 from app.core.eval_gate import ValidationResult
 from app.core.family_record import DealView
+from app.core.recovery_state import RecoveryState
 from app.data.models import (
     AppForm,
     CommunityProfile,
@@ -84,12 +85,22 @@ class WorkQueueItem(BaseModel):
     score: float
     recoverability: float
     value: float
+    # S12 W1 — the recoverable-now ranking key (``value × variance × score ×
+    # freshness``) the queue is now ordered by, plus its ``freshness`` factor so
+    # the UI can show the time-decay component. Both from the pure work-queue
+    # scorer (INV-2); ``recoverable_now`` is a dollars-weighted magnitude, not [0,1].
+    recoverable_now: float
+    freshness: float
     # Contact-recency (S9 W3; A-14) — composed in the API layer (now + audit log
     # + params), NOT the pure scorer, so the board/queue can color a family
     # without N extra calls. ``contact_status`` is the recency color;
     # ``last_contact_at`` is the latest approved-outbound instant (None if never).
     contact_status: ContactStatus
     last_contact_at: datetime | None = None
+    # S12 W1 — the derived recovery state (A-19), composed in the API layer (it
+    # needs ``now`` + the audit log for the dismiss/contact facts), NOT the pure
+    # scorer. {stalled, working, recovered, dismissed}.
+    recovery_state: RecoveryState
 
 
 class CalendarEntry(BaseModel):
@@ -115,6 +126,12 @@ class CalendarEntry(BaseModel):
     contact_status: ContactStatus
     value: float
     score: float
+    # S12 W1 — the recoverable-now ranking key + its freshness factor (pure
+    # scorer), and the derived recovery_state (A-19, API-composed) so the heat
+    # calendar and its drill list can size/scope a chip without N extra calls.
+    recoverable_now: float
+    freshness: float
+    recovery_state: RecoveryState
 
 
 class CalendarResponse(BaseModel):

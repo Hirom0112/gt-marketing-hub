@@ -34,6 +34,7 @@ from app.api import deps
 from app.core.contact_log import last_contact_at
 from app.core.contact_status import ContactStatus, derive_contact_status
 from app.core.params import Params, load_params
+from app.core.recovery_state import RecoveryState
 from app.data.models import FamilyRecord, FundingState, SeamStatus, Stage
 from app.data.repository import (
     DEFAULT_FAMILY_COUNT,
@@ -204,11 +205,17 @@ def test_calendar_returns_in_month_entries_sorted() -> None:
             "contact_status",
             "value",
             "score",
+            "recoverable_now",
+            "freshness",
+            "recovery_state",
         }
         joined = by_id[UUID(entry["family_id"])]
         assert entry["display_name"] == joined.family.display_name
         assert entry["current_stage"] == joined.family.current_stage.value
         assert entry["contact_status"] in _VALID_STATUSES
+        assert entry["recoverable_now"] >= 0.0
+        assert 0.0 <= entry["freshness"] <= 1.0
+        assert entry["recovery_state"] in {s.value for s in RecoveryState}
 
 
 def test_calendar_empty_month_returns_empty_entries() -> None:
@@ -398,15 +405,77 @@ def test_work_queue_rows_carry_recency() -> None:
     items = resp.json()
     assert len(items) == DEFAULT_FAMILY_COUNT
 
-    # Existing contract: every row still carries identity + score components, and
-    # the list is still ordered by descending score.
-    scores = [item["score"] for item in items]
-    assert scores == sorted(scores, reverse=True)
+    # S12 W1: the queue is now ordered by descending recoverable_now (the score
+    # components are still carried for the UI, but ordering moved off raw score).
+    recoverables = [item["recoverable_now"] for item in items]
+    assert recoverables == sorted(recoverables, reverse=True)
 
+    _valid_states = {s.value for s in RecoveryState}
     for item in items:
         assert "contact_status" in item
         assert item["contact_status"] in _VALID_STATUSES
         assert "last_contact_at" in item  # present (may be None when uncontacted).
+        # S12 W1 fields present + well-typed.
+        assert item["recoverable_now"] >= 0.0
+        assert 0.0 <= item["freshness"] <= 1.0
+        assert item["recovery_state"] in _valid_states
+
+
+def test_calendar_day_drill_filters_to_one_day() -> None:
+    """`?day=` returns only the resolved month's entries on that day (S12 W1 drill).
+
+    The drill list is a strict subset of the full month, every returned entry
+    lands on the requested day-of-month, and a day with no stalls is empty.
+    """
+    month = _most_recent_stall_month()
+    full = client.get("/enrollment/calendar", params={"month": month})
+    assert full.status_code == 200
+    full_entries = full.json()["entries"]
+    assert len(full_entries) > 0
+
+    # Pick a populated day from the full month.
+    target_day = datetime.fromisoformat(full_entries[0]["stall_date"]).day
+    drill = client.get("/enrollment/calendar", params={"month": month, "day": target_day})
+    assert drill.status_code == 200
+    drill_body = drill.json()
+    assert drill_body["month"] == month  # the month echo is unchanged by the drill.
+    drill_entries = drill_body["entries"]
+    assert len(drill_entries) > 0
+    # Every drilled entry is on the requested day, and it is a subset of the month.
+    for entry in drill_entries:
+        assert datetime.fromisoformat(entry["stall_date"]).day == target_day
+    drill_ids = {e["family_id"] for e in drill_entries}
+    full_ids = {e["family_id"] for e in full_entries}
+    assert drill_ids <= full_ids
+    # The drill carries the S12 fields (same shape as the month list).
+    assert "recoverable_now" in drill_entries[0]
+    assert "recovery_state" in drill_entries[0]
+
+
+def test_calendar_day_drill_empty_day_is_empty() -> None:
+    """A day with no stalls returns `entries: []` (not an error)."""
+    month = "2024-01"  # no families stall here.
+    resp = client.get("/enrollment/calendar", params={"month": month, "day": 15})
+    assert resp.status_code == 200
+    assert resp.json()["entries"] == []
+
+
+def test_calendar_bad_day_is_422() -> None:
+    """An out-of-range `day` (0 or >31) is rejected with 422 (validation)."""
+    month = _most_recent_stall_month()
+    for bad in (0, 32, 99):
+        resp = client.get("/enrollment/calendar", params={"month": month, "day": bad})
+        assert resp.status_code == 422, bad
+
+
+def test_work_queue_ordered_by_recoverable_now() -> None:
+    """`GET /work-queue` is ordered by descending recoverable_now (S12 W1)."""
+    resp = client.get("/work-queue")
+    assert resp.status_code == 200
+    items = resp.json()
+    recoverables = [item["recoverable_now"] for item in items]
+    assert recoverables == sorted(recoverables, reverse=True)
+    assert all(r >= 0.0 for r in recoverables)
 
 
 def test_work_queue_recency_reflects_approved_contact() -> None:

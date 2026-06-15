@@ -43,5 +43,13 @@ def test_work_queue_params_loaded() -> None:
     assert work_queue.value.tuition_annual_default == 10400
     assert work_queue.value.funded_multiplier == 1.0
 
+    # S12 — per-family value-variance band (recoverable_now ranking spread only).
+    assert work_queue.value.variance_min == 0.8
+    assert work_queue.value.variance_max == 1.6
+
     # Stall window in days (§5.1) — older than this ⇒ flagged.
     assert work_queue.stall_window_days == 14
+
+    # S12 — recoverable_now freshness decay window + floor.
+    assert work_queue.freshness_window_days == 30
+    assert work_queue.freshness_floor == 0.15

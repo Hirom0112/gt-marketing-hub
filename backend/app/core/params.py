@@ -50,20 +50,47 @@ class Recoverability(_StrictModel):
 
 
 class WorkQueueValue(_StrictModel):
-    """work_queue.value baseline + funded weighting."""
+    """work_queue.value baseline + funded weighting + S12 per-family variance band.
+
+    ``variance_min``/``variance_max`` bound the deterministic per-family value
+    multiplier (S12; A-19 ranking spread): a stable hash of ``family_id`` maps
+    into ``[variance_min, variance_max]``. This affects ONLY the new
+    ``recoverable_now`` ranking path — the canonical ``value()``/``score_family``
+    (and the TEFA worked targets) are untouched. The band must be valid
+    (``0 < min <= max``) so the multiplier stays positive and ordered.
+    """
 
     tuition_annual_default: float
     funded_multiplier: float
+    variance_min: float
+    variance_max: float
+
+    @model_validator(mode="after")
+    def _variance_band_valid(self) -> WorkQueueValue:
+        if not (0.0 < self.variance_min <= self.variance_max):
+            raise ValueError(
+                "work_queue.value variance band must satisfy 0 < variance_min <= "
+                f"variance_max, got [{self.variance_min!r}, {self.variance_max!r}]"
+            )
+        return self
 
 
 class WorkQueue(_StrictModel):
-    """FR-2.5 work-queue scorer weights and sub-factors (§8)."""
+    """FR-2.5 work-queue scorer weights and sub-factors (§8).
+
+    ``freshness_window_days``/``freshness_floor`` (S12) drive the
+    ``recoverable_now`` freshness decay: freshness falls linearly from 1.0 at the
+    stall anchor to ``freshness_floor`` once ``freshness_window_days`` have
+    elapsed (never reaching 0, so a long-stalled family stays rankable).
+    """
 
     w_recoverability: float
     w_value: float
     recoverability: Recoverability
     value: WorkQueueValue
     stall_window_days: int
+    freshness_window_days: int
+    freshness_floor: float
 
 
 class ContactWindows(_StrictModel):

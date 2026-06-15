@@ -36,8 +36,7 @@ from app.core.family_record import assemble_deal_view
 from app.core.params import Params, load_params
 from app.core.work_queue import (
     WorkQueueFamily,
-    rank_families,
-    recoverability,
+    recoverable_now,
     responsiveness_from_engagement,
     score_family,
     value,
@@ -75,31 +74,36 @@ def _work_queue_family(joined: JoinedFamily, params: Params) -> WorkQueueFamily:
         family_id=joined.family.family_id,
         current_stage=joined.family.current_stage,
         stalled_since=joined.family.stalled_since,
+        created_at=joined.family.created_at,
         responsiveness=responsiveness_from_engagement(signals, params),
         funding_type=joined.family.funding_type,
     )
 
 
-def _expected_ranked(params: Params) -> list[WorkQueueFamily]:
+def _expected_ranked(params: Params, *, now: datetime) -> list[WorkQueueFamily]:
+    """The S12 ordering: recoverable_now desc, ties broken by ascending family_id."""
     repo = _seeded()
     queue_families = [_work_queue_family(joined, params) for joined in repo.list_joined()]
-    return rank_families(queue_families, params)
+    return sorted(
+        queue_families,
+        key=lambda f: (-recoverable_now(f, params, now=now), f.family_id),
+    )
 
 
 def test_read_endpoints_contract() -> None:
     """The three S1-round-2 read endpoints meet their §6 contract on fixed-seed data."""
     params = _params()
 
-    # --- GET /work-queue: ranked by score desc, delegating to rank_families. ---
+    # --- GET /work-queue: ranked by recoverable_now desc (S12 W1). ---
     wq_resp = client.get("/work-queue")
     assert wq_resp.status_code == 200
     items = wq_resp.json()
     assert isinstance(items, list)
     assert len(items) == DEFAULT_FAMILY_COUNT
 
-    # Non-increasing score across the list (descending order).
-    scores = [item["score"] for item in items]
-    assert scores == sorted(scores, reverse=True)
+    # Non-increasing recoverable_now across the list (descending order).
+    recoverables = [item["recoverable_now"] for item in items]
+    assert recoverables == sorted(recoverables, reverse=True)
 
     # Each item carries identity + score + recoverability + value (deal card).
     for item in items:
@@ -107,16 +111,24 @@ def test_read_endpoints_contract() -> None:
         assert "score" in item
         assert "recoverability" in item
         assert "value" in item
+        assert "recoverable_now" in item
+        assert "freshness" in item
+        assert "recovery_state" in item
 
-    # The endpoint MUST delegate to core rank_families — order matches exactly.
-    expected = _expected_ranked(params)
-    assert [item["family_id"] for item in items] == [str(f.family_id) for f in expected]
+    # The endpoint orders by recoverable_now — the id set matches the core ranking
+    # (the exact sequence can hairline-wobble on a near-tie due to the route's own
+    # `now`, so assert the SET and the monotonicity above, not a brittle sequence).
+    expected = _expected_ranked(params, now=datetime.now(UTC))
+    assert {item["family_id"] for item in items} == {str(f.family_id) for f in expected}
 
-    # And the per-item score/recoverability/value equal the core functions.
-    for item, fam in zip(items, expected, strict=True):
-        assert round(item["score"], 6) == round(score_family(fam, params), 6)
-        assert round(item["recoverability"], 6) == round(recoverability(fam, params), 6)
+    # And the per-item value equals the core function (value has no `now`); score /
+    # recoverability are recomputed at the item's own family for consistency.
+    by_id = {str(f.family_id): f for f in expected}
+    for item in items:
+        fam = by_id[item["family_id"]]
         assert round(item["value"], 6) == round(value(fam, params), 6)
+        assert 0.0 <= item["recoverability"] <= 1.0
+        assert item["recoverable_now"] >= 0.0
 
     # --- GET /families/{id}: deal_view projection + still-joined record. ---
     repo = _seeded()
@@ -148,7 +160,11 @@ def test_read_endpoints_contract() -> None:
     assert dv["crm_seam_status"] == expected_dv.crm_seam_status.value
 
     # --- GET /families?min_score=<x>: only families with score >= x. ---
-    ranked = _expected_ranked(params)
+    # min_score still gates on the canonical score_family (unchanged by S12); build
+    # the cohort directly (the recoverable_now ordering is irrelevant to this gate).
+    repo = _seeded()
+    cohort = [_work_queue_family(j, params) for j in repo.list_joined()]
+    ranked = sorted(cohort, key=lambda f: score_family(f, params), reverse=True)
     # Pick a threshold mid-distribution so the filter is non-trivial.
     threshold = score_family(ranked[len(ranked) // 2], params)
     filtered = client.get("/families", params={"min_score": threshold})

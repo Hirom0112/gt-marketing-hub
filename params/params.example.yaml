@@ -11,7 +11,11 @@ work_queue:                 # FR-2.5 — score = w_recoverability·recoverabilit
   value:
     tuition_annual_default: 10400   # GT Anywhere $/yr (PROJECT.md §2) — value baseline
     funded_multiplier: 1.0          # TEFA-funded vs self-pay value weighting
+    variance_min: 0.8               # S12 — per-family value-variance band (recoverable_now only)
+    variance_max: 1.6               # deterministic family-hash multiplier ∈ [min,max]; ranking spread
   stall_window_days: 14             # stalled_since older than this ⇒ flagged (§5.1)
+  freshness_window_days: 30         # S12 — recoverable_now freshness decays to floor over this window
+  freshness_floor: 0.15             # S12 — minimum freshness once past the window (never 0 ⇒ stays rankable)
 
 enrollment:                 # S9 — enrollment-depth deterministic core
   contact:                  # contact-recency color thresholds (S9 W1); age measured from created_at

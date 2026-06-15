@@ -21,6 +21,7 @@ persistence of `family_record.work_queue_score` is wired up in a later slice.
 
 from __future__ import annotations
 
+import hashlib
 from datetime import UTC, datetime, timedelta
 from uuid import UUID
 
@@ -54,6 +55,10 @@ class WorkQueueFamily(BaseModel):
     family_id: UUID
     current_stage: Stage
     stalled_since: datetime | None = None
+    # The spine creation instant — the freshness fallback anchor when a family
+    # carries no explicit ``stalled_since`` (S12). Optional so the existing
+    # scorer fixtures (which never set it) keep constructing unchanged.
+    created_at: datetime | None = None
     # A normalized engagement signal in [0,1] (aggregate only — P-4 / INV-6);
     # clamped defensively at scoring time.
     responsiveness: float = 0.0
@@ -200,6 +205,95 @@ def score_family(family: WorkQueueFamily, params: Params, *, now: datetime | Non
     recover_term = recoverability(family, params, now=now)
     value_term = value(family, params) / value_max(params)
     return work_queue.w_recoverability * recover_term + work_queue.w_value * value_term
+
+
+def freshness(family: WorkQueueFamily, params: Params, *, now: datetime | None = None) -> float:
+    """Freshness ∈ [floor,1] — how recently a family went quiet (S12; recoverable_now).
+
+    ``freshness = max(floor, min(1, 1 - elapsed_days / window))`` where
+    ``elapsed_days`` is days since the stall anchor (``stalled_since`` if present,
+    else ``created_at``), ``window = work_queue.freshness_window_days`` and
+    ``floor = work_queue.freshness_floor`` (both params — INV-11). A family at its
+    anchor scores 1.0; one a full window (or more) past it floors but never hits 0,
+    so a long-stalled family stays rankable. A family with neither anchor is
+    treated as fully fresh (1.0 — absence of evidence is not decay), mirroring the
+    stall-recency convention. Pure: ``now`` is injected (INV-2).
+
+    Args:
+        family: The queue-relevant family attributes.
+        params: Loaded params (§8); supplies the freshness window + floor.
+        now: Reference time for the decay; defaults to UTC now.
+
+    Returns:
+        The freshness factor in ``[floor, 1.0]``.
+    """
+    reference = _now_or(now)
+    anchor = family.stalled_since if family.stalled_since is not None else family.created_at
+    if anchor is None:
+        return 1.0
+    window_days = params.work_queue.freshness_window_days
+    floor = params.work_queue.freshness_floor
+    elapsed_days = (reference - anchor) / timedelta(days=1)
+    return max(floor, min(1.0, 1.0 - elapsed_days / window_days))
+
+
+def value_variance(family: WorkQueueFamily, params: Params) -> float:
+    """Deterministic per-family value multiplier ∈ [variance_min, variance_max] (S12).
+
+    Spreads the otherwise tier-constant :func:`value` so the ``recoverable_now``
+    ranking does not bucket every family of a funding tier at one number. The
+    multiplier is a stable function of ``family_id`` alone — a hash mapped into
+    the params band ``[variance_min, variance_max]`` — so it is reproducible
+    across runs and processes (a plain ``hash()`` is salted per-process and would
+    not be). Bounded by params (INV-11), it NEVER touches the canonical
+    :func:`value`/:func:`score_family` path (so the TEFA worked targets and the
+    existing work-queue fixtures stay green) — it is consumed only by
+    :func:`recoverable_now`.
+
+    Args:
+        family: The family whose stable variance multiplier is derived.
+        params: Loaded params (§8); supplies the ``[variance_min, variance_max]``
+            band.
+
+    Returns:
+        A deterministic multiplier in ``[variance_min, variance_max]``.
+    """
+    value_cfg = params.work_queue.value
+    lo, hi = value_cfg.variance_min, value_cfg.variance_max
+    # A stable, process-independent fraction in [0,1) from the family_id bytes.
+    digest = hashlib.sha256(family.family_id.bytes).digest()
+    fraction = int.from_bytes(digest[:8], "big") / float(1 << 64)
+    return lo + (hi - lo) * fraction
+
+
+def recoverable_now(
+    family: WorkQueueFamily, params: Params, *, now: datetime | None = None
+) -> float:
+    """The S12 recoverable-now ranking key — ``value × variance × score × freshness``.
+
+    Composes the queue's existing value/score with a per-family value variance
+    (:func:`value_variance`, for ranking spread) and time decay
+    (:func:`freshness`): a high-value, high-score, freshly-stalled family ranks
+    far above a low-value, stale one. Pure and params-driven (INV-11), ``now``
+    injected (INV-2). This is the new ordering key for ``/work-queue`` — the
+    canonical :func:`score_family` (and its TEFA worked targets) is left intact.
+
+    Args:
+        family: The queue-relevant family attributes.
+        params: Loaded params (§8).
+        now: Reference time for the freshness decay; defaults to UTC now.
+
+    Returns:
+        The recoverable-now score (a positive dollars-weighted magnitude, not
+        normalized to [0,1] — it is a ranking key, not a probability).
+    """
+    reference = _now_or(now)
+    return (
+        value(family, params)
+        * value_variance(family, params)
+        * score_family(family, params, now=reference)
+        * freshness(family, params, now=reference)
+    )
 
 
 def rank_families(

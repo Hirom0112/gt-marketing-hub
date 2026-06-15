@@ -25,8 +25,17 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from uuid import UUID
 
+import pytest
+
 from app.core.params import Params, load_params
-from app.core.work_queue import WorkQueueFamily, rank_families, score_family
+from app.core.work_queue import (
+    WorkQueueFamily,
+    freshness,
+    rank_families,
+    recoverable_now,
+    score_family,
+    value,
+)
 from app.data.models import FundingType, Stage
 
 # The committed example file is the authoritative params source for these tests.
@@ -285,3 +294,125 @@ def test_ranking_is_stable() -> None:
     tied = rank_families([tie_second, tie_first], params, now=NOW)
     assert score_family(tie_first, params, now=NOW) == score_family(tie_second, params, now=NOW)
     assert [f.family_id for f in tied] == [FID_A, FID_B]
+
+
+# ---------------------------------------------------------------------------
+# S12 W1 — freshness decay + recoverable_now ranking (A-19).
+# ---------------------------------------------------------------------------
+
+
+def test_freshness_decays_from_one_to_floor() -> None:
+    """`freshness` = max(floor, min(1, 1 - elapsed/window)) off the stall anchor.
+
+    Pinned at three points: at the stall anchor freshness is 1.0; at half the
+    window it is exactly 0.5; at and beyond a full window it floors. The window
+    and floor are read from params (INV-11), not hardcoded literals.
+    """
+    params = _params()
+    window = params.work_queue.freshness_window_days
+    floor = params.work_queue.freshness_floor
+
+    stalled = NOW - timedelta(days=0)
+    at_anchor = WorkQueueFamily(
+        family_id=FID_A,
+        current_stage=Stage.ENROLL,
+        stalled_since=stalled,
+        responsiveness=0.5,
+        funding_type=FundingType.SELF_PAY,
+    )
+    assert freshness(at_anchor, params, now=NOW) == 1.0
+
+    mid = at_anchor.model_copy(update={"stalled_since": NOW - timedelta(days=window / 2)})
+    assert freshness(mid, params, now=NOW) == 0.5
+
+    past = at_anchor.model_copy(update={"stalled_since": NOW - timedelta(days=window)})
+    assert freshness(past, params, now=NOW) == floor
+
+    way_past = at_anchor.model_copy(update={"stalled_since": NOW - timedelta(days=window * 3)})
+    assert freshness(way_past, params, now=NOW) == floor
+
+
+def test_freshness_uses_created_at_when_no_stall() -> None:
+    """With no `stalled_since`, freshness anchors on `created_at` (the fallback)."""
+    params = _params()
+    window = params.work_queue.freshness_window_days
+    family = WorkQueueFamily(
+        family_id=FID_B,
+        current_stage=Stage.APPLY,
+        stalled_since=None,
+        created_at=NOW - timedelta(days=window / 2),
+        responsiveness=0.5,
+        funding_type=FundingType.SELF_PAY,
+    )
+    assert freshness(family, params, now=NOW) == 0.5
+
+
+def test_recoverable_now_is_value_x_score_x_freshness() -> None:
+    """`recoverable_now` = value(variance) × score_family × freshness, all params-driven."""
+    params = _params()
+    family = _family_high()
+    expected = (
+        value(family, params)
+        * _value_variance(family, params)
+        * score_family(family, params, now=NOW)
+        * freshness(family, params, now=NOW)
+    )
+    assert recoverable_now(family, params, now=NOW) == pytest.approx(expected, rel=1e-9)
+
+
+def test_recoverable_now_orders_three_families() -> None:
+    """recoverable_now ranks the three fixture families high > mid > low.
+
+    The high family (near Tuition, fresh, responsive, funded) outranks the mid
+    (half-window stall, self-pay) which outranks the low (beyond-window stall,
+    Interest, unresponsive) — the freshness factor sharpens the spread.
+    """
+    params = _params()
+    high = recoverable_now(_family_high(), params, now=NOW)
+    mid = recoverable_now(_family_mid(), params, now=NOW)
+    low = recoverable_now(_family_low(), params, now=NOW)
+    assert high > mid > low
+
+
+def test_recoverable_now_is_params_sensitive() -> None:
+    """Shrinking the freshness window lowers recoverable_now for a stalled family.
+
+    A param drift must move the number — proving recoverable_now reads the window
+    from params, never a hardcoded constant (INV-11).
+    """
+    params = _params()
+    family = _family_mid()  # stalled half a window ago.
+    base = recoverable_now(family, params, now=NOW)
+
+    tighter = params.model_copy(
+        update={
+            "work_queue": params.work_queue.model_copy(
+                update={"freshness_window_days": params.work_queue.freshness_window_days // 3}
+            )
+        }
+    )
+    assert recoverable_now(family, tighter, now=NOW) < base
+
+
+def test_value_variance_is_deterministic_and_bounded() -> None:
+    """The per-family value multiplier is deterministic and within the params band."""
+    params = _params()
+    lo = params.work_queue.value.variance_min
+    hi = params.work_queue.value.variance_max
+    for family in (_family_high(), _family_mid(), _family_low()):
+        m1 = _value_variance(family, params)
+        m2 = _value_variance(family, params)
+        assert m1 == m2  # deterministic for the same family_id.
+        assert lo <= m1 <= hi
+    # Distinct families generally spread (not all identical) — the whole point.
+    multipliers = {
+        _value_variance(f, params) for f in (_family_high(), _family_mid(), _family_low())
+    }
+    assert len(multipliers) > 1
+
+
+def _value_variance(family: WorkQueueFamily, params: Params) -> float:
+    """Reference: the production value_variance must reproduce this exactly."""
+    from app.core.work_queue import value_variance
+
+    return value_variance(family, params)

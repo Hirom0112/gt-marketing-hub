@@ -24,6 +24,7 @@ from uuid import UUID
 from pydantic import BaseModel, ConfigDict
 
 from app.core.contact_status import ContactStatus
+from app.core.recovery_state import RecoveryState
 from app.core.seam import MirrorState, derive_seam_status
 from app.data.models import (
     FundingType,
@@ -80,6 +81,13 @@ class DealView(BaseModel):
     # ``model_copy`` so the projection stays a pure function of its rows (INV-2).
     contact_status: ContactStatus | None = None
     last_contact_at: datetime | None = None
+
+    # Recovery state (S12 W1; A-19) — also composed in the API layer, NOT here:
+    # the deriver needs ``now`` + the audit log (the dismiss + last-contact facts),
+    # which the pure core never touches. ``assemble_deal_view`` leaves this None;
+    # ``api/families.py`` fills it via ``model_copy``. {stalled,working,recovered,
+    # dismissed}.
+    recovery_state: RecoveryState | None = None
 
     # CRM seam, DERIVED via the §4.7 deriver (not the seeded column).
     crm_seam_status: SeamStatus
