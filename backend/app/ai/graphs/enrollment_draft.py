@@ -132,7 +132,7 @@ def draft_enrollment_message(
 
     if result.degraded:
         # NFR-3 deterministic fallback: the operator template is the proposal.
-        proposal: EnrollmentDraftProposal | None = _template_proposal(
+        proposal: EnrollmentDraftProposal = _template_proposal(
             family_id=joined.family.family_id,
             action=action,
             prompt=prompt,

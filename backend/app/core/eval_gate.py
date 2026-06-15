@@ -69,9 +69,15 @@ class GatedRecord(Protocol):
     (`.text` / `.source_ref`, the enrollment-draft form) or bare claim strings
     (the content-candidate form). Defined as a `Protocol` so BOTH record types
     type-check through `evaluate_message` without the forbidden `app.ai` import.
+
+    `claims` is a read-only property (not a plain attribute) so it is COVARIANT:
+    a concrete `list[Claim]` (enrollment draft) and a `list[str]` (content
+    candidate) both satisfy `Sequence[object]`. A mutable Protocol attribute
+    would be invariant and reject those concrete element types.
     """
 
-    claims: Sequence[object]
+    @property
+    def claims(self) -> Sequence[object]: ...
 
 
 # A `BrandRule`-like object (§8.4) is consumed structurally too: V-4 only reads
