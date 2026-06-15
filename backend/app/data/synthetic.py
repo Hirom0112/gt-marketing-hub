@@ -72,6 +72,23 @@ from app.data.models import (
     StallReason,
 )
 from app.marketing.geo import GIFTED_SCHOOL_COMPETITOR_SET
+from app.marketing.schemas.artifacts import (
+    ArtifactStatus,
+    ConceptArtifact,
+    ImageArtifact,
+    VideoArtifact,
+)
+from app.marketing.schemas.artifacts import (
+    Stage as ArtifactStage,
+)
+from app.marketing.schemas.discovery import (
+    AudienceSegment,
+    CreatorDataMode,
+    CreatorRecord,
+    Sentiment,
+    SentimentRecord,
+    SentimentSourceMode,
+)
 from app.marketing.schemas.geo import GeoContentPiece, GeoStructure
 
 # --------------------------------------------------------------------------- #
@@ -1083,3 +1100,288 @@ def generate_geo_content_pieces() -> list[GeoContentPiece]:
             validation_ref="vr-seed-geo-003",
         ),
     ]
+
+
+# --------------------------------------------------------------------------- #
+# §8.1 Creator-discovery seed inventory (S6, FR-3.8, OUT-4 / INV-6). AGGREGATE/
+# SYNTHETIC by construction: every handle is an OBVIOUSLY-synthetic stand-in
+# (`@gifted_parent_hub`, never a real or minor handle), `audience_segment` is the
+# adults-only closed set, `data_mode` is `synthetic` (NEVER live_scrape), and
+# `is_minor` is False on EVERY record (the schema rejects True anyway — §9 V-3).
+# Fixed and deterministic; ids are fixed `UUID(int=...)` (never uuid4), provenance
+# is `synthetic_seed` throughout (INV-1).
+# --------------------------------------------------------------------------- #
+
+# Base for creator-record ids — a fixed namespace so the ints can't collide with
+# the GEO seed namespace (0x6E0_xxxx) above.
+_CREATOR_ID_BASE = 0xC0FFEE_0000
+
+
+def generate_creator_records() -> list[CreatorRecord]:
+    """The §8.1 creator-discovery seed inventory — ≥5 aggregate/synthetic records.
+
+    Every record is INV-6-safe by construction: an OBVIOUSLY-synthetic
+    ``display_handle`` (a made-up brand-mention handle, never a real or minor
+    handle), an ADULTS-ONLY ``audience_segment`` (``parents``/``educators``/
+    ``general`` — no minor segment exists), ``data_mode = synthetic`` (NEVER
+    ``live_scrape``), and ``is_minor = False`` on EVERY record (the schema's
+    validator rejects ``True`` anyway — fail closed, §9 V-3). ``fit_score`` /
+    ``authenticity_score`` carry a plausible 0–1 spread. Fixed, deterministic
+    ids (``UUID(int=...)``); ``synthetic_seed`` provenance throughout (INV-1).
+    """
+    prov = _seed_provenance()
+    # (handle, channel, segment, fit, authenticity, rationale)
+    specs: tuple[
+        tuple[str, Channel, AudienceSegment, float, float, str],
+        ...,
+    ] = (
+        (
+            "@gifted_parent_hub",
+            Channel.INSTAGRAM,
+            AudienceSegment.PARENTS,
+            0.88,
+            0.81,
+            "Aggregate parent-community account; strong gifted-education topical fit.",
+        ),
+        (
+            "@mastery_classroom_notes",
+            Channel.TIKTOK,
+            AudienceSegment.EDUCATORS,
+            0.74,
+            0.69,
+            "Educator audience discussing mastery-based pacing; on-topic, mid authenticity.",
+        ),
+        (
+            "@homeschool_k8_journeys",
+            Channel.X,
+            AudienceSegment.PARENTS,
+            0.66,
+            0.72,
+            "Homeschool-parent niche; relevant to K-8 alternatives, moderate fit.",
+        ),
+        (
+            "@edu_policy_digest",
+            Channel.LINKEDIN,
+            AudienceSegment.GENERAL,
+            0.52,
+            0.85,
+            "General education-policy audience; broad reach, high authenticity signal.",
+        ),
+        (
+            "@profoundly_gifted_families",
+            Channel.BLOG,
+            AudienceSegment.PARENTS,
+            0.91,
+            0.77,
+            "Profoundly-gifted parent blog; very high topical fit for the ICP.",
+        ),
+        (
+            "@stem_enrichment_review",
+            Channel.INSTAGRAM,
+            AudienceSegment.GENERAL,
+            0.60,
+            0.58,
+            "Broad STEM-enrichment reviewer; adjacent fit, mid authenticity.",
+        ),
+    )
+    # Aliased fields are passed by their wire (camelCase) alias — matching the
+    # `_geo_piece` / `_candidate` convention above, so mypy reads the generated
+    # init signature without a per-call `type: ignore`.
+    return [
+        CreatorRecord(
+            id=UUID(int=_CREATOR_ID_BASE + i, version=4),
+            displayHandle=handle,
+            channel=channel,
+            audienceSegment=segment,
+            fitScore=fit,
+            authenticityScore=authenticity,
+            rationale=rationale,
+            dataMode=CreatorDataMode.SYNTHETIC,
+            isMinor=False,
+            provenance=prov,
+        )
+        for i, (handle, channel, segment, fit, authenticity, rationale) in enumerate(specs)
+    ]
+
+
+# --------------------------------------------------------------------------- #
+# §8.2 Sentiment seed inventory (S6, FR-3.10, OUT-5). PLACEHOLDER data: every
+# `excerpt` is an INVENTED synthetic brand-mention string (no real-user PII,
+# INV-1), `source_mode` is `placeholder` (NEVER live_feed), and `observed_at` is
+# a fixed ISO string (no wall clock). Mixed polarity (positive/neutral/negative
+# all represented) so the S6 sentiment surface has signal. Fixed, deterministic
+# ids; `synthetic_seed` provenance throughout.
+# --------------------------------------------------------------------------- #
+
+_SENTIMENT_ID_BASE = 0x5E471_0000
+
+
+def generate_sentiment_records() -> list[SentimentRecord]:
+    """The §8.2 sentiment seed inventory — ≥6 PLACEHOLDER records, mixed polarity.
+
+    Varied ``channel`` / ``topic`` with all three ``sentiment`` polarities
+    represented. Every ``excerpt`` is an INVENTED synthetic brand-mention string
+    (no real-user PII, INV-1), ``source_mode = placeholder`` (NEVER
+    ``live_feed`` — the schema's closed enum makes a live feed unrepresentable,
+    OUT-5), and ``observed_at`` is the fixed seed ISO timestamp (no wall clock).
+    Fixed, deterministic ids; ``synthetic_seed`` provenance throughout (INV-1).
+    """
+    prov = _seed_provenance()
+    # (channel, topic, sentiment, score, excerpt)
+    specs: tuple[
+        tuple[Channel, str, Sentiment, float | None, str],
+        ...,
+    ] = (
+        (
+            Channel.INSTAGRAM,
+            "mastery-based pacing",
+            Sentiment.POSITIVE,
+            0.8,
+            "Synthetic mention: a parent praises GT School's mastery-based pacing for their child.",
+        ),
+        (
+            Channel.X,
+            "gifted online options",
+            Sentiment.POSITIVE,
+            0.6,
+            "Synthetic mention: a thread on gifted online options speaks well of GT School.",
+        ),
+        (
+            Channel.LINKEDIN,
+            "accreditation questions",
+            Sentiment.NEUTRAL,
+            0.0,
+            "Synthetic mention: a commenter asks a neutral question about GT School accreditation.",
+        ),
+        (
+            Channel.BLOG,
+            "enrollment process",
+            Sentiment.NEUTRAL,
+            0.1,
+            "Synthetic mention: a blog post describes the GT School enrollment steps neutrally.",
+        ),
+        (
+            Channel.TIKTOK,
+            "tuition and funding",
+            Sentiment.NEGATIVE,
+            -0.5,
+            "Synthetic mention: a commenter worries that gifted-school tuition feels out of reach.",
+        ),
+        (
+            Channel.INSTAGRAM,
+            "waitlist timing",
+            Sentiment.NEGATIVE,
+            -0.3,
+            "Synthetic mention: a parent expresses mild frustration about K-8 waitlist timing.",
+        ),
+    )
+    # Aliased fields are passed by their wire (camelCase) alias — matching the
+    # `_geo_piece` / `_candidate` convention above, so mypy reads the generated
+    # init signature without a per-call `type: ignore`.
+    return [
+        SentimentRecord(
+            id=UUID(int=_SENTIMENT_ID_BASE + i, version=4),
+            channel=channel,
+            topic=topic,
+            sentiment=sentiment,
+            score=score,
+            excerpt=excerpt,
+            sourceMode=SentimentSourceMode.PLACEHOLDER,
+            observedAt=_SEED_TS,
+            provenance=prov,
+        )
+        for i, (channel, topic, sentiment, score, excerpt) in enumerate(specs)
+    ]
+
+
+# --------------------------------------------------------------------------- #
+# §4 Staged-pipeline seed (S6). ONE full piece flowing concept→image→video, the
+# three records SHARING a single `pipeline_id`. The concept stage is REAL in v1
+# (has concept/copy/validation, status=selected); image+video are PLACEHOLDER
+# (OUT-1): each carries a synthetic non-empty `placeholder_uri` and a STRING
+# `cost_estimate_ref` pointer at the TECH_STACK cost model — NEVER a numeric
+# price (INV-11). The ref chain links image→concept and video→image. Fixed,
+# deterministic ids; `synthetic_seed` provenance throughout (INV-1).
+# --------------------------------------------------------------------------- #
+
+# Fixed ids for the one seeded pipeline (deterministic — never uuid4).
+_PIPELINE_ID = UUID(int=0x91E_0000, version=4)
+_CONCEPT_ID = UUID(int=0x91E_0001, version=4)
+_IMAGE_ID = UUID(int=0x91E_0002, version=4)
+_VIDEO_ID = UUID(int=0x91E_0003, version=4)
+# A source ContentCandidate this concept was promoted from (a §11.4 batch id ref).
+_PIPELINE_SOURCE_CANDIDATE_ID = UUID(int=0x91E_0004, version=4)
+
+
+def generate_content_pipeline() -> list[ConceptArtifact | ImageArtifact | VideoArtifact]:
+    """The §4 staged-pipeline seed — ONE full concept→image→video chain.
+
+    Returns the three stage artifacts in pipeline order ``[concept, image,
+    video]``, all SHARING one ``pipeline_id``. The ``ConceptArtifact`` is REAL in
+    v1 (``status=selected``, carrying ``concept`` / ``copy`` / ``validation``);
+    the ``ImageArtifact`` and ``VideoArtifact`` are PLACEHOLDER (OUT-1) — each has
+    a synthetic non-empty ``placeholder_uri`` and a STRING ``cost_estimate_ref``
+    pointer at the TECH_STACK cost model, NEVER a numeric price (INV-11). The ref
+    chain links ``image.concept_ref → concept.id`` and ``video.image_ref →
+    image.id``. Fixed, deterministic ids; ``synthetic_seed`` provenance (INV-1).
+    """
+    prov = _seed_provenance()
+
+    # The shared image brief, written once so the concept and image stages agree.
+    image_brief = (
+        "A bright, calm home-learning desk: a K-8 student mid-lesson with a parent nearby; "
+        "warm, candid, no on-screen text and no minors' faces identifiable."
+    )
+
+    # Aliased fields are passed by their wire (camelCase) alias — matching the
+    # `_geo_piece` / `_candidate` convention above, so mypy reads the generated
+    # init signature without a per-call `type: ignore`.
+    concept = ConceptArtifact(
+        id=_CONCEPT_ID,
+        pipelineId=_PIPELINE_ID,
+        stage=ArtifactStage.CONCEPT,
+        status=ArtifactStatus.SELECTED,
+        costEstimateRef="tech_stack:cost_model#concept_llm",
+        provenance=prov,
+        sourceCandidateRef=_PIPELINE_SOURCE_CANDIDATE_ID,
+        concept=(
+            "Show a real mastery-based GT School day: a profoundly gifted K-8 learner "
+            "advancing the moment they have mastered the material, parent alongside."
+        ),
+        copy=("Mastery-based gifted K-8. See how a GT School day actually fits your child's pace."),
+        imageBrief=image_brief,
+        validation="vr-seed-pipeline-001",
+    )
+
+    image = ImageArtifact(
+        id=_IMAGE_ID,
+        pipelineId=_PIPELINE_ID,
+        stage=ArtifactStage.IMAGE,
+        status=ArtifactStatus.PLACEHOLDER,
+        costEstimateRef="tech_stack:cost_model#image_gen",
+        provenance=prov,
+        conceptRef=_CONCEPT_ID,
+        imageBrief=image_brief,
+        placeholderUri="placeholder://gtschool/seed/pipeline-001/image.png",
+        liveAssetUri=None,
+    )
+
+    video = VideoArtifact(
+        id=_VIDEO_ID,
+        pipelineId=_PIPELINE_ID,
+        stage=ArtifactStage.VIDEO,
+        status=ArtifactStatus.PLACEHOLDER,
+        costEstimateRef="tech_stack:cost_model#video_gen",
+        provenance=prov,
+        imageRef=_IMAGE_ID,
+        videoScript=(
+            "15s spot: a GT School day in three beats — a learner masters a concept, advances, "
+            "and a parent watches the moment. Voiceover: mastery-based gifted K-8, at your "
+            "child's real pace."
+        ),
+        durationSec=15.0,
+        placeholderUri="placeholder://gtschool/seed/pipeline-001/video.mp4",
+        liveAssetUri=None,
+    )
+
+    return [concept, image, video]
