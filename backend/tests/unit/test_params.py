@@ -17,7 +17,7 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
-from app.core.params import load_params
+from app.core.params import CreatorScoringFit, load_params
 
 # The committed example file is the authoritative source for these tests.
 EXAMPLE_PARAMS = Path(__file__).resolve().parents[3] / "params" / "params.example.yaml"
@@ -147,3 +147,71 @@ def test_wrong_type_raises(tmp_path: Path) -> None:
     with pytest.raises(ValidationError) as excinfo:
         load_params(broken_path)
     assert "w_recoverability" in str(excinfo.value)
+
+
+def test_params_loads_s6_blocks() -> None:
+    """S6 param blocks parse + validate from the committed example (INV-11).
+
+    `creator_scoring` (FR-3.8), `kpi.levers` (FR-3.11), and `scheduler`
+    (FR-3.6/OUT-2) are the single home for every S6 magic number; S6 consumers
+    read them from here, never hardcoded. This asserts the three blocks load,
+    the fit sub-weights partition to 1.0, every KPI channel lever is present at
+    a 0.0 baseline, and dispatch is SIMULATED in v1 (INV-9). The drift guard
+    proves a fit-weight set that does NOT sum to 1.0 fails to load.
+    """
+    params = load_params(EXAMPLE_PARAMS)
+
+    # creator_scoring — fit + authenticity sub-weights, surface threshold (FR-3.8)
+    fit = params.creator_scoring.fit
+    assert fit.topic_match_weight == 0.5
+    assert fit.audience_match_weight == 0.3
+    assert fit.brand_alignment_weight == 0.2
+    assert (
+        fit.topic_match_weight
+        + fit.audience_match_weight
+        + fit.brand_alignment_weight
+        == pytest.approx(1.0)
+    )
+    auth = params.creator_scoring.authenticity
+    assert (
+        auth.follower_authenticity_weight
+        + auth.engagement_consistency_weight
+        + auth.spam_signal_weight
+        == pytest.approx(1.0)
+    )
+    assert params.creator_scoring.surface_threshold == 0.6
+
+    # kpi.levers — 8 per-channel baseline/target pairs, all baseline 0.0 (FR-3.11)
+    levers = params.kpi.levers
+    expected_channels = {
+        "instagram",
+        "tiktok",
+        "x",
+        "linkedin",
+        "email",
+        "blog",
+        "landing_page",
+        "geo",
+    }
+    assert set(levers) == expected_channels
+    for channel in expected_channels:
+        assert levers[channel].baseline == 0.0
+    assert levers["email"].target == 0.10
+
+    # scheduler — dispatch is SIMULATED in v1 (FR-3.6 / OUT-2 / INV-9)
+    assert params.scheduler.dispatch_mode == "simulated"
+
+
+def test_creator_scoring_fit_weights_must_sum_to_one() -> None:
+    """A fit-weight set that does not sum to 1.0 fails to load (INV-11, §4.1).
+
+    Constructing the model directly with drifted weights must raise — this is
+    how the params file stays honest: a consumer can trust the sub-weights are
+    a true partition.
+    """
+    with pytest.raises(ValidationError):
+        CreatorScoringFit(
+            topic_match_weight=0.5,
+            audience_match_weight=0.3,
+            brand_alignment_weight=0.3,  # sums to 1.1 — drift
+        )
