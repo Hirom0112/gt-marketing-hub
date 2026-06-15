@@ -123,7 +123,7 @@ function mockFetchRouted(routes: Record<string, unknown>): void {
       if (url.includes('/creators')) payload = routes.creators ?? [];
       else if (url.includes('/sentiment')) payload = routes.sentiment ?? {};
       else if (url.includes('/kpi')) payload = routes.kpi ?? [];
-      else if (url.includes('/pipeline')) payload = routes.pipeline ?? {};
+      else if (url.includes('/content/pipeline')) payload = routes.pipeline ?? {};
       else if (url.includes('/content/schedule'))
         payload = routes.schedule ?? [];
       else if (url.includes('/recipes')) payload = routes.recipes ?? [];

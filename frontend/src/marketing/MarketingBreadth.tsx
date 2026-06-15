@@ -12,7 +12,7 @@ import { apiBaseUrl } from '../config';
 //     a "placeholder" source badge (OUT-5 — not a live feed).
 //   - KPI board (GET /kpi): per-channel metric vs baseline/target, the signed
 //     lever delta vs baseline, and a target-met indicator.
-//   - Staged pipeline (GET /pipeline): concept → image → video, image & video
+//   - Staged pipeline (GET /content/pipeline): concept → image → video, image & video
 //     clearly badged "placeholder" (OUT-1 — no live media gen in v1).
 //   - Scheduler (GET/POST /content/schedule): scheduled posts with their
 //     dispatch_status; a BLOCKED post is shown blocked with NO send affordance
@@ -325,7 +325,7 @@ function KpiPanel(): JSX.Element {
 
 // 4. Staged-pipeline view ----------------------------------------------------
 function PipelinePanel(): JSX.Element {
-  const state = useGet<PipelineResponse>('/pipeline');
+  const state = useGet<PipelineResponse>('/content/pipeline');
   return (
     <div className="mb-panel" data-testid="pipeline-panel">
       <h3>Staged pipeline</h3>
