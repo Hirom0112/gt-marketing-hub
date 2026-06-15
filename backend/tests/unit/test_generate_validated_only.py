@@ -145,7 +145,9 @@ def test_graph_surfaces_only_passing_candidates(tmp_path: Path) -> None:
     from app.data.synthetic import generate_brand_memory
 
     params = load_params(EXAMPLE_PARAMS)
-    store = SqliteBrandMemoryStore(tmp_path / "brand.sqlite3", weight_step=params.brand_memory.weight_step)
+    store = SqliteBrandMemoryStore(
+        tmp_path / "brand.sqlite3", weight_step=params.brand_memory.weight_step
+    )
     for item in generate_brand_memory():
         store.upsert(item)
 
@@ -202,7 +204,9 @@ def test_api_generate_surfaces_only_passing_blocked_logged(tmp_path: Path) -> No
     app.dependency_overrides[deps.get_llm_client] = lambda: _llm_client_returning(_batch_json())
     app.dependency_overrides[deps.get_brand_judge] = _on_brand_judge
 
-    resp = client.post("/ai/content/generate", json={"prompt": "Draft copy.", "channel": "instagram"})
+    resp = client.post(
+        "/ai/content/generate", json={"prompt": "Draft copy.", "channel": "instagram"}
+    )
     assert resp.status_code == 200
     data = resp.json()
 
@@ -222,9 +226,9 @@ def test_api_generate_surfaces_only_passing_blocked_logged(tmp_path: Path) -> No
     assert listing.status_code == 200
     rows = listing.json()
     # At least one logged proposal failed its eval (the "4X speed" candidate).
-    assert any(
-        any(e["passed"] is False for e in row["evals"]) for row in rows
-    ), "the blocked candidate must be logged with a failing eval"
+    assert any(any(e["passed"] is False for e in row["evals"]) for row in rows), (
+        "the blocked candidate must be logged with a failing eval"
+    )
     # And at least two passed (the surfaced ones).
     passed_rows = [row for row in rows if any(e["passed"] for e in row["evals"])]
     assert len(passed_rows) >= 2

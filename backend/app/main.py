@@ -9,6 +9,7 @@ from fastapi import FastAPI
 from mangum import Mangum
 
 from app.api.ai_actions import router as ai_actions_router
+from app.api.content import router as content_router
 from app.api.families import router as families_router
 from app.api.funding import router as funding_router
 from app.api.notes import router as notes_router
@@ -45,6 +46,12 @@ app.include_router(funding_router)
 # /seam/{id}/reconcile POST. The reconcile is human-gated and LOGGED (NFR-6); a
 # flagged conflict fails closed (INV-4).
 app.include_router(seam_router)
+
+# Content engine (FR-3.1/3.4/3.5; ARCH §5.3) — /ai/content/generate (gated batch),
+# /content/{id}/decision (the sole content state write — keep promotes library +
+# brand memory, discard strengthens a dont signal), /content/library (kept+
+# validated search). Nothing publishes without an explicit keep (INV-2/INV-3).
+app.include_router(content_router)
 
 
 # AWS Lambda + API Gateway entrypoint (ARCHITECTURE.md §12).

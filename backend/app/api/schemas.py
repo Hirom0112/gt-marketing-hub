@@ -11,6 +11,8 @@ from uuid import UUID
 
 from pydantic import BaseModel, Field
 
+from app.ai.schemas.brand import LibraryAsset
+from app.ai.schemas.content import Channel, ContentCandidate, Decision
 from app.ai.schemas.enrollment_draft import DraftAction, EnrollmentDraftProposal
 from app.core.eval_gate import ValidationResult
 from app.core.family_record import DealView
@@ -140,3 +142,68 @@ class AuditResponse(BaseModel):
     proposal: ProposalRecord
     evals: list[EvalRecord] = Field(default_factory=list)
     decisions: list[DecisionRecord] = Field(default_factory=list)
+
+
+# --------------------------------------------------------------------------- #
+# S4 content engine surface (FR-3.1/3.4/3.5; ARCH §5.3; INV-2/INV-3/INV-8).
+# --------------------------------------------------------------------------- #
+class ContentGenerateRequest(BaseModel):
+    """`POST /ai/content/generate` body — the operator prompt + target channel.
+
+    ``channel`` defaults to ``instagram`` so a bare prompt still generates a batch
+    for a concrete channel (the conditioning is channel-scoped, §8.3.2).
+    """
+
+    prompt: str
+    channel: Channel = Channel.INSTAGRAM
+
+
+class SurfacedCandidateResponse(BaseModel):
+    """One surfaced (passing) candidate + its proposal_id + passing verdict (FR-3.1).
+
+    The proposal body surfaces ONLY for a candidate whose eval PASSED (INV-3);
+    blocked candidates never appear here (they are logged, not surfaced). The
+    ``proposal_id`` lets the client call the keep/discard decision endpoint.
+    """
+
+    proposal_id: UUID
+    candidate: ContentCandidate
+    validation: ValidationResult
+
+
+class ContentGenerateResponse(BaseModel):
+    """The §5.3 batch outcome — surfaced candidates + the blocked count + degraded.
+
+    ``candidates`` holds only PASSING candidates (INV-3/INV-4). ``blocked_count``
+    is the number of gated-but-failing candidates that were WITHHELD yet logged
+    (the audit count). ``degraded`` is True when the kill switch / cost cap forced
+    the persistent-fallback path with no live call (INV-8).
+    """
+
+    candidates: list[SurfacedCandidateResponse] = Field(default_factory=list)
+    blocked_count: int = 0
+    degraded: bool = False
+
+
+class ContentDecisionRequest(BaseModel):
+    """`POST /content/{proposal_id}/decision` body — the human keep/discard verdict.
+
+    Only ``keep`` publishes (to the library + brand memory); ``discard``
+    strengthens a dont signal and publishes nothing (FR-3.5; INV-2).
+    """
+
+    action: Decision
+
+
+class ContentDecisionResponse(BaseModel):
+    """The content-decision result — the SOLE content state-write path (INV-2; NFR-6).
+
+    On ``keep`` a kept :class:`LibraryAsset` was promoted (``library_asset`` set)
+    and brand memory affirmed; on ``discard`` there is no asset and ``published``
+    is False.
+    """
+
+    proposal_id: UUID
+    action: Decision
+    published: bool = False
+    library_asset: LibraryAsset | None = None

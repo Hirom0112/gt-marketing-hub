@@ -12,14 +12,18 @@ from __future__ import annotations
 from pathlib import Path
 
 from app.adapters import registry
+from app.adapters.brand_memory.base import BrandMemoryStore
+from app.adapters.brand_memory.sqlite_store import SqliteBrandMemoryStore
 from app.adapters.funding.base import FundingSignalAdapter
 from app.adapters.hubspot.crm_adapter import CRMAdapter
 from app.ai.client import AnthropicLLMClient, LLMClient
+from app.ai.schemas.brand import BrandRule
 from app.core.eval_gate import BrandJudge
 from app.core.params import Params, load_params
 from app.core.settings import Settings
 from app.data.notes_repository import InMemoryNotesRepository, NotesRepository
 from app.data.repository import FamilyRepository, InMemoryFamilyRepository
+from app.marketing.library import ContentLibrary, InMemoryContentLibrary
 from app.observability.log_store import InMemoryObservabilityLog, ObservabilityLog
 
 # Singleton store, seeded once at process start from the fixed synthetic seed
@@ -63,6 +67,53 @@ _settings: Settings = Settings.from_env()
 # pattern as `_repository`). Held in a one-slot list so `reset_observability_log`
 # can rebind it for test isolation without a `global` statement.
 _observability: list[ObservabilityLog] = [InMemoryObservabilityLog()]
+
+
+def _build_brand_memory_store() -> BrandMemoryStore:
+    """Construct the seeded brand-memory store with the params weight_step (INV-11).
+
+    Closes the INV-11 wiring gap the conditioning agent flagged: the SQLite store
+    still DEFAULTS `weight_step` in code, so the composition root passes
+    `params.brand_memory.weight_step` explicitly here — the single canonical home
+    flows through affirm/weaken. The store is seeded once from the §11.1 synthetic
+    brand-memory inventory (the only seed writer, NFR-1) so S4 generation is
+    conditioned and demoable on synthetic data alone. v1 uses a temp-file SQLite
+    backing (A-3/A-11; persistence is per-process here, swapped for Postgres in
+    prod). Imported lazily to keep this module's import graph thin.
+    """
+    import tempfile
+    from pathlib import Path
+
+    from app.data.synthetic import generate_brand_memory
+
+    db_path = Path(tempfile.gettempdir()) / "gt_cockpit_brand_memory.sqlite3"
+    # Fresh file each process start so the singleton is deterministic from the seed.
+    db_path.unlink(missing_ok=True)
+    store = SqliteBrandMemoryStore(db_path, weight_step=_params.brand_memory.weight_step)
+    for item in generate_brand_memory():
+        store.upsert(item)
+    return store
+
+
+# Singleton brand-memory store (FR-3.2) — seeded + params-wired weight_step. One-slot
+# list so `reset_brand_memory_store` can rebind for test isolation.
+_brand_memory_store: list[BrandMemoryStore] = [_build_brand_memory_store()]
+
+# Singleton content library (FR-3.4) — seeded from the §11.4 kept+validated assets.
+# One-slot list so `reset_content_library` can rebind for test isolation.
+_content_library: list[ContentLibrary] = [InMemoryContentLibrary.seeded()]
+
+
+def _build_brand_rules() -> list[BrandRule]:
+    """The §11.2 active brand-rule seed inventory (the only seed writer, NFR-1)."""
+    from app.data.synthetic import generate_brand_rules
+
+    return list(generate_brand_rules())
+
+
+# Singleton active brand rules (§8.4) — the §11.2 seed inventory; ACTIVE `never`
+# rules add absolute V-4 blocking phrases in the gate (A-10).
+_brand_rules: list[BrandRule] = _build_brand_rules()
 
 
 def get_repository() -> FamilyRepository:
@@ -148,3 +199,33 @@ def get_funding_signal_adapter_dep() -> FundingSignalAdapter:
     feed (INV-10; none exists). Tests override this to inject a known signal.
     """
     return registry.get_funding_signal_adapter()
+
+
+def get_brand_memory_store_dep() -> BrandMemoryStore:
+    """FastAPI dependency yielding the seeded brand-memory store (FR-3.2).
+
+    The store's affirm/weaken honor `params.brand_memory.weight_step` because the
+    singleton was constructed with it (INV-11 — the single param home). Tests
+    override this to inject an isolated store.
+    """
+    return _brand_memory_store[0]
+
+
+def get_content_library_dep() -> ContentLibrary:
+    """FastAPI dependency yielding the seeded content library (FR-3.4)."""
+    return _content_library[0]
+
+
+def get_active_brand_rules() -> list[BrandRule]:
+    """FastAPI dependency yielding the §8.4 active brand rules (V-4 never-rules)."""
+    return _brand_rules
+
+
+def reset_brand_memory_store() -> None:
+    """Rebind the brand-memory singleton to a fresh seeded store (test isolation)."""
+    _brand_memory_store[0] = _build_brand_memory_store()
+
+
+def reset_content_library() -> None:
+    """Rebind the content-library singleton to a fresh seeded library (test isolation)."""
+    _content_library[0] = InMemoryContentLibrary.seeded()

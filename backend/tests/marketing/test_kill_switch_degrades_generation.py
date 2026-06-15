@@ -75,7 +75,7 @@ def test_kill_switch_degrades_no_live_call(tmp_path: Path) -> None:
     # live call was made — the exploding transport never raised).
     assert outcome.degraded is True
     assert len(outcome.surfaced) >= 1
-    for candidate, validation in outcome.surfaced:
+    for _candidate, validation in outcome.surfaced:
         assert validation.passed is True
 
 
