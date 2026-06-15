@@ -23,7 +23,7 @@ from __future__ import annotations
 
 from decimal import ROUND_HALF_UP, Decimal
 
-from app.core.params import Params
+from app.core.params import AwardAmounts, Params
 from app.data.models import FundingState, FundingType
 
 # Cent precision for all money quantization.
@@ -49,9 +49,24 @@ _LEGAL_PATH: tuple[FundingState, ...] = (
 )
 
 
-def _award_for(tier: FundingType, params: Params) -> Decimal:
-    """The award amount for a TEFA tier, read from params (INV-11)."""
-    amounts = params.funding.award_amounts
+def award_for_tier(tier: FundingType, amounts: AwardAmounts) -> Decimal:
+    """The TEFA award for a tier, read from ``funding.award_amounts`` (INV-11).
+
+    The single source of the per-tier award amount, shared by the installment
+    schedule (``compute_installments``) and the live CRM adapter (which mirrors
+    the award onto the HubSpot deal ``amount``). SELF_PAY (and any non-TEFA tier)
+    has no TEFA award and is rejected — fail-closed, never a silent ``0``.
+
+    Args:
+        tier: A TEFA tier (``tefa_standard`` / ``tefa_disability`` / ``tefa_homeschool``).
+        amounts: The ``funding.award_amounts`` params block.
+
+    Returns:
+        The award as a cent-quantized ``Decimal``.
+
+    Raises:
+        ValueError: if ``tier`` has no TEFA award (e.g. ``self_pay``).
+    """
     by_tier = {
         FundingType.TEFA_STANDARD: amounts.tefa_standard,
         FundingType.TEFA_DISABILITY: amounts.tefa_disability,
@@ -60,6 +75,11 @@ def _award_for(tier: FundingType, params: Params) -> Decimal:
     if tier not in by_tier:
         raise ValueError(f"no TEFA award for funding tier: {tier!r}")
     return Decimal(str(by_tier[tier])).quantize(_CENTS)
+
+
+def _award_for(tier: FundingType, params: Params) -> Decimal:
+    """The award amount for a TEFA tier, read from params (INV-11)."""
+    return award_for_tier(tier, params.funding.award_amounts)
 
 
 def compute_installments(tier: FundingType, params: Params) -> list[Decimal]:

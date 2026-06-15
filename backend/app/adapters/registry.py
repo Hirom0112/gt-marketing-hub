@@ -35,7 +35,7 @@ from app.adapters.sentiment.base import SentimentAdapter
 from app.adapters.sentiment.placeholder import PlaceholderSentimentAdapter
 from app.adapters.social.base import SocialAdapter
 from app.adapters.social.simulated import SimulatedSocialAdapter
-from app.core.params import Crm, load_params
+from app.core.params import AwardAmounts, Crm, Params, load_params
 from app.core.settings import get_settings
 
 # Default on-disk home for the persistent brand-memory store when no override is
@@ -53,17 +53,27 @@ _HUBSPOT_BASE_URL = "https://api.hubapi.com"
 _EXAMPLE_PARAMS = Path(__file__).resolve().parents[3] / "params" / "params.example.yaml"
 
 
-def _load_crm_params() -> Crm:
-    """Load the ``crm`` params block, falling back to the committed example.
+def _load_params() -> Params:
+    """Load params, falling back to the committed example.
 
     ``load_params()`` resolves ``params/params.yaml``; when that gitignored file is
     absent we fall back to ``params/params.example.yaml`` so the live adapter is
-    constructable in any env (the example carries the same crm block; INV-11).
+    constructable in any env (the example carries the same blocks; INV-11).
     """
     try:
-        return load_params().crm
+        return load_params()
     except FileNotFoundError:
-        return load_params(_EXAMPLE_PARAMS).crm
+        return load_params(_EXAMPLE_PARAMS)
+
+
+def _load_crm_params() -> Crm:
+    """Load the ``crm`` params block (see :func:`_load_params`)."""
+    return _load_params().crm
+
+
+def _load_award_amounts() -> AwardAmounts:
+    """Load the ``funding.award_amounts`` params block (see :func:`_load_params`)."""
+    return _load_params().funding.award_amounts
 
 
 def get_crm_adapter() -> CRMAdapter:
@@ -106,6 +116,7 @@ def get_crm_adapter() -> CRMAdapter:
         client=client,
         token=settings.hubspot_private_app_token,
         crm=_load_crm_params(),
+        award_amounts=_load_award_amounts(),
         calls_per_run_cap=settings.hubspot_calls_per_run_cap,
     )
 

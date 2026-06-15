@@ -45,7 +45,8 @@ from app.adapters.hubspot.live_adapter import (
     SyntheticWriteLockError,
 )
 from app.adapters.registry import get_crm_adapter
-from app.core.params import Crm, load_params
+from app.core.funding_gate import award_for_tier
+from app.core.params import AwardAmounts, Crm, load_params
 from app.core.seam import MirrorState
 from app.data.models import FamilyRecord, FundingType, Stage
 
@@ -64,6 +65,10 @@ _UNKNOWN_DOMAIN_EMAIL = "someone" + "@" + "random-unknown-vendor" + ".example.co
 
 def _crm() -> Crm:
     return load_params(_EXAMPLE_PARAMS).crm
+
+
+def _award_amounts() -> AwardAmounts:
+    return load_params(_EXAMPLE_PARAMS).funding.award_amounts
 
 
 def _family(
@@ -214,7 +219,11 @@ def _adapter(
         transport=httpx.MockTransport(fake.handler), base_url="https://api.hubapi.com"
     )
     return LiveHubSpotCRMAdapter(
-        client=client, token=_TOKEN, crm=crm or _crm(), calls_per_run_cap=cap
+        client=client,
+        token=_TOKEN,
+        crm=crm or _crm(),
+        award_amounts=_award_amounts(),
+        calls_per_run_cap=cap,
     )
 
 
@@ -289,6 +298,52 @@ def test_push_family_sets_dealstage_amount_and_gt_props() -> None:
     assert props["dealstage"] == _crm().stage_map["apply"]  # mapped, not raw
     assert props["gt_synthetic_id"] == str(record.family_id)
     assert "gt_funding_state" in props
+    assert "amount" in props  # the TEFA award mirror
+
+
+def test_push_family_deal_amount_equals_tefa_award_from_params() -> None:
+    """The deal ``amount`` == the family's TEFA award, derived from params (INV-11).
+
+    No hardcoded number: the expected value flows from the funding tier through
+    the shared :func:`award_for_tier` helper over ``funding.award_amounts``, so a
+    params drift moves both the adapter output and this assertion together.
+    """
+    fake = _FakeHubSpot()
+    adapter = _adapter(fake)
+    record = _family()  # FundingType.TEFA_STANDARD
+
+    adapter.push_family(record)
+
+    deal_writes = [
+        json.loads(r.content)
+        for r in fake.requests
+        if "deals" in r.url.path and r.method in {"POST", "PATCH"} and "/search" not in r.url.path
+    ]
+    assert deal_writes, "expected a deal create/patch"
+    props = deal_writes[0]["properties"]
+    expected = award_for_tier(record.funding_type, _award_amounts())
+    assert props["amount"] == str(expected)
+
+
+def test_push_family_self_pay_writes_no_amount() -> None:
+    """A SELF_PAY (non-TEFA) family has no award — the deal omits ``amount``.
+
+    Fail-closed: the adapter never fabricates an ``amount=0`` for a tier with no
+    TEFA award (``award_for_tier`` raises for self_pay; the builder skips it).
+    """
+    fake = _FakeHubSpot()
+    adapter = _adapter(fake)
+    record = _family().model_copy(update={"funding_type": FundingType.SELF_PAY})
+
+    adapter.push_family(record)
+
+    deal_writes = [
+        json.loads(r.content)
+        for r in fake.requests
+        if "deals" in r.url.path and r.method in {"POST", "PATCH"} and "/search" not in r.url.path
+    ]
+    assert deal_writes, "expected a deal create/patch"
+    assert "amount" not in deal_writes[0]["properties"]
 
 
 def test_read_mirror_maps_dealstage_to_cockpit_stage() -> None:

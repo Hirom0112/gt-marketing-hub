@@ -44,7 +44,8 @@ from app.adapters.hubspot.stage_map import (
     cockpit_stage_to_hubspot_id,
     hubspot_id_to_cockpit_stage,
 )
-from app.core.params import Crm
+from app.core.funding_gate import award_for_tier
+from app.core.params import AwardAmounts, Crm
 from app.core.seam import MirrorState
 from app.data.models import FamilyRecord
 
@@ -86,6 +87,10 @@ class LiveHubSpotCRMAdapter(CRMAdapter):
         token: The HubSpot Private App token (Bearer auth).
         crm: The loaded ``crm`` params block — the stage map, the write-lock
             allow/deny lists, and the ``gt_*`` property names (INV-11).
+        award_amounts: The ``funding.award_amounts`` params block — the per-tier
+            TEFA award the deal mirrors onto the HubSpot standard ``amount``
+            property (INV-11; the number flows from the funding tier, never a
+            literal here).
         calls_per_run_cap: The guard-3 per-run HubSpot call budget (INV-8).
     """
 
@@ -95,10 +100,12 @@ class LiveHubSpotCRMAdapter(CRMAdapter):
         client: httpx.Client,
         token: str,
         crm: Crm,
+        award_amounts: AwardAmounts,
         calls_per_run_cap: int,
     ) -> None:
         self._client = client
         self._crm = crm
+        self._award_amounts = award_amounts
         self._cap = calls_per_run_cap
         self._calls_made = 0
         # Default Bearer auth on every request; explicit per-call headers merge.
@@ -211,6 +218,16 @@ class LiveHubSpotCRMAdapter(CRMAdapter):
             "dealstage": cockpit_stage_to_hubspot_id(record.current_stage, self._crm),
             "dealname": record.display_name,
         }
+        # TEFA award → HubSpot standard `amount` (INV-11: the number flows from the
+        # family's funding tier via the shared award helper, never a literal). A
+        # non-TEFA tier (self_pay) or an unset tier has no award — skip the prop
+        # (no `amount=0` write) rather than fabricate one. Serialized as a plain
+        # decimal string, the form HubSpot's `amount` (number) accepts.
+        if record.funding_type is not None:
+            try:
+                props["amount"] = str(award_for_tier(record.funding_type, self._award_amounts))
+            except ValueError:
+                pass  # non-TEFA tier (e.g. self_pay) — no award to mirror.
         # gt_* deal props, each gated on the params declaration (INV-11) and on the
         # record actually carrying the value (None ⇒ skip, no empty writes).
         declared = set(self._crm.gt_properties.deal)
