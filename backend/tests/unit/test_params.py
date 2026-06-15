@@ -15,9 +15,10 @@ import textwrap
 from pathlib import Path
 
 import pytest
+import yaml
 from pydantic import ValidationError
 
-from app.core.params import CreatorScoringFit, load_params
+from app.core.params import ContactWindows, CreatorScoringFit, load_params
 
 # The committed example file is the authoritative source for these tests.
 EXAMPLE_PARAMS = Path(__file__).resolve().parents[3] / "params" / "params.example.yaml"
@@ -198,6 +199,49 @@ def test_params_loads_s6_blocks() -> None:
 
     # scheduler — dispatch is SIMULATED in v1 (FR-3.6 / OUT-2 / INV-9)
     assert params.scheduler.dispatch_mode == "simulated"
+
+
+def test_params_loads_enrollment_contact_block() -> None:
+    """S9 `enrollment.contact` recency windows parse from the example (INV-11).
+
+    `grey_window_days` / `overdue_days` are the single home for the contact-status
+    color thresholds (S9 W1); the recency deriver reads them from here, never
+    hardcoded. This asserts the block loads with the committed values.
+    """
+    params = load_params(EXAMPLE_PARAMS)
+
+    assert params.enrollment.contact.grey_window_days == 3
+    assert params.enrollment.contact.overdue_days == 4
+
+
+def test_enrollment_contact_missing_key_raises(tmp_path: Path) -> None:
+    """A missing `enrollment.contact` key fails loudly — drift fails the build.
+
+    Dropping `overdue_days` must raise a clear, typed `ValidationError` naming the
+    offending field, never silently default it (CLAUDE.md §4.1, INV-11).
+    """
+    broken = textwrap.dedent(
+        """\
+        enrollment:
+          contact:
+            grey_window_days: 3
+        """
+    )
+    broken_path = tmp_path / "contact.yaml"
+    broken_path.write_text(broken, encoding="utf-8")
+
+    with pytest.raises(ValidationError) as excinfo:
+        ContactWindows.model_validate(
+            yaml.safe_load(broken_path.read_text())["enrollment"]["contact"]
+        )
+    assert "overdue_days" in str(excinfo.value)
+
+
+def test_enrollment_contact_wrong_type_raises() -> None:
+    """A non-int window value fails validation (drift fails the build, INV-11)."""
+    with pytest.raises(ValidationError) as excinfo:
+        ContactWindows(grey_window_days="three", overdue_days=4)  # type: ignore[arg-type]
+    assert "grey_window_days" in str(excinfo.value)
 
 
 def test_creator_scoring_fit_weights_must_sum_to_one() -> None:
