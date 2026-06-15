@@ -25,6 +25,7 @@ dev = [
     "pytest-asyncio",
     "pytest-cov",
     "httpx",            # required by fastapi.testclient (test-only, not a runtime dep)
+    "types-PyYAML",     # mypy-strict stubs for pyyaml (type-only, not a runtime dep)
 ]
 
 [build-system]
