@@ -83,6 +83,14 @@ def _joined_family() -> JoinedFamily:
         family_id=family_id,
         forms_total=6,
         forms_signed=3,
+        forms_status=[
+            {"name": "enrollment_agreement", "signed_at": _T0.isoformat()},
+            {"name": "media_release", "signed_at": _T0.isoformat()},
+            {"name": "health_form", "signed_at": _T0.isoformat()},
+            {"name": "transportation", "signed_at": None},
+            {"name": "tech_agreement", "signed_at": None},
+            {"name": "code_of_conduct", "signed_at": None},
+        ],
     )
     profile = CommunityProfile(
         community_profile_id=uuid4(),
@@ -129,6 +137,51 @@ def test_deal_view_projection() -> None:
     #     crm_synced_at (_AFTER) >= updated_at (_T0) and mirror agrees ⇒ synced,
     #     even though the spine row was seeded `unsynced`. The deriver wins. ---
     assert view.crm_seam_status is SeamStatus.SYNCED
+
+
+def test_deal_view_dropoff_fields() -> None:
+    """`assemble_deal_view` surfaces the S9 W2 drop-off signal from the source rows.
+
+    Pure projection (no log, no clock): completion_pct from the app_form,
+    forms_signed/forms_total from the enrollment_forms, and next_unsigned_form =
+    the first forms_status entry whose signed_at is None (the "stuck on <name>"
+    signal). apply_date = submitted_at when present.
+    """
+    joined = _joined_family()
+    view = assemble_deal_view(joined)
+
+    assert view.completion_pct == 100.0
+    assert view.forms_signed == 3
+    assert view.forms_total == 6
+    # First unsigned form in order ⇒ the stuck-on signal.
+    assert view.next_unsigned_form == "transportation"
+    # apply_date prefers the submitted_at instant.
+    assert view.apply_date == _T0
+
+
+def test_deal_view_dropoff_falls_back_when_rows_absent() -> None:
+    """With no app_form / enrollment_forms the drop-off fields degrade gracefully.
+
+    completion_pct ⇒ None, forms_signed/forms_total ⇒ None, next_unsigned_form ⇒
+    None, and apply_date falls back to the spine created_at when no app_form
+    submitted_at exists.
+    """
+    base = _joined_family()
+    created = datetime(2026, 2, 2, 8, 0, 0, tzinfo=UTC)
+    family = base.family.model_copy(update={"created_at": created})
+    interest = JoinedFamily(
+        family=family,
+        lead=base.lead,
+        app_form=None,
+        enrollment_forms=None,
+        community_profile=base.community_profile,
+    )
+    view = assemble_deal_view(interest)
+    assert view.completion_pct is None
+    assert view.forms_signed is None
+    assert view.forms_total is None
+    assert view.next_unsigned_form is None
+    assert view.apply_date == created
 
 
 def test_deal_view_handles_missing_app_form() -> None:

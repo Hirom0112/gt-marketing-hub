@@ -23,12 +23,19 @@ this test recomputes its expectations from that same committed file.
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from pathlib import Path
+from uuid import uuid4
 
 from fastapi.testclient import TestClient
 
+from app.api import deps
+from app.core.contact_log import last_contact_at
+from app.core.contact_status import ContactStatus, derive_contact_status
 from app.core.family_record import assemble_deal_view
 from app.core.params import Params, load_params
+from app.data.models import FundingState
+from app.observability.log_store import DecisionAction
 from app.core.work_queue import (
     WorkQueueFamily,
     rank_families,
@@ -152,6 +159,67 @@ def test_read_endpoints_contract() -> None:
     assert filtered_ids == expected_ids
     # Sanity: the filter actually drops some families (threshold is mid-list).
     assert len(filtered_ids) < DEFAULT_FAMILY_COUNT
+
+
+def test_family_detail_surfaces_recency_and_dropoff() -> None:
+    """`GET /families/{id}` carries the S9 W2 recency + drop-off projection fields.
+
+    The pure drop-off fields (completion_pct/forms_signed/forms_total/
+    next_unsigned_form/apply_date) equal `assemble_deal_view` over the joined
+    rows. The recency fields (contact_status/last_contact_at) are composed in the
+    API layer from the audit log + an api-layer `now` (NOT pure core): seeding an
+    approve decision for the family ⇒ contact_status == followed_up and
+    last_contact_at non-None, matching the deriver.
+    """
+    params = _params()
+    repo = _seeded()
+    # A non-funded family so contact_status is not short-circuited to CLOSED.
+    sample = next(f for f in repo.list_families() if f.funding_state is not FundingState.FUNDED)
+
+    # Seed an approve decision in the app's observability singleton so recency
+    # derives deterministically; reset afterward to avoid cross-test bleed.
+    deps.reset_observability_log()
+    log = deps.get_observability_log()
+    proposal_id = uuid4()
+    log.log_proposal(
+        proposal_id=proposal_id,
+        flow="enrollment_draft",
+        schema_version="1",
+        payload={"action": "email", "body": "hi"},
+        family_id=sample.family_id,
+    )
+    log.log_decision(proposal_id=proposal_id, human="operator", action=DecisionAction.APPROVE)
+    try:
+        detail = client.get(f"/families/{sample.family_id}")
+        assert detail.status_code == 200
+        dv = detail.json()["deal_view"]
+
+        # --- pure drop-off fields equal assemble_deal_view. ---
+        joined = repo.get_family(sample.family_id)
+        assert joined is not None
+        expected = assemble_deal_view(joined)
+        assert dv["completion_pct"] == expected.completion_pct
+        assert dv["forms_signed"] == expected.forms_signed
+        assert dv["forms_total"] == expected.forms_total
+        assert dv["next_unsigned_form"] == expected.next_unsigned_form
+        assert (dv["apply_date"] is None) == (expected.apply_date is None)
+
+        # --- recency fields composed in the API layer. ---
+        stamped = last_contact_at(log, sample.family_id)
+        assert stamped is not None
+        assert dv["last_contact_at"] is not None
+        expected_status = derive_contact_status(
+            created_at=sample.created_at,
+            last_contact_at=stamped,
+            now=datetime.now(UTC),
+            funded=sample.funding_state is FundingState.FUNDED,
+            params=params,
+        )
+        assert dv["contact_status"] == expected_status.value
+        # An approved outbound ⇒ followed_up (green), not fresh/overdue.
+        assert dv["contact_status"] == ContactStatus.FOLLOWED_UP.value
+    finally:
+        deps.reset_observability_log()
 
 
 def test_responsiveness_from_engagement_normalizes() -> None:
