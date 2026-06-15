@@ -36,11 +36,7 @@ def test_coverage_empty_is_zero() -> None:
 
 def test_citation_share() -> None:
     """GT cited in 3/12 slots ⇒ 0.25; any single brand's share ≤ 1.0."""
-    samples = (
-        ["gtschool.com"] * 3
-        + ["competitor-a.com"] * 4
-        + ["competitor-b.com"] * 5
-    )
+    samples = ["gtschool.com"] * 3 + ["competitor-a.com"] * 4 + ["competitor-b.com"] * 5
     share = citation_share(samples, "gtschool.com")
     assert share == pytest.approx(0.25)
     # A single brand cannot exceed all slots.
