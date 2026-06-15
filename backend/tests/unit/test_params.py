@@ -167,9 +167,7 @@ def test_params_loads_s6_blocks() -> None:
     assert fit.audience_match_weight == 0.3
     assert fit.brand_alignment_weight == 0.2
     assert (
-        fit.topic_match_weight
-        + fit.audience_match_weight
-        + fit.brand_alignment_weight
+        fit.topic_match_weight + fit.audience_match_weight + fit.brand_alignment_weight
         == pytest.approx(1.0)
     )
     auth = params.creator_scoring.authenticity
