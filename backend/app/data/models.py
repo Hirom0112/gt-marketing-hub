@@ -101,6 +101,13 @@ class FamilyRecord(BaseModel):
     display_name: str
     primary_contact_synthetic_email: str
 
+    # Ownership root (ASSUMPTIONS.md A-4 / THREAT_MODEL §6 D-RLS-2). Mirrors the
+    # nullable `user_id uuid` column added to `family_record` in `0001_init.sql`:
+    # NULL ⇒ a server-only marketing-lead row with no owning user (D-RLS-3). The
+    # owner-scoped RLS policy keys on `auth.uid() = user_id`, so models and DDL
+    # must agree on this column. Optional ⇒ adding it is non-breaking.
+    user_id: UUID | None = None
+
     # Join keys, nullable until the related record exists (§4.1).
     lead_id: UUID | None = None
     app_form_id: UUID | None = None
