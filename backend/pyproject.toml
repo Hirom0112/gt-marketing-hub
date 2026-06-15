@@ -6,7 +6,10 @@ requires-python = ">=3.12,<3.13"
 
 # Direct runtime dependencies. Hard ceiling: <= 15 (TECH_STACK.md §4.1).
 # S0 ships ONLY what the bootable skeleton needs. Later slices add
-# anthropic, langgraph, supabase, httpx, pandas, tenacity (YAGNI here).
+# anthropic, langgraph, supabase, pandas, tenacity (YAGNI here).
+# httpx is a RUNTIME dep as of S10 W3: the live HubSpot CRM adapter
+# (app/adapters/hubspot/live_adapter.py) imports it to push synthetic data
+# into the real portal when CRM_MODE=live (ANALYSIS/hubspot-complement-plan.md).
 dependencies = [
     "fastapi",
     "uvicorn[standard]",
@@ -14,6 +17,7 @@ dependencies = [
     "pyyaml",
     "python-dotenv",
     "mangum",
+    "httpx",
 ]
 
 [dependency-groups]
@@ -24,7 +28,6 @@ dev = [
     "pytest",
     "pytest-asyncio",
     "pytest-cov",
-    "httpx",            # required by fastapi.testclient (test-only, not a runtime dep)
     "types-PyYAML",     # mypy-strict stubs for pyyaml (type-only, not a runtime dep)
 ]
 
