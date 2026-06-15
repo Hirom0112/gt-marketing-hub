@@ -154,7 +154,9 @@ def test_unsourced_empirical_claim_fails_v2(params: Params, settings_no_key: Set
         family_id=FID,
         body="Ninety percent of our families re-enroll the following year.",
         claims=[
-            Claim(text="Ninety percent of our families re-enroll the following year.", source_ref=None)
+            Claim(
+                text="Ninety percent of our families re-enroll the following year.", source_ref=None
+            )
         ],
     )
     blocked = evaluate_message(
