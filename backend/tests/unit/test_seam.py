@@ -21,13 +21,10 @@ from uuid import uuid4
 from app.core.seam import (
     MirrorState,
     ReconcileDirection,
-    ReconcileProposal,
-    ReconcileResult,
     apply_reconcile,
     derive_seam_status,
     propose_reconcile,
 )
-
 from app.data.models import FamilyRecord, SeamStatus, Stage
 
 # A fixed clock so every comparison is exact and reproducible (no magic numbers
