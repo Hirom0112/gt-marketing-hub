@@ -1,4 +1,10 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import {
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within,
+} from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import EnrollmentWorkspace from '../workspaces/EnrollmentWorkspace';
 
@@ -217,6 +223,42 @@ describe('EnrollmentWorkspace', () => {
     expect(
       await screen.findByText('Left a voicemail with the family.'),
     ).toBeInTheDocument();
+  });
+
+  it('shows a situation bar with derived recovery headline numbers', async () => {
+    vi.stubGlobal('fetch', routedFetchMock());
+    render(<EnrollmentWorkspace />);
+
+    // The situation bar renders, derived from the /work-queue rows (one overdue,
+    // one fresh — both un-followed-up ⇒ stalled=2; overdue=1; both recoverable ⇒
+    // recoverable $ = 10474 + 30000 = $40,474).
+    const bar = await screen.findByTestId('situation-bar');
+    expect(within(bar).getByTestId('situation-stalled')).toHaveTextContent('2');
+    expect(within(bar).getByTestId('situation-overdue')).toHaveTextContent('1');
+    expect(within(bar).getByTestId('situation-recoverable')).toHaveTextContent(
+      '$40,474',
+    );
+  });
+
+  it('toggles the left column between board and calendar in one click', async () => {
+    vi.stubGlobal('fetch', routedFetchMock());
+    render(<EnrollmentWorkspace />);
+
+    // Board is the default: the work queue is visible, the calendar is not.
+    expect(await screen.findByTestId('work-queue')).toBeInTheDocument();
+    expect(screen.queryByTestId('enrollment-calendar')).not.toBeInTheDocument();
+
+    // One click on the Calendar segment swaps the column.
+    const toggle = screen.getByTestId('enrollment-view-toggle');
+    fireEvent.click(within(toggle).getByRole('tab', { name: /calendar/i }));
+
+    expect(await screen.findByTestId('enrollment-calendar')).toBeInTheDocument();
+    expect(screen.queryByTestId('work-queue')).not.toBeInTheDocument();
+
+    // ...and back to the board.
+    fireEvent.click(within(toggle).getByRole('tab', { name: /board/i }));
+    expect(await screen.findByTestId('work-queue')).toBeInTheDocument();
+    expect(screen.queryByTestId('enrollment-calendar')).not.toBeInTheDocument();
   });
 
   it('refreshes the deal view + notes after an approved follow-up', async () => {

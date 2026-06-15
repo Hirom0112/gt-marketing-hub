@@ -1,4 +1,10 @@
-import { render, screen, waitFor, within } from '@testing-library/react';
+import {
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within,
+} from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import WorkQueue from '../WorkQueue';
 
@@ -92,5 +98,60 @@ describe('WorkQueue', () => {
     const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit?];
     expect(url).toMatch(/\/work-queue$/);
     expect(init?.method ?? 'GET').toBe('GET');
+  });
+});
+
+// A 25-row ranked payload (score desc) for the priority-cap behavior — the queue
+// is a priority queue, not a roster, so it shows the TOP 10 by default and an
+// expander reveals the rest.
+const BIG_QUEUE = Array.from({ length: 25 }, (_, i) => ({
+  family_id: `fam-${i}`,
+  display_name: `Family ${i}`,
+  current_stage: 'apply',
+  score: 1 - i * 0.01,
+  recoverability: 0.5,
+  value: 1000 + i,
+  contact_status: 'fresh',
+  last_contact_at: null,
+}));
+
+describe('WorkQueue priority cap', () => {
+  beforeEach(() => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => ({
+        ok: true,
+        status: 200,
+        json: async () => BIG_QUEUE,
+      })),
+    );
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+
+  it('caps to the top 10 rows by default with a count label', async () => {
+    render(<WorkQueue />);
+    await screen.findByText('Family 0');
+
+    expect(screen.getAllByTestId('work-queue-row')).toHaveLength(10);
+    // The cap label states how many of the full queue are showing.
+    expect(screen.getByTestId('work-queue-count')).toHaveTextContent(
+      'showing top 10 of 25',
+    );
+    // The 11th-ranked family is hidden until expanded.
+    expect(screen.queryByText('Family 10')).not.toBeInTheDocument();
+  });
+
+  it('reveals the full queue when the expander is clicked', async () => {
+    render(<WorkQueue />);
+    await screen.findByText('Family 0');
+
+    fireEvent.click(screen.getByTestId('work-queue-expander'));
+
+    expect(screen.getAllByTestId('work-queue-row')).toHaveLength(25);
+    expect(screen.getByText('Family 24')).toBeInTheDocument();
   });
 });

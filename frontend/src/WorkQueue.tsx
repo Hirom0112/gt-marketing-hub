@@ -1,9 +1,17 @@
 import { useEffect, useState } from 'react';
 import { ListOrdered } from 'lucide-react';
 import { apiBaseUrl } from './config';
-import { Card, Chip } from './ui';
+import { Button, Card, Chip } from './ui';
 import RecencyChip from './enrollment/RecencyChip';
 import { isContactStatus, recencyVars } from './enrollment/recency';
+
+// The work queue is a PRIORITY queue (FR-2.5), not a roster — by default it
+// surfaces only the top families to recover (it arrives already sorted by score
+// desc), then an expander reveals the full ranked list. Keeping the default
+// short is what makes the Enrollment workspace a triage cockpit rather than a
+// wall of ~200 names. (A UI default, not a tunable ranking weight — the scoring
+// thresholds remain in params; this is just how many ranked rows show first.)
+const DEFAULT_VISIBLE = 10;
 
 // Work queue (FR-2.5). Fetches GET /work-queue — a list the server has already
 // ranked by score desc — and renders the families IN THE ORDER RECEIVED. The
@@ -45,6 +53,9 @@ export default function WorkQueue({
   onSelectFamily,
 }: WorkQueueProps = {}): JSX.Element {
   const [state, setState] = useState<LoadState>({ status: 'loading' });
+  // Collapsed by default → only the top DEFAULT_VISIBLE ranked rows show; the
+  // expander flips this to reveal the full queue.
+  const [expanded, setExpanded] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -87,19 +98,47 @@ export default function WorkQueue({
     );
   }
 
+  const total = state.items.length;
+  // Cap to the top N by default (the list is already score-sorted desc); the
+  // expander reveals the rest. Ranks (i + 1) stay correct because we slice off
+  // the head and keep the original index.
+  const visibleItems = expanded
+    ? state.items
+    : state.items.slice(0, DEFAULT_VISIBLE);
+  const hiddenCount = total - visibleItems.length;
+  const capped = total > DEFAULT_VISIBLE;
+
   return (
     <section aria-label="Work queue" data-testid="work-queue">
       <div
-        className="lab"
         style={{
-          display: 'inline-flex',
+          display: 'flex',
           alignItems: 'center',
-          gap: 'var(--s-1)',
+          justifyContent: 'space-between',
+          gap: 'var(--s-2)',
           marginBottom: 'var(--s-2)',
         }}
       >
-        <ListOrdered size={11} aria-hidden /> Work queue — ranked by recovery
-        value
+        <div
+          className="lab"
+          style={{
+            display: 'inline-flex',
+            alignItems: 'center',
+            gap: 'var(--s-1)',
+          }}
+        >
+          <ListOrdered size={11} aria-hidden /> Work queue — ranked by recovery
+          value
+        </div>
+        {capped && (
+          <span
+            className="lab"
+            data-testid="work-queue-count"
+            style={{ color: 'var(--muted)' }}
+          >
+            showing top {visibleItems.length} of {total}
+          </span>
+        )}
       </div>
       <h2 style={{ position: 'absolute', width: 1, height: 1, overflow: 'hidden', clip: 'rect(0 0 0 0)' }}>
         Work queue
@@ -109,7 +148,7 @@ export default function WorkQueue({
           className="work-queue-list"
           style={{ listStyle: 'none', margin: 0, padding: 0 }}
         >
-          {state.items.map((item, i) => {
+          {visibleItems.map((item, i) => {
             const selectable = onSelectFamily !== undefined;
             const isActive = selectable && item.family_id === selectedFamilyId;
             // Recency rail: a colored left border by contact_status when the row
@@ -171,6 +210,20 @@ export default function WorkQueue({
           })}
         </ol>
       </Card>
+      {capped && (
+        <div style={{ marginTop: 'var(--s-2)' }}>
+          <Button
+            variant="default"
+            data-testid="work-queue-expander"
+            aria-expanded={expanded}
+            onClick={() => setExpanded((on) => !on)}
+          >
+            {expanded
+              ? 'show top 10'
+              : `show full queue (${hiddenCount} more)`}
+          </Button>
+        </div>
+      )}
     </section>
   );
 }

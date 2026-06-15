@@ -86,3 +86,55 @@ export function recencyVars(status: ContactStatus): RecencyVars {
 export function recencyClass(status: ContactStatus): string {
   return `recency-${status}`;
 }
+
+// ── Recovery-board situation bar (S9 W4 / Recovery Board front door) ──────────
+// The headline numbers the Enrollment situation bar shows are DERIVED client-side
+// from the already-fetched /work-queue rows — never hardcoded (INV-11 spirit).
+// This pure summary lives here (the recency logic home) so it is unit-testable
+// and reads the same ContactStatus the rows carry.
+
+// The minimal row shape the summary reads from a /work-queue item — identity is
+// irrelevant; only the recovery-relevant signals (recency + dollar value) matter.
+export interface RecoverableRow {
+  value: number;
+  contact_status?: string | null;
+}
+
+// The three derived headline figures the situation bar renders.
+export interface SituationSummary {
+  // Families still on the active worklist that have NOT been followed up or
+  // closed — i.e. an open, un-actioned recovery (fresh or overdue recency).
+  stalled: number;
+  // Families aged past the follow-up threshold and not yet contacted.
+  overdue: number;
+  // Total recoverable dollar value still in play — the sum of `value` over the
+  // rows that are still recoverable (anything not already closed/won).
+  recoverableValue: number;
+}
+
+// True if a row is still in play (recoverable) — not yet closed/won. An unknown
+// or absent status is treated as recoverable (it's still on the active queue).
+function isRecoverable(status: string | null | undefined): boolean {
+  return status !== 'closed';
+}
+
+// True if a row is "stalled": still recoverable AND not yet followed up — the
+// fresh/overdue (un-actioned) families the recovery board exists to surface.
+function isStalled(status: string | null | undefined): boolean {
+  return isRecoverable(status) && status !== 'followed_up';
+}
+
+// Fold a list of work-queue rows into the situation-bar headline figures. Pure:
+// a function of its input alone, no fetch, no clock.
+export function summarizeRecovery(rows: readonly RecoverableRow[]): SituationSummary {
+  let stalled = 0;
+  let overdue = 0;
+  let recoverableValue = 0;
+  for (const row of rows) {
+    const status = row.contact_status;
+    if (isStalled(status)) stalled += 1;
+    if (status === 'overdue') overdue += 1;
+    if (isRecoverable(status)) recoverableValue += row.value;
+  }
+  return { stalled, overdue, recoverableValue };
+}
