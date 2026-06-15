@@ -28,6 +28,7 @@ import inspect
 from uuid import uuid4
 
 import pytest
+from pydantic import ValidationError
 
 from app.adapters.funding.base import FundingSignal, FundingSignalAdapter
 from app.adapters.funding.simulated import SimulatedFundingSignalAdapter
@@ -57,14 +58,11 @@ def test_read_signal_returns_funding_signal() -> None:
     assert SimulatedFundingSignalAdapter().read_signal(family_id) == signal
 
     # Frozen — a GT-controlled signal is an immutable read, not a mutable record.
-    with pytest.raises(Exception):
+    with pytest.raises(ValidationError):
         signal.gt_confirmed = True  # type: ignore[misc]
 
     # Derivation, not a constant: at least one other family differs across a sample.
-    others = {
-        adapter.read_signal(uuid4())
-        for _ in range(64)
-    }
+    others = {adapter.read_signal(uuid4()) for _ in range(64)}
     assert len(others) > 1
 
 
