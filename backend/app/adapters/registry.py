@@ -4,16 +4,22 @@
 NFR-8). v1 wires all to Simulated. Going live = flipping config + supplying the
 production impl, with zero changes to `core/` or `ai/`."
 
-The selector keys on ``SEND_MODE`` — read **only** through
-:func:`app.core.settings.get_settings` (the §5 env seam; never ``os.environ``
-here). v1 is locked to ``simulate`` (D-9, OUT-3) ⇒ the simulated impl. ``live``
-**raises** ``NotImplementedError``: no production CRM impl exists in v1, and the
-INV-9 posture is fail-loud — never silently fall through to a live send.
+Most boundaries key on ``SEND_MODE`` and are locked to ``simulate`` in v1 (D-9,
+OUT-1/2/3) — ``live`` **raises** ``NotImplementedError`` (no prod impl; fail loud).
+The **CRM** boundary is the exception (S10): it has a production impl
+(:class:`app.adapters.hubspot.live_adapter.LiveHubSpotCRMAdapter`) selected by its
+own ``CRM_MODE`` seam, so it can push SYNTHETIC data into the real portal behind the
+four guards without unlocking the simulated send/social/media modes. Every selector
+reads **only** through :func:`app.core.settings.get_settings` (the §5 env seam;
+never ``os.environ`` here).
 """
 
 from __future__ import annotations
 
 import os
+from pathlib import Path
+
+import httpx
 
 from app.adapters.brand_memory.base import BrandMemoryStore
 from app.adapters.brand_memory.sqlite_store import SqliteBrandMemoryStore
@@ -22,12 +28,14 @@ from app.adapters.funding.simulated import SimulatedFundingSignalAdapter
 from app.adapters.geo_sampling.base import GeoSamplingAdapter
 from app.adapters.geo_sampling.simulated import SimulatedGeoSamplingAdapter
 from app.adapters.hubspot.crm_adapter import CRMAdapter, SimulatedCRMAdapter
+from app.adapters.hubspot.live_adapter import LiveHubSpotCRMAdapter
 from app.adapters.media.base import MediaGenAdapter
 from app.adapters.media.placeholder import PlaceholderMediaGenAdapter
 from app.adapters.sentiment.base import SentimentAdapter
 from app.adapters.sentiment.placeholder import PlaceholderSentimentAdapter
 from app.adapters.social.base import SocialAdapter
 from app.adapters.social.simulated import SimulatedSocialAdapter
+from app.core.params import Crm, load_params
 from app.core.settings import get_settings
 
 # Default on-disk home for the persistent brand-memory store when no override is
@@ -35,25 +43,70 @@ from app.core.settings import get_settings
 # hardcoded magic in logic (INV-11) — overridable via ``BRAND_MEMORY_DB_PATH``.
 _DEFAULT_BRAND_MEMORY_DB_PATH = "data/brand_memory.db"
 
+# HubSpot CRM v3 base URL — the fixed third-party API host (not a tunable).
+_HUBSPOT_BASE_URL = "https://api.hubapi.com"
+
+# Committed example params, used as a fallback when no local params.yaml exists
+# (it is gitignored / absent in this env). Resolved relative to the repo root:
+# backend/app/adapters/registry.py → parents[3] is the repo root. Same fallback
+# the API dependency layer uses (app/api/deps.py) — same values either way (INV-11).
+_EXAMPLE_PARAMS = Path(__file__).resolve().parents[3] / "params" / "params.example.yaml"
+
+
+def _load_crm_params() -> Crm:
+    """Load the ``crm`` params block, falling back to the committed example.
+
+    ``load_params()`` resolves ``params/params.yaml``; when that gitignored file is
+    absent we fall back to ``params/params.example.yaml`` so the live adapter is
+    constructable in any env (the example carries the same crm block; INV-11).
+    """
+    try:
+        return load_params().crm
+    except FileNotFoundError:
+        return load_params(_EXAMPLE_PARAMS).crm
+
 
 def get_crm_adapter() -> CRMAdapter:
-    """Return the CRM adapter impl for the current ``SEND_MODE`` (§7, NFR-8).
+    """Return the CRM adapter impl for the current ``CRM_MODE`` (S10 W2; §7, NFR-8).
 
-    - ``simulate`` (v1 lock) ⇒ a fresh :class:`SimulatedCRMAdapter` (records,
-      never sends; INV-9).
-    - ``live`` ⇒ ``NotImplementedError`` — no production impl in v1; fail loud
-      rather than silently send (INV-9, OUT-3).
+    The CRM boundary is the one with a production impl (the live HubSpot adapter),
+    so it keys on its own ``CRM_MODE`` seam, independent of the v1 ``SEND_MODE`` lock:
+
+    - ``simulate`` (default) ⇒ a fresh :class:`SimulatedCRMAdapter` (records, never
+      sends; INV-9) — unchanged behavior.
+    - ``live`` + token + **kill switch set** ⇒ degrade to :class:`SimulatedCRMAdapter`
+      (guard 3, INV-8) — never a live call when the kill switch is on.
+    - ``live`` + token + no kill switch ⇒ :class:`LiveHubSpotCRMAdapter` (pushes
+      synthetic data behind the four guards).
+    - ``live`` + **no token** ⇒ ``RuntimeError`` — fail loud on misconfig rather
+      than silently degrading to simulated (INV-9).
 
     Raises:
-        NotImplementedError: when ``SEND_MODE=live`` (no production impl in v1).
+        RuntimeError: when ``CRM_MODE=live`` but no HubSpot token is configured.
     """
-    mode = get_settings().send_mode
-    if mode == "simulate":
+    settings = get_settings()
+    if settings.crm_mode == "simulate":
         return SimulatedCRMAdapter()
-    raise NotImplementedError(
-        "No production CRMAdapter in v1: SEND_MODE='live' is reserved for a "
-        "supplied production impl (ARCHITECTURE.md §7; INV-9 fail-loud). "
-        "v1 is locked to SEND_MODE='simulate'."
+
+    # CRM_MODE == "live" beyond this point.
+    if settings.hubspot_private_app_token is None:
+        raise RuntimeError(
+            "CRM_MODE='live' requires HUBSPOT_PRIVATE_APP_TOKEN — none is configured. "
+            "Fail loud on misconfig rather than silently degrade to simulated "
+            "(INV-9). Set the token or use CRM_MODE='simulate'."
+        )
+
+    # Guard 3 (INV-8): the kill switch forces the simulated adapter — never a live
+    # call — even with a valid token. Degrade, logged at the registry seam.
+    if settings.hubspot_kill_switch:
+        return SimulatedCRMAdapter()
+
+    client = httpx.Client(base_url=_HUBSPOT_BASE_URL)
+    return LiveHubSpotCRMAdapter(
+        client=client,
+        token=settings.hubspot_private_app_token,
+        crm=_load_crm_params(),
+        calls_per_run_cap=settings.hubspot_calls_per_run_cap,
     )
 
 

@@ -6,11 +6,15 @@ wires all to Simulated: a write-shaped call is **recorded, never sent** — ther
 is no network client at all in the simulated impl, so "records, never sends" is
 provable structurally (an in-memory log) rather than by mocking sockets.
 
-These are the §4.1-adapter-scope RED tests: the contract is that `send_mode ==
-"simulate"` (the v1 lock, settings/D-9) yields the `SimulatedCRMAdapter`, that
+These are the §4.1-adapter-scope tests for the simulated impl: the contract is
+that `CRM_MODE == "simulate"` (the default) yields the `SimulatedCRMAdapter`, that
 `send_message` returns a `SendResult(simulated=True, ...)` and appends to the
-recorder, and that `send_mode == "live"` fails **loud** (`NotImplementedError`)
-because no production impl exists in v1 — never a silent live send.
+recorder. The CRM boundary's `live` mode is the ONE adapter that DOES have a
+production impl (S10 W2, `LiveHubSpotCRMAdapter`) — its selection (and the
+fail-loud-on-misconfig, kill-switch-degrade, and guard behavior) is asserted in
+``test_live_hubspot_adapter.py``. The `SEND_MODE=live ⇒ NotImplementedError` lock
+that once lived here is superseded: the CRM seam now keys on `CRM_MODE`, while the
+OTHER adapters keep their `SEND_MODE` locks.
 """
 
 from __future__ import annotations
@@ -46,13 +50,13 @@ def _family() -> FamilyRecord:
 
 
 def test_crm_adapter_send_is_simulated(monkeypatch: pytest.MonkeyPatch) -> None:
-    """`SEND_MODE=simulate` ⇒ sim adapter records the send, no live send (INV-9).
+    """`CRM_MODE=simulate` ⇒ sim adapter records the send, no live send (INV-9).
 
     The registry returns a `SimulatedCRMAdapter`; `send_message` returns a
     `SendResult` flagged `simulated=True`, and the call is appended to the
     in-memory recorder — proving "records, never sends".
     """
-    monkeypatch.setenv("SEND_MODE", "simulate")
+    monkeypatch.setenv("CRM_MODE", "simulate")
 
     adapter = get_crm_adapter()
     assert isinstance(adapter, SimulatedCRMAdapter)
@@ -72,16 +76,22 @@ def test_crm_adapter_send_is_simulated(monkeypatch: pytest.MonkeyPatch) -> None:
     assert adapter.sent_log[0].recorded_id == result.recorded_id
 
 
-def test_registry_live_mode_not_implemented(monkeypatch: pytest.MonkeyPatch) -> None:
-    """`SEND_MODE=live` ⇒ fail loud (no production impl in v1; never silent send)."""
+def test_crm_simulate_is_unaffected_by_send_mode_live(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The CRM seam keys on `CRM_MODE`, not `SEND_MODE`: `SEND_MODE=live` is moot here.
+
+    Supersedes the old `SEND_MODE=live ⇒ NotImplementedError` CRM lock: the CRM
+    boundary now has its own `CRM_MODE` seam (S10). With `CRM_MODE` defaulting to
+    `simulate`, flipping `SEND_MODE` to `live` (which still locks the OTHER
+    adapters) leaves the CRM adapter simulated — no fall-through to a live write.
+    """
     monkeypatch.setenv("SEND_MODE", "live")
-    with pytest.raises(NotImplementedError):
-        get_crm_adapter()
+    monkeypatch.delenv("CRM_MODE", raising=False)
+    assert isinstance(get_crm_adapter(), SimulatedCRMAdapter)
 
 
 def test_push_family_records_sync(monkeypatch: pytest.MonkeyPatch) -> None:
     """`push_family` is write-shaped: sim records it and returns a `SyncResult`."""
-    monkeypatch.setenv("SEND_MODE", "simulate")
+    monkeypatch.setenv("CRM_MODE", "simulate")
     adapter = get_crm_adapter()
     record = _family()
 
@@ -96,7 +106,7 @@ def test_push_family_records_sync(monkeypatch: pytest.MonkeyPatch) -> None:
 
 def test_read_mirror_returns_seam_mirrorstate(monkeypatch: pytest.MonkeyPatch) -> None:
     """`read_mirror` feeds the §4.7 deriver: it returns the existing MirrorState."""
-    monkeypatch.setenv("SEND_MODE", "simulate")
+    monkeypatch.setenv("CRM_MODE", "simulate")
     adapter = get_crm_adapter()
     record = _family()
 
