@@ -6,6 +6,7 @@ pipeline + Family Record GET endpoints, served over the in-memory repository
 """
 
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 from mangum import Mangum
 
 from app.api.ai_actions import router as ai_actions_router
@@ -18,8 +19,24 @@ from app.api.marketing import router as marketing_router
 from app.api.notes import router as notes_router
 from app.api.scoreboard import router as scoreboard_router
 from app.api.seam import router as seam_router
+from app.core.settings import get_settings
 
 app = FastAPI(title="GT Growth Cockpit", version="0.1.0")
+
+# CORS — the React app runs on a separate origin (Vite dev server / built host),
+# so the browser sends cross-origin requests the API must explicitly allow-list
+# (§5.1 GT_CORS_ALLOW_ORIGINS). Without this every front-end fetch fails the
+# browser's same-origin check ("Load failed") even though the API answers 200.
+# Origins come from the typed env seam (INV-11) — never `*`, which would let any
+# site call the API. Read once at construction (mirrors the deps singleton).
+_settings = get_settings()
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=list(_settings.cors_allow_origins),
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 
 @app.get("/health")

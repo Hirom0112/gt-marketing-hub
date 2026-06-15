@@ -34,6 +34,14 @@ def _env_bool(name: str, default: bool) -> bool:
     return raw.strip().lower() in {"1", "true", "yes", "on"}
 
 
+def _env_list(name: str, default: tuple[str, ...]) -> tuple[str, ...]:
+    """Parse a comma-separated env var into a tuple (empty/absent ⇒ default)."""
+    raw = os.environ.get(name)
+    if raw is None or raw.strip() == "":
+        return default
+    return tuple(item.strip() for item in raw.split(",") if item.strip())
+
+
 def _env_int(name: str, default: int) -> int:
     """Parse an integer env var with a default (empty/absent ⇒ default)."""
     raw = os.environ.get(name)
@@ -76,6 +84,12 @@ class Settings(BaseModel):
     media_gen_mode: MediaGenMode = "placeholder"
     social_post_mode: SocialPostMode = "simulate"
 
+    # Browser origins allowed to call the API (CORS; §5.1). The React app runs on
+    # a separate origin (Vite dev server / built host) so it must be allow-listed
+    # explicitly — never `*`, which would let any site call the API. Defaults to
+    # the local dev origins; prod sets GT_CORS_ALLOW_ORIGINS to the real host.
+    cors_allow_origins: tuple[str, ...] = ("http://localhost:5173", "http://localhost:3000")
+
     @property
     def llm_available(self) -> bool:
         """True only when a live LLM call is permitted: a key is set AND no kill switch.
@@ -112,6 +126,10 @@ class Settings(BaseModel):
             send_mode=send_mode,  # type: ignore[arg-type]
             media_gen_mode=media_mode,  # type: ignore[arg-type]
             social_post_mode=social_mode,  # type: ignore[arg-type]
+            cors_allow_origins=_env_list(
+                "GT_CORS_ALLOW_ORIGINS",
+                ("http://localhost:5173", "http://localhost:3000"),
+            ),
         )
 
 
