@@ -1,7 +1,11 @@
 import { useEffect, useState } from 'react';
-import { AlertTriangle } from 'lucide-react';
-import { apiBaseUrl } from './config';
-import { Chip } from './ui';
+import { AlertTriangle, CheckCircle2, ExternalLink, UploadCloud } from 'lucide-react';
+import {
+  apiBaseUrl,
+  hubspotContactUrl,
+  hubspotDealUrl,
+} from './config';
+import { Button, Chip } from './ui';
 import RecencyChip from './enrollment/RecencyChip';
 
 // Deal view (FR-2.2). Fetches GET /families/{id} and surfaces the deal_view
@@ -34,6 +38,24 @@ interface DealViewData {
 interface FamilyResponse {
   deal_view: DealViewData;
 }
+
+// POST /enrollment/families/{id}/seed response (S10 W3). The live HubSpot Deal +
+// Contact ids are the proof-of-capture the capture panel deep-links; seam_status
+// flips to `synced` once the push lands.
+interface SeedResponse {
+  family_id: string;
+  simulated: boolean;
+  deal_id: string;
+  contact_id: string | null;
+  stage: string;
+  seam_status: string;
+}
+
+type SeedState =
+  | { status: 'idle' }
+  | { status: 'seeding' }
+  | { status: 'error'; message: string }
+  | { status: 'captured'; data: SeedResponse };
 
 interface DealViewProps {
   familyId: string;
@@ -90,6 +112,29 @@ export default function DealView({
   refreshKey,
 }: DealViewProps): JSX.Element {
   const [state, setState] = useState<LoadState>({ status: 'loading' });
+  const [seed, setSeed] = useState<SeedState>({ status: 'idle' });
+
+  function seedToHubSpot(): void {
+    setSeed({ status: 'seeding' });
+    fetch(`${apiBaseUrl}/enrollment/families/${familyId}/seed`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+    })
+      .then((res) => {
+        if (!res.ok) throw new Error(`seed request failed: ${res.status}`);
+        return res.json() as Promise<SeedResponse>;
+      })
+      .then((data) => setSeed({ status: 'captured', data }))
+      .catch((err: unknown) => {
+        const message = err instanceof Error ? err.message : 'unknown error';
+        setSeed({ status: 'error', message });
+      });
+  }
+
+  useEffect(() => {
+    // A new family resets the capture state (no stale ids across selections).
+    setSeed({ status: 'idle' });
+  }, [familyId]);
 
   useEffect(() => {
     let cancelled = false;
@@ -254,10 +299,153 @@ export default function DealView({
         />
         <DealField
           label="CRM seam status"
-          value={deal.crm_seam_status}
+          value={
+            seed.status === 'captured'
+              ? seed.data.seam_status
+              : deal.crm_seam_status
+          }
           testId="deal-seam-status"
         />
       </dl>
+
+      {/* "Seed to HubSpot" (S10 W3) — push this synthetic family live into the
+          real portal, then surface the captured Deal + Contact ids as deep links.
+          The deterministic backend route owns the write (INV-2); this button only
+          triggers it and renders the proof. */}
+      <div
+        style={{
+          marginTop: 'var(--s-3)',
+          display: 'flex',
+          alignItems: 'center',
+          gap: 'var(--s-2)',
+          flexWrap: 'wrap',
+        }}
+      >
+        <Button
+          variant="primary"
+          icon={UploadCloud}
+          data-testid="seed-hubspot"
+          onClick={seedToHubSpot}
+          disabled={seed.status === 'seeding'}
+        >
+          {seed.status === 'seeding' ? 'Seeding…' : 'Seed to HubSpot'}
+        </Button>
+        {seed.status === 'error' && (
+          <span
+            data-testid="seed-error"
+            role="alert"
+            style={{ fontSize: 'var(--fs-sm)', color: 'var(--signal-ink)' }}
+          >
+            {seed.message}
+          </span>
+        )}
+      </div>
+
+      {seed.status === 'captured' && (
+        <CapturePanel data={seed.data} />
+      )}
     </section>
+  );
+}
+
+// The proof-of-capture panel (S10 W3). Renders the live HubSpot Deal + Contact
+// ids returned by the seed route as click-through deep links into the real
+// portal, plus the flipped seam badge — "✓ captured in HubSpot."
+function CapturePanel({ data }: { data: SeedResponse }): JSX.Element {
+  return (
+    <div
+      data-testid="capture-panel"
+      role="status"
+      style={{
+        marginTop: 'var(--s-3)',
+        padding: 'var(--s-3) var(--s-4)',
+        background: 'var(--flow-wash)',
+        border: '1px solid var(--flow)',
+        borderRadius: 'var(--r-md)',
+      }}
+    >
+      <div
+        className="lab"
+        style={{
+          color: 'var(--flow-ink)',
+          display: 'inline-flex',
+          alignItems: 'center',
+          gap: 'var(--s-1)',
+        }}
+      >
+        <CheckCircle2 size={11} aria-hidden /> Captured in HubSpot
+        {data.simulated ? ' (simulated)' : ''}
+      </div>
+      <div
+        style={{
+          marginTop: 'var(--s-2)',
+          display: 'flex',
+          flexWrap: 'wrap',
+          gap: 'var(--s-3)',
+        }}
+      >
+        <CaptureLink
+          label="Deal"
+          href={hubspotDealUrl(data.deal_id)}
+          id={data.deal_id}
+          testId="capture-deal-link"
+        />
+        {data.contact_id != null && (
+          <CaptureLink
+            label="Contact"
+            href={hubspotContactUrl(data.contact_id)}
+            id={data.contact_id}
+            testId="capture-contact-link"
+          />
+        )}
+        <div>
+          <div className="lab">Seam</div>
+          <div
+            data-testid="capture-seam-status"
+            className="mono"
+            style={{ fontSize: 'var(--fs-sm)', color: 'var(--flow-ink)', marginTop: 2 }}
+          >
+            {data.seam_status}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// One labelled deep link into a live HubSpot record.
+function CaptureLink({
+  label,
+  href,
+  id,
+  testId,
+}: {
+  label: string;
+  href: string;
+  id: string;
+  testId: string;
+}): JSX.Element {
+  return (
+    <div>
+      <div className="lab">{label}</div>
+      <a
+        href={href}
+        target="_blank"
+        rel="noreferrer"
+        data-testid={testId}
+        className="mono"
+        style={{
+          display: 'inline-flex',
+          alignItems: 'center',
+          gap: 'var(--s-1)',
+          fontSize: 'var(--fs-sm)',
+          color: 'var(--flow-ink)',
+          marginTop: 2,
+        }}
+      >
+        {id}
+        <ExternalLink size={11} aria-hidden />
+      </a>
+    </div>
   );
 }

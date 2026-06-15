@@ -100,6 +100,26 @@ describe('ActionPanel', () => {
     expect(init?.method).toBe('POST');
   });
 
+  it('deep-links the live HubSpot Note on an approved follow-up (S10 W3)', async () => {
+    render(<ActionPanel familyId="fam-a" />);
+    fireEvent.click(screen.getByTestId('draft-email'));
+    const approve = await screen.findByTestId('approve-action');
+
+    // Approve returns the live note id (CRM_MODE=live writes a HubSpot Note).
+    mockFetchOnce({
+      action: 'approve',
+      seam_status: 'synced',
+      note_id: 'note-77665544',
+    });
+    fireEvent.click(approve);
+
+    const noteLink = await screen.findByTestId('decision-note-link');
+    expect(noteLink).toHaveAttribute(
+      'href',
+      'https://app-na2.hubspot.com/contacts/246504420/record/0-46/note-77665544',
+    );
+  });
+
   it('test_red_eval_disables_action_in_ui', async () => {
     mockFetchOnce(BLOCKED_DRAFT);
     render(<ActionPanel familyId="fam-a" />);

@@ -3,6 +3,7 @@ import type { ReactNode } from 'react';
 import type { LucideIcon } from 'lucide-react';
 import {
   Check,
+  ExternalLink,
   Mail,
   Pencil,
   ShieldAlert,
@@ -10,7 +11,7 @@ import {
   Trash2,
   Zap,
 } from 'lucide-react';
-import { apiBaseUrl } from './config';
+import { apiBaseUrl, hubspotNoteUrl } from './config';
 import { Button } from './ui';
 
 // Enrollment AI action panel (FR-2.4) + fail-closed eval gate (FR-4.5 / INV-3).
@@ -60,6 +61,9 @@ interface DecisionResponse {
   decision_id?: string;
   action: string;
   seam_status?: string;
+  // The adapter's recorded send id — under CRM_MODE=live the live HubSpot Note
+  // id, deep-linked as proof the approved follow-up landed in the portal (W3).
+  note_id?: string | null;
 }
 
 type DecisionKind = 'approve' | 'edit' | 'discard';
@@ -381,14 +385,15 @@ function DraftResult({
 
   if (decision) {
     return (
-      <p
+      <div
         data-testid="decision-recorded"
         role="status"
         style={{
           marginTop: 'var(--s-3)',
-          display: 'inline-flex',
+          display: 'flex',
+          flexWrap: 'wrap',
           alignItems: 'center',
-          gap: 'var(--s-1)',
+          gap: 'var(--s-2)',
           fontSize: 'var(--fs-sm)',
           color: 'var(--flow-ink)',
           background: 'var(--flow-wash)',
@@ -397,9 +402,29 @@ function DraftResult({
           padding: 'var(--s-2) var(--s-3)',
         }}
       >
-        <Check size={13} aria-hidden /> Decision recorded: {decision.action}
-        {decision.seam_status ? ` (seam: ${decision.seam_status})` : ''}
-      </p>
+        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 'var(--s-1)' }}>
+          <Check size={13} aria-hidden /> Decision recorded: {decision.action}
+          {decision.seam_status ? ` (seam: ${decision.seam_status})` : ''}
+        </span>
+        {decision.action === 'approve' && decision.note_id && (
+          <a
+            href={hubspotNoteUrl(decision.note_id)}
+            target="_blank"
+            rel="noreferrer"
+            data-testid="decision-note-link"
+            className="mono"
+            style={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: 'var(--s-1)',
+              color: 'var(--flow-ink)',
+            }}
+          >
+            HubSpot Note {decision.note_id}
+            <ExternalLink size={11} aria-hidden />
+          </a>
+        )}
+      </div>
     );
   }
 

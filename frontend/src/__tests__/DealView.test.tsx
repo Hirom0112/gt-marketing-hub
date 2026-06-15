@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import DealView from '../DealView';
 
@@ -118,6 +118,82 @@ describe('DealView', () => {
     expect(screen.getByTestId('deal-stall-reason')).toHaveTextContent('—');
     expect(screen.getByTestId('deal-funding-type')).toHaveTextContent(
       'Self-pay',
+    );
+  });
+});
+
+// --------------------------------------------------------------------------- #
+// S10 W3 — "Seed to HubSpot" button + capture/trace panel (proof-of-capture).
+// --------------------------------------------------------------------------- #
+
+// A seed-route response shape (POST /enrollment/families/{id}/seed).
+const SEED_RESPONSE = {
+  family_id: 'fam-123',
+  simulated: false,
+  deal_id: 'deal-99887766',
+  contact_id: 'contact-11223344',
+  stage: 'interest',
+  seam_status: 'synced',
+};
+
+// A fetch stub that serves the GET /families/{id} payload, then the seed POST.
+function mockSeedFetch(): ReturnType<typeof vi.fn> {
+  const fn = vi.fn(async (url: string, init?: RequestInit) => {
+    if (init?.method === 'POST' && /\/seed$/.test(url)) {
+      return { ok: true, status: 200, json: async () => SEED_RESPONSE };
+    }
+    return { ok: true, status: 200, json: async () => INTEREST_PAYLOAD };
+  });
+  vi.stubGlobal('fetch', fn);
+  return fn as unknown as ReturnType<typeof vi.fn>;
+}
+
+describe('DealView — Seed to HubSpot capture panel', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+
+  it('renders the Seed to HubSpot button', async () => {
+    mockSeedFetch();
+    render(<DealView familyId="fam-123" />);
+    expect(await screen.findByTestId('seed-hubspot')).toBeInTheDocument();
+  });
+
+  it('calls the seed route and shows the capture panel with live deep links', async () => {
+    const fn = mockSeedFetch();
+    render(<DealView familyId="fam-123" />);
+
+    fireEvent.click(await screen.findByTestId('seed-hubspot'));
+
+    // The capture panel surfaces once the seed succeeds.
+    const panel = await screen.findByTestId('capture-panel');
+    expect(panel).toBeInTheDocument();
+
+    // It POSTed the seed route for this family.
+    const seedCall = fn.mock.calls.find(
+      ([url, init]) =>
+        typeof url === 'string' &&
+        /\/enrollment\/families\/fam-123\/seed$/.test(url) &&
+        (init as RequestInit | undefined)?.method === 'POST',
+    );
+    expect(seedCall).toBeTruthy();
+
+    // The Deal + Contact deep links point at the live portal record routes.
+    const dealLink = screen.getByTestId('capture-deal-link');
+    expect(dealLink).toHaveAttribute(
+      'href',
+      'https://app-na2.hubspot.com/contacts/246504420/record/0-3/deal-99887766',
+    );
+    const contactLink = screen.getByTestId('capture-contact-link');
+    expect(contactLink).toHaveAttribute(
+      'href',
+      'https://app-na2.hubspot.com/contacts/246504420/record/0-1/contact-11223344',
+    );
+
+    // The seam badge flips to synced.
+    expect(screen.getByTestId('capture-seam-status')).toHaveTextContent(
+      'synced',
     );
   });
 });
