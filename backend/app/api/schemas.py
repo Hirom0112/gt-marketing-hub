@@ -93,27 +93,38 @@ class WorkQueueItem(BaseModel):
 
 
 class CalendarEntry(BaseModel):
-    """One family on the enrollment calendar (S9 W3; ARCH §6 `GET /enrollment/calendar`).
+    """One family on the enrollment calendar (S11 W1; ARCH §6 `GET /enrollment/calendar`).
 
     The month-view + color-coded board (Wave 4) renders one of these per family
-    whose ``apply_date`` (``app_form.submitted_at`` else spine ``created_at``)
-    falls in the requested month. ``contact_status`` is composed in the API layer
-    (now + audit log + params), same as the deal view (INV-2 core purity).
+    whose ``stall_date`` falls in the resolved month. ``stall_date`` (S11 W1;
+    ASSUMPTIONS A-16) is the grouping/anchor key — the first available of:
+    ``family.stalled_since`` → ``last_contact_at`` → ``created_at + overdue_days``
+    → ``created_at`` — so the surface clusters on when a family went quiet, not
+    when it applied. ``apply_date`` (``app_form.submitted_at`` else spine
+    ``created_at``) is retained for reference. ``contact_status`` is composed in
+    the API layer (now + audit log + params), same as the deal view (INV-2 core
+    purity). ``value`` (recovery dollars) and ``score`` (0..1) reuse the pure
+    work-queue scorer so the board can size/sort entries by recovery worth.
     """
 
     family_id: UUID
     display_name: str
+    stall_date: datetime
     apply_date: datetime
     current_stage: Stage
     contact_status: ContactStatus
+    value: float
+    score: float
 
 
 class CalendarResponse(BaseModel):
-    """The `GET /enrollment/calendar?month=YYYY-MM` payload (S9 W3; ARCH §6).
+    """The `GET /enrollment/calendar?month=YYYY-MM` payload (S11 W1; ARCH §6).
 
-    ``month`` echoes the requested ``YYYY-MM``; ``entries`` are the in-month
-    families sorted ascending by ``apply_date`` (empty list for a month with no
-    applications — never an error).
+    ``month`` echoes the **resolved** ``YYYY-MM`` (the actual month returned —
+    when the caller omits ``month`` it resolves to the YYYY-MM of the most-recent
+    ``stall_date``, so the client can read back what it got); ``entries`` are the
+    in-month families sorted ascending by ``stall_date`` (empty list for a month
+    with no stalls — never an error).
     """
 
     month: str

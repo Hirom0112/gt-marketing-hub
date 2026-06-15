@@ -7,7 +7,7 @@ store is swappable to Supabase with zero changes here (NFR-8).
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Annotated
 from uuid import UUID
 
@@ -115,6 +115,52 @@ def _apply_date(joined: JoinedFamily) -> datetime | None:
     if apply_date is None:
         apply_date = joined.family.created_at
     return apply_date
+
+
+def _stall_date(
+    joined: JoinedFamily,
+    *,
+    log: ObservabilityLog,
+    now: datetime,
+    params: Params,
+) -> datetime:
+    """The family's stall-anchor instant — the calendar grouping key (A-16; S11 W1).
+
+    Re-anchors the enrollment calendar on *when a family went quiet* rather than
+    when it applied (``_apply_date`` clusters in late 2025, opening the surface
+    empty on the current month). Resolves the first available of this precedence
+    chain (document order is the contract):
+
+    1. ``family.stalled_since`` — the spine's explicit stall instant.
+    2. ``last_contact_at(log, family_id)`` — the latest approved-outbound (A-14),
+       i.e. the last time we actually touched the family.
+    3. ``created_at + enrollment.contact.overdue_days`` (params — INV-11) — the
+       day an uncontacted family crossed into overdue.
+    4. ``created_at`` — the brand-new fallback.
+
+    Lives at the API layer (NOT ``core/``) because tiers 2–4 read ``now`` and the
+    audit ``log``, neither of which the pure core may touch (CLAUDE §3, INV-2) —
+    the same composition-root rationale as :func:`_recency_for`. Mirrors that
+    helper's style: ``now``/``log`` are passed in, read once per request.
+
+    Args:
+        joined: The spine row joined to its source rows.
+        log: The NFR-6 audit spine — the tier-2 ``last_contact_at`` source.
+        now: The request's reference time, read once at the api layer (the
+            ``created_at`` fallback when the spine carries no ``created_at``).
+        params: Loaded params (§8) — supplies ``enrollment.contact.overdue_days``.
+
+    Returns:
+        The resolved stall-anchor instant (never None — tier 4 always resolves).
+    """
+    family = joined.family
+    if family.stalled_since is not None:
+        return family.stalled_since
+    contacted_at = last_contact_at(log, family.family_id)
+    if contacted_at is not None:
+        return contacted_at
+    created_at = family.created_at or now
+    return created_at + timedelta(days=params.enrollment.contact.overdue_days)
 
 
 @router.get("/pipeline", response_model=PipelineResponse)
@@ -259,43 +305,71 @@ def get_enrollment_calendar(
     params: ParamsDep,
     log: LogDep,
     month: Annotated[
-        str,
+        str | None,
         Query(
             pattern=_MONTH_PATTERN,
-            description="Target month in YYYY-MM form (01-12); 422 on a bad format.",
+            description=(
+                "Target month in YYYY-MM form (01-12); 422 on a bad format. Optional — "
+                "when omitted, resolves to the month of the most-recent stall_date so the "
+                "surface opens non-empty."
+            ),
         ),
-    ],
+    ] = None,
 ) -> CalendarResponse:
-    """Families whose apply_date falls in ``month``, for the Wave 4 month view (§6).
+    """Families whose ``stall_date`` falls in ``month``, for the Wave 4 month view (§6).
 
-    A family's ``apply_date`` is ``app_form.submitted_at`` else the spine
-    ``created_at`` (the FR-2.2 deal-view rule, via :func:`_apply_date`). Only the
-    in-month families are returned, sorted ascending by ``apply_date``; a month
-    with no applications yields ``entries: []`` (never an error). Each entry
-    carries the api-composed ``contact_status`` (now + audit log + params), the
-    same recency composition as the deal view and the work queue (INV-2 core
-    purity — the deriver's ``now``/log reads stay at the api layer). No AI (INV-2).
+    Re-anchored on the derived ``stall_date`` (S11 W1; ASSUMPTIONS A-16) — the
+    first available of ``family.stalled_since`` → ``last_contact_at`` →
+    ``created_at + overdue_days`` → ``created_at`` (via :func:`_stall_date`) — so
+    the board clusters on when a family went quiet, not when it applied. The
+    ``month`` query param is **optional**: when omitted it resolves to the YYYY-MM
+    of the most-recent ``stall_date`` across all families (so the surface opens
+    non-empty), falling back to the month of ``now`` if there are zero families.
+    Only the in-month families are returned, sorted ascending by ``stall_date``; a
+    month with no stalls yields ``entries: []`` (never an error). Each entry keeps
+    ``apply_date`` for reference and carries the api-composed ``contact_status``
+    (now + audit log + params — the same recency composition as the deal view and
+    the work queue, INV-2 core purity) plus ``value``/``score`` from the pure
+    work-queue scorer. ``CalendarResponse.month`` echoes the **resolved** month.
+    No AI (INV-2).
     """
-    year_s, month_s = month.split("-")
-    year, mon = int(year_s), int(month_s)
     now = datetime.now(UTC)
 
-    dated: list[tuple[datetime, JoinedFamily]] = []
-    for joined in repository.list_joined():
-        apply_date = _apply_date(joined)
-        if apply_date is None or apply_date.year != year or apply_date.month != mon:
-            continue
-        dated.append((apply_date, joined))
-    dated.sort(key=lambda pair: pair[0])
+    # Compute every family's stall_date once (the grouping/anchor key) so the
+    # month resolution and the in-month filter read one consistent derivation.
+    stalled: list[tuple[datetime, JoinedFamily]] = [
+        (_stall_date(joined, log=log, now=now, params=params), joined)
+        for joined in repository.list_joined()
+    ]
+
+    if month is None:
+        # Open on the most-recent stall_date's month so the surface is non-empty;
+        # fall back to the month of `now` when there are zero families.
+        anchor = max((sd for sd, _ in stalled), default=now)
+        resolved_month = f"{anchor.year:04d}-{anchor.month:02d}"
+    else:
+        resolved_month = month
+    year_s, month_s = resolved_month.split("-")
+    year, mon = int(year_s), int(month_s)
+
+    in_month = [
+        (stall_date, joined)
+        for stall_date, joined in stalled
+        if stall_date.year == year and stall_date.month == mon
+    ]
+    in_month.sort(key=lambda pair: pair[0])
 
     entries = [
         CalendarEntry(
             family_id=joined.family.family_id,
             display_name=joined.family.display_name,
-            apply_date=apply_date,
+            stall_date=stall_date,
+            apply_date=_apply_date(joined) or stall_date,
             current_stage=joined.family.current_stage,
             contact_status=_recency_for(joined, log=log, now=now, params=params)[0],
+            value=value(_work_queue_family(joined, params), params),
+            score=score_family(_work_queue_family(joined, params), params, now=now),
         )
-        for apply_date, joined in dated
+        for stall_date, joined in in_month
     ]
-    return CalendarResponse(month=month, entries=entries)
+    return CalendarResponse(month=resolved_month, entries=entries)
