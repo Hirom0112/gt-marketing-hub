@@ -1,5 +1,17 @@
 import { useState } from 'react';
+import type { ReactNode } from 'react';
+import type { LucideIcon } from 'lucide-react';
+import {
+  Check,
+  Mail,
+  Pencil,
+  ShieldAlert,
+  ShieldOff,
+  Trash2,
+  Zap,
+} from 'lucide-react';
 import { apiBaseUrl } from './config';
+import { Button } from './ui';
 
 // Enrollment AI action panel (FR-2.4) + fail-closed eval gate (FR-4.5 / INV-3).
 //
@@ -16,7 +28,9 @@ import { apiBaseUrl } from './config';
 //
 // Native fetch only (≤2 runtime deps). Presentational + small fetch handlers;
 // no state libraries. The deterministic core owns all writes (INV-2) — this
-// panel only proposes a draft and records the human decision.
+// panel only proposes a draft and records the human decision. S8 Wave 2 re-skin:
+// the live-action panel from the reference — mono action buttons with icons, a
+// drafted-body well, and signal/gate-tinted fail-closed surfaces.
 
 // One grounded claim attached to a proposal body (ARCHITECTURE §5.2).
 interface ProposalClaim {
@@ -51,10 +65,12 @@ interface DecisionResponse {
 type DecisionKind = 'approve' | 'edit' | 'discard';
 
 // The drafting actions an operator can request. Action keys map 1:1 to the
-// backend `action` field.
-const DRAFT_ACTIONS: ReadonlyArray<readonly [key: string, label: string]> = [
-  ['email', 'Draft email'],
-  ['sms', 'Draft SMS'],
+// backend `action` field; each carries the icon the reference uses.
+const DRAFT_ACTIONS: ReadonlyArray<
+  readonly [key: string, label: string, icon: LucideIcon]
+> = [
+  ['email', 'Draft email', Mail],
+  ['sms', 'Draft SMS', Zap],
 ];
 
 type DraftState =
@@ -122,28 +138,59 @@ export default function ActionPanel({ familyId }: ActionPanelProps): JSX.Element
 
   return (
     <section aria-label="AI action panel" data-testid="action-panel">
-      <h2>AI actions</h2>
+      <div
+        className="lab"
+        style={{
+          display: 'inline-flex',
+          alignItems: 'center',
+          gap: 'var(--s-1)',
+          marginBottom: 'var(--s-2)',
+        }}
+      >
+        <Zap size={11} aria-hidden /> Actions — generated live, eval-gated
+      </div>
+      <h2 style={{ position: 'absolute', width: 1, height: 1, overflow: 'hidden', clip: 'rect(0 0 0 0)' }}>
+        AI actions
+      </h2>
 
-      <div className="draft-actions">
-        {DRAFT_ACTIONS.map(([key, label]) => (
-          <button
+      <div
+        className="draft-actions"
+        style={{ display: 'flex', gap: 'var(--s-2)', flexWrap: 'wrap' }}
+      >
+        {DRAFT_ACTIONS.map(([key, label, icon], i) => (
+          <Button
             key={key}
-            type="button"
+            variant={i === 0 ? 'primary' : 'default'}
+            icon={icon}
             data-testid={`draft-${key}`}
             onClick={() => requestDraft(key)}
             disabled={state.status === 'loading'}
           >
             {label}
-          </button>
+          </Button>
         ))}
       </div>
 
       {state.status === 'loading' && (
-        <p data-testid="draft-loading">Requesting AI draft…</p>
+        <p
+          data-testid="draft-loading"
+          className="mono"
+          style={{ marginTop: 'var(--s-3)', fontSize: 'var(--fs-sm)', color: 'var(--muted)' }}
+        >
+          Requesting AI draft…
+        </p>
       )}
 
       {state.status === 'error' && (
-        <p data-testid="draft-error" role="alert">
+        <p
+          data-testid="draft-error"
+          role="alert"
+          style={{
+            marginTop: 'var(--s-3)',
+            fontSize: 'var(--fs-sm)',
+            color: 'var(--signal-ink)',
+          }}
+        >
           Could not request draft: {state.message}
         </p>
       )}
@@ -156,15 +203,11 @@ export default function ActionPanel({ familyId }: ActionPanelProps): JSX.Element
           decision={decision}
           onStartEdit={() => setEditing(true)}
           onChangeEdited={setEditedBody}
-          onApprove={() =>
-            submitDecision(state.data.proposal_id, 'approve')
-          }
+          onApprove={() => submitDecision(state.data.proposal_id, 'approve')}
           onSaveEdit={() =>
             submitDecision(state.data.proposal_id, 'edit', editedBody)
           }
-          onDiscard={() =>
-            submitDecision(state.data.proposal_id, 'discard')
-          }
+          onDiscard={() => submitDecision(state.data.proposal_id, 'discard')}
         />
       )}
     </section>
@@ -188,11 +231,68 @@ interface DraftResultProps {
 // an operator-authored starting point (INV-3 fail closed, NFR-3 fallback).
 function TemplateFallback(): JSX.Element {
   return (
-    <div className="template-fallback" data-testid="template-fallback">
-      <p>AI drafting is unavailable. Continue with the operator template:</p>
-      <button type="button" data-testid="use-template">
-        Use operator template
-      </button>
+    <div
+      className="template-fallback"
+      data-testid="template-fallback"
+      style={{
+        marginTop: 'var(--s-3)',
+        padding: 'var(--s-3)',
+        borderRadius: 'var(--r-md)',
+        border: '1px solid var(--line)',
+        background: 'var(--surface-2)',
+      }}
+    >
+      <p style={{ fontSize: 'var(--fs-sm)', color: 'var(--ink-soft)', marginBottom: 'var(--s-2)' }}>
+        AI drafting is unavailable. Continue with the operator template:
+      </p>
+      <Button data-testid="use-template">Use operator template</Button>
+    </div>
+  );
+}
+
+// A fail-closed banner shell — a tinted wash with an icon + heading + body.
+function FailClosedBanner({
+  testId,
+  role,
+  tone,
+  icon: Icon,
+  children,
+}: {
+  testId: string;
+  role: 'alert' | 'status';
+  tone: 'signal' | 'gate';
+  icon: LucideIcon;
+  children: ReactNode;
+}): JSX.Element {
+  const wash = tone === 'signal' ? 'var(--signal-wash)' : 'var(--gate-wash)';
+  const solid = tone === 'signal' ? 'var(--signal)' : 'var(--gate)';
+  const ink = tone === 'signal' ? 'var(--signal-ink)' : 'var(--gate-ink)';
+  return (
+    <div
+      data-testid={testId}
+      role={role}
+      style={{
+        marginTop: 'var(--s-3)',
+        padding: 'var(--s-3) var(--s-4)',
+        borderRadius: 'var(--r-md)',
+        background: wash,
+        border: `1px solid ${solid}`,
+        color: ink,
+      }}
+    >
+      <div
+        className="lab"
+        style={{
+          color: ink,
+          display: 'inline-flex',
+          alignItems: 'center',
+          gap: 'var(--s-1)',
+          marginBottom: 'var(--s-1)',
+        }}
+      >
+        <Icon size={11} aria-hidden /> Action disabled — fail closed
+      </div>
+      {children}
     </div>
   );
 }
@@ -212,13 +312,18 @@ function DraftResult({
   // draft entirely and offers the deterministic template (NFR-3).
   if (data.degraded) {
     return (
-      <div data-testid="proposal-degraded" role="status">
-        <p>
+      <FailClosedBanner
+        testId="proposal-degraded"
+        role="status"
+        tone="gate"
+        icon={ShieldOff}
+      >
+        <p style={{ fontSize: 'var(--fs-sm)' }}>
           AI drafting is in <strong>degraded mode</strong> (no-LLM /
           kill-switch / cost cap). The AI draft action is disabled.
         </p>
         <TemplateFallback />
-      </div>
+      </FailClosedBanner>
     );
   }
 
@@ -226,20 +331,35 @@ function DraftResult({
   // draft and shows the failed rule (INV-3). No approvable body is rendered.
   if (!data.surfaced || data.proposal === null) {
     return (
-      <div data-testid="proposal-blocked" role="alert">
-        <p>
+      <FailClosedBanner
+        testId="proposal-blocked"
+        role="alert"
+        tone="signal"
+        icon={ShieldAlert}
+      >
+        <p style={{ fontSize: 'var(--fs-sm)' }}>
           The AI draft was <strong>blocked by the eval gate</strong> and cannot
           be sent.
         </p>
         {data.failed_rules.length > 0 && (
-          <ul className="failed-rules" data-testid="failed-rules">
+          <ul
+            className="failed-rules"
+            data-testid="failed-rules"
+            style={{
+              margin: 'var(--s-2) 0 0',
+              paddingLeft: 'var(--s-5)',
+              fontSize: 'var(--fs-sm)',
+            }}
+          >
             {data.failed_rules.map((rule) => (
-              <li key={rule}>{rule}</li>
+              <li key={rule} className="mono">
+                {rule}
+              </li>
             ))}
           </ul>
         )}
         <TemplateFallback />
-      </div>
+      </FailClosedBanner>
     );
   }
 
@@ -248,27 +368,78 @@ function DraftResult({
 
   if (decision) {
     return (
-      <p data-testid="decision-recorded" role="status">
-        Decision recorded: {decision.action}
+      <p
+        data-testid="decision-recorded"
+        role="status"
+        style={{
+          marginTop: 'var(--s-3)',
+          display: 'inline-flex',
+          alignItems: 'center',
+          gap: 'var(--s-1)',
+          fontSize: 'var(--fs-sm)',
+          color: 'var(--flow-ink)',
+          background: 'var(--flow-wash)',
+          border: '1px solid var(--flow)',
+          borderRadius: 'var(--r-md)',
+          padding: 'var(--s-2) var(--s-3)',
+        }}
+      >
+        <Check size={13} aria-hidden /> Decision recorded: {decision.action}
         {decision.seam_status ? ` (seam: ${decision.seam_status})` : ''}
       </p>
     );
   }
 
   return (
-    <article data-testid="proposal" className="proposal">
+    <article
+      data-testid="proposal"
+      className="proposal"
+      style={{
+        marginTop: 'var(--s-3)',
+        padding: 'var(--s-3)',
+        borderRadius: 'var(--r-md)',
+        border: '1px solid var(--line)',
+        background: 'var(--surface-2)',
+      }}
+    >
       {editing ? (
         <textarea
           data-testid="proposal-edit"
           value={editedBody}
           onChange={(e) => onChangeEdited(e.target.value)}
+          rows={6}
+          style={{
+            width: '100%',
+            fontFamily: 'var(--sans)',
+            fontSize: 'var(--fs-body)',
+            color: 'var(--ink)',
+            background: 'var(--surface)',
+            border: '1px solid var(--line)',
+            borderRadius: 'var(--r-sm)',
+            padding: 'var(--s-2)',
+            resize: 'vertical',
+          }}
         />
       ) : (
-        <p data-testid="proposal-body">{proposal.body}</p>
+        <p
+          data-testid="proposal-body"
+          style={{ fontSize: 'var(--fs-body)', color: 'var(--ink)', whiteSpace: 'pre-wrap' }}
+        >
+          {proposal.body}
+        </p>
       )}
 
       {proposal.claims.length > 0 && (
-        <ul className="proposal-claims" data-testid="proposal-claims">
+        <ul
+          className="proposal-claims"
+          data-testid="proposal-claims"
+          style={{
+            margin: 'var(--s-3) 0 0',
+            paddingLeft: 'var(--s-5)',
+            fontSize: 'var(--fs-sm)',
+            color: 'var(--muted)',
+          }}
+        >
           {proposal.claims.map((claim) => (
             <li key={claim.text}>
               {claim.text}
@@ -278,22 +449,35 @@ function DraftResult({
         </ul>
       )}
 
-      <div className="proposal-decisions">
+      <div
+        className="proposal-decisions"
+        style={{ display: 'flex', gap: 'var(--s-2)', marginTop: 'var(--s-3)', flexWrap: 'wrap' }}
+      >
         {editing ? (
-          <button type="button" data-testid="save-edit" onClick={onSaveEdit}>
+          <Button
+            variant="signal"
+            icon={Check}
+            data-testid="save-edit"
+            onClick={onSaveEdit}
+          >
             Save &amp; approve edit
-          </button>
+          </Button>
         ) : (
-          <button type="button" data-testid="approve-action" onClick={onApprove}>
+          <Button
+            variant="signal"
+            icon={Check}
+            data-testid="approve-action"
+            onClick={onApprove}
+          >
             Approve
-          </button>
+          </Button>
         )}
-        <button type="button" data-testid="edit-action" onClick={onStartEdit}>
+        <Button icon={Pencil} data-testid="edit-action" onClick={onStartEdit}>
           Edit
-        </button>
-        <button type="button" data-testid="discard-action" onClick={onDiscard}>
+        </Button>
+        <Button icon={Trash2} data-testid="discard-action" onClick={onDiscard}>
           Discard
-        </button>
+        </Button>
       </div>
     </article>
   );

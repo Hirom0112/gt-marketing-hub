@@ -1,5 +1,7 @@
 import { useEffect, useState } from 'react';
+import { Lock, LockOpen } from 'lucide-react';
 import { apiBaseUrl } from './config';
+import { Card } from './ui';
 
 // Funding tracker (FR-2.6/2.7). Fetches GET /families/{id}/funding and surfaces
 // the funding state, the funding tier (funding_type), the TEFA installment
@@ -8,7 +10,8 @@ import { apiBaseUrl } from './config';
 // receipt; this UI only renders that flag, it never computes it. Self-pay
 // families have no TEFA schedule (installments:null) and render no schedule.
 // Native fetch only (≤2 runtime deps). Read-only (INV-2). A null funding_type
-// renders as a dash placeholder, never literal "null".
+// renders as a dash placeholder, never literal "null". S8 Wave 2 re-skin: gold
+// (gate) funding tone, a lock badge, and an installment ladder of inset rows.
 
 // GET /families/{id}/funding response (backend app/api/schemas.py).
 interface FundingView {
@@ -58,11 +61,19 @@ export default function FundingTracker({
   }, [familyId]);
 
   if (state.status === 'loading') {
-    return <p data-testid="funding-loading">Loading funding…</p>;
+    return (
+      <p data-testid="funding-loading" className="lab">
+        Loading funding…
+      </p>
+    );
   }
   if (state.status === 'error') {
     return (
-      <p data-testid="funding-error" role="alert">
+      <p
+        data-testid="funding-error"
+        role="alert"
+        style={{ color: 'var(--signal-ink)', fontSize: 'var(--fs-sm)' }}
+      >
         Could not load funding: {state.message}
       </p>
     );
@@ -73,38 +84,124 @@ export default function FundingTracker({
 
   return (
     <section aria-label="Funding tracker" data-testid="funding-tracker">
-      <h2>Funding</h2>
-      <dl className="funding-fields">
-        <dt>Funding state</dt>
-        <dd data-testid="funding-state">{funding.funding_state}</dd>
-
-        <dt>Funding type</dt>
-        <dd data-testid="funding-type">{funding.funding_type ?? PLACEHOLDER}</dd>
-      </dl>
-
-      <span
-        className={`tuition-badge ${unlocked ? 'unlocked' : 'locked'}`}
-        data-testid="tuition-badge"
-        role="status"
+      <div
+        className="lab"
+        style={{
+          display: 'inline-flex',
+          alignItems: 'center',
+          gap: 'var(--s-1)',
+          marginBottom: 'var(--s-2)',
+        }}
       >
-        {unlocked ? 'Tuition unlocked' : 'Tuition locked'}
-      </span>
+        {unlocked ? <LockOpen size={11} aria-hidden /> : <Lock size={11} aria-hidden />}{' '}
+        Funding &amp; TEFA gate
+      </div>
+      <h2 style={{ position: 'absolute', width: 1, height: 1, overflow: 'hidden', clip: 'rect(0 0 0 0)' }}>
+        Funding
+      </h2>
 
-      {funding.installments !== null && (
-        <ol className="installment-schedule" data-testid="installment-schedule">
-          {funding.installments.map((amount, index) => (
-            <li
-              // Installment amounts can repeat (25/25/50) — key by position.
-              key={`${index}-${amount}`}
-              className="installment-row"
-              data-testid="installment-row"
+      <Card>
+        <div
+          style={{
+            display: 'flex',
+            alignItems: 'flex-start',
+            justifyContent: 'space-between',
+            gap: 'var(--s-3)',
+          }}
+        >
+          <dl className="funding-fields" style={{ margin: 0 }}>
+            <dt className="lab">Funding state</dt>
+            <dd
+              data-testid="funding-state"
+              className="mono"
+              style={{
+                margin: '2px 0 var(--s-2)',
+                fontSize: 'var(--fs-sm)',
+                color: 'var(--ink)',
+              }}
             >
-              <span className="installment-ordinal">Installment {index + 1}</span>
-              <span className="installment-amount">{amount}</span>
-            </li>
-          ))}
-        </ol>
-      )}
+              {funding.funding_state}
+            </dd>
+
+            <dt className="lab">Funding type</dt>
+            <dd
+              data-testid="funding-type"
+              className="mono"
+              style={{ margin: '2px 0 0', fontSize: 'var(--fs-sm)', color: 'var(--ink)' }}
+            >
+              {funding.funding_type ?? PLACEHOLDER}
+            </dd>
+          </dl>
+
+          <span
+            className={`tuition-badge mono ${unlocked ? 'unlocked' : 'locked'}`}
+            data-testid="tuition-badge"
+            role="status"
+            style={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: 'var(--s-1)',
+              flexShrink: 0,
+              fontSize: 'var(--fs-chip)',
+              padding: '4px 9px',
+              borderRadius: 'var(--r-xs)',
+              whiteSpace: 'nowrap',
+              color: unlocked ? 'var(--flow-ink)' : 'var(--gate-ink)',
+              background: unlocked ? 'var(--flow-wash)' : 'var(--gate-wash)',
+              border: `1px solid ${unlocked ? 'var(--flow)' : 'var(--gate)'}`,
+            }}
+          >
+            {unlocked ? <LockOpen size={11} aria-hidden /> : <Lock size={11} aria-hidden />}
+            {unlocked ? 'Tuition unlocked' : 'Tuition locked'}
+          </span>
+        </div>
+
+        {funding.installments !== null && (
+          <ol
+            className="installment-schedule"
+            data-testid="installment-schedule"
+            style={{
+              listStyle: 'none',
+              margin: 'var(--s-3) 0 0',
+              padding: 0,
+              display: 'grid',
+              gap: 'var(--s-2)',
+            }}
+          >
+            {funding.installments.map((amount, index) => (
+              <li
+                // Installment amounts can repeat (25/25/50) — key by position.
+                key={`${index}-${amount}`}
+                className="installment-row"
+                data-testid="installment-row"
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  padding: '6px 10px',
+                  borderRadius: 'var(--r-sm)',
+                  background: 'var(--gate-wash)',
+                  border: '1px solid var(--gate)',
+                }}
+              >
+                <span className="installment-ordinal lab" style={{ color: 'var(--gate-ink)' }}>
+                  Installment {index + 1}
+                </span>
+                <span
+                  className="installment-amount mono"
+                  style={{
+                    fontSize: 'var(--fs-sm)',
+                    fontWeight: 600,
+                    color: 'var(--gate-ink)',
+                  }}
+                >
+                  {amount}
+                </span>
+              </li>
+            ))}
+          </ol>
+        )}
+      </Card>
     </section>
   );
 }
