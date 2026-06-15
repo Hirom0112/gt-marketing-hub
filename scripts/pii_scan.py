@@ -155,6 +155,19 @@ LATLONG_RE = re.compile(r"[-+]?\d{1,3}\.\d{4,}\s*[,;]\s*[-+]?\d{1,3}\.\d{4,}")
 EMAIL_RE = re.compile(r"\b[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}\b")
 # Public business contacts are allowed even outside *.md (e.g. seed config).
 ALLOWED_EMAIL_DOMAINS = {"gt.school"}
+# RFC 2606 / RFC 6761 reserved domains are guaranteed non-real → never PII.
+RESERVED_EMAIL_TLDS = {"test", "example", "invalid", "localhost"}
+RESERVED_EMAIL_DOMAINS = {"example.com", "example.org", "example.net"}
+
+
+def _is_allowed_email_domain(domain: str) -> bool:
+    """True for synthetic / non-routable email domains (no false positives)."""
+    domain = domain.lower()
+    if domain in ALLOWED_EMAIL_DOMAINS or domain in RESERVED_EMAIL_DOMAINS:
+        return True
+    tld = domain.rsplit(".", 1)[-1]
+    return tld in RESERVED_EMAIL_TLDS
+
 
 # (c) secret-shaped strings.
 # Supabase keys are JWTs: header always starts eyJ... ; require 3 dot-segments.
@@ -250,7 +263,7 @@ def _scan_pii(path: Path, text: str, findings: list[Finding]) -> None:
         if m := EMAIL_RE.search(line):
             addr = m.group(0)
             domain = addr.rsplit("@", 1)[-1].lower()
-            if domain not in ALLOWED_EMAIL_DOMAINS:
+            if not _is_allowed_email_domain(domain):
                 findings.append(Finding(path, "pii:email", _excerpt(addr)))
 
     # (a) cluster signature — whole-file co-occurrence (C-SYN-2). Data files
@@ -338,17 +351,33 @@ def self_test() -> int:
             "ANTHROPIC_API_KEY=<secret>\nSUPABASE_ANON_KEY=<public anon key>\n",
             encoding="utf-8",
         )
+        # All RFC 2606/6761 reserved domains are allowed → no false positives.
         (tmp / "synthetic.csv").write_text(
-            "name,email\nFamily One,family.one@example.invalid\n",
+            "name,email\n"
+            "Family One,family.one@example.invalid\n"
+            "Family Two,family.two@example.test\n"
+            "Family Three,family.three@example.com\n"
+            "Family Four,family.four@dev.localhost\n",
             encoding="utf-8",
         )
         clean_findings = scan([tmp])
         clean_ok = not clean_findings
         print(
-            f"[self-test] clean/allowed tree    -> "
-            f"{'NO FALSE POSITIVES' if clean_ok else 'FALSE POSITIVE: ' + str(clean_findings)}"
+            f"[self-test] reserved-domain emails-> "
+            f"{'ALLOWED' if clean_ok else 'FALSE POSITIVE: ' + str(clean_findings)}"
         )
         ok = ok and clean_ok
+
+    # 3. A real (routable) email domain MUST still be flagged. Built from inert
+    #    parts so this source file does not flag itself on a literal address.
+    real_email = "jane.doe" + "@" + "gmail" + ".com"
+    with tempfile.TemporaryDirectory() as d:
+        tmp = Path(d)
+        (tmp / "real.csv").write_text(f"name,email\nJane Doe,{real_email}\n", encoding="utf-8")
+        real_findings = scan([tmp])
+        real_flagged = any(f.rule == "pii:email" for f in real_findings)
+        print(f"[self-test] real-domain email      -> {'FLAGGED' if real_flagged else 'MISSED'}")
+        ok = ok and real_flagged
 
     print(f"[self-test] {'PASS' if ok else 'FAIL'}")
     return 0 if ok else 1
