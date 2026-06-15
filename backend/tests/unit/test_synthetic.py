@@ -25,7 +25,13 @@ from app.data.models import (
     FamilyRecord,
     LeadsNew,
 )
-from app.data.synthetic import SyntheticDataset, generate, generate_back_to_school
+from app.data.synthetic import (
+    RealisticCohort,
+    SyntheticDataset,
+    generate,
+    generate_back_to_school,
+    generate_realistic,
+)
 
 
 def _all_field_values(obj: object) -> list[object]:
@@ -273,3 +279,218 @@ def test_back_to_school_is_synthetic_only() -> None:
     ]
     for row in all_rows:
         assert "household_income" not in type(row).model_fields  # type: ignore[attr-defined]
+
+
+# --------------------------------------------------------------------------- #
+# The realistic-cadence cohort — a SEPARATE deterministic cohort calibrated to
+# GT's measured top-of-funnel cadence (aggregate-only), drawn from its own RNG so
+# the default + back_to_school streams stay byte-identical. Every shape number is
+# read from the committed params (INV-11) so a param drift fails these tests.
+# --------------------------------------------------------------------------- #
+from collections import Counter  # noqa: E402
+from datetime import UTC, datetime  # noqa: E402
+from pathlib import Path  # noqa: E402
+
+from app.core.params import Realistic, load_params  # noqa: E402
+from app.core.recovery_state import RecoveryState, derive_recovery_state  # noqa: E402
+from app.data.models import FundingState, Stage, StallReason  # noqa: E402
+from app.data.repository import InMemoryFamilyRepository  # noqa: E402
+
+_EXAMPLE_PARAMS = Path(__file__).resolve().parents[3] / "params" / "params.example.yaml"
+
+
+def _realistic_params() -> Realistic:
+    """Read the realistic block from the committed example params (INV-11)."""
+    return load_params(_EXAMPLE_PARAMS).realistic
+
+
+def _generate_from_params() -> RealisticCohort:
+    """Generate the cohort entirely from the params block (no hardcoded shape)."""
+    return generate_realistic(params=_realistic_params())
+
+
+# The recovery deriver's stall_reason → stall_stage map (mirrors api/families).
+_STALL_STAGE = {
+    StallReason.INFO_SESSION_NO_SHOW: Stage.INTEREST,
+    StallReason.NO_RESPONSE: Stage.INTEREST,
+    StallReason.APP_INCOMPLETE: Stage.APPLY,
+    StallReason.FORMS_PARTIAL: Stage.ENROLL,
+    StallReason.FUNDING_PENDING: Stage.ENROLL,
+}
+
+
+def _derive(cohort: RealisticCohort) -> Counter[RecoveryState]:
+    """Derive every family's recovery_state exactly as the api layer would (A-19).
+
+    Resolves the same log-derived facts the api composition root passes IN:
+    ``dismissed`` from the cohort's dismissed set, ``last_contact_at=None`` (no
+    seeded outbound), and the ``stall_stage`` mapped from the spine stall_reason.
+    """
+    params = load_params(_EXAMPLE_PARAMS)
+    repo = InMemoryFamilyRepository(cohort.dataset)
+    dismissed = set(cohort.dismissed_family_ids)
+    counts: Counter[RecoveryState] = Counter()
+    for joined in repo.list_joined():
+        fam = joined.family
+        stall_stage = (
+            _STALL_STAGE[fam.stall_reason] if fam.stall_reason is not None else fam.current_stage
+        )
+        state = derive_recovery_state(
+            joined=joined,
+            last_contact_at=None,
+            dismissed=fam.family_id in dismissed,
+            stall_stage=stall_stage,
+            params=params,
+        )
+        counts[state] += 1
+    return counts
+
+
+def test_realistic_total_and_window() -> None:
+    """`generate_realistic` yields `total` families, each joined, inside the window."""
+    p = _realistic_params()
+    cohort = _generate_from_params()
+    ds = cohort.dataset
+    assert len(ds.families) == p.total == 5146
+    assert len(ds.leads) == len(ds.app_forms) == len(ds.enrollment_forms) == p.total
+    assert len(ds.community_profiles) == p.total
+
+    # Joins hold: one row per family in each source table.
+    fids = {f.family_id for f in ds.families}
+    assert len(fids) == p.total
+    for table in (ds.leads, ds.app_forms, ds.enrollment_forms, ds.community_profiles):
+        assert {row.family_id for row in table} == fids
+
+    # Every created_at (the inquiry date) sits inside the measured window.
+    window_start = datetime(
+        p.window_start_year, p.window_start_month, p.window_start_day, tzinfo=UTC
+    )
+    window_end = datetime(
+        p.window_end_year, p.window_end_month, p.window_end_day, 23, 59, 59, tzinfo=UTC
+    )
+    for fam in ds.families:
+        assert fam.created_at is not None
+        assert window_start <= fam.created_at <= window_end, fam.created_at
+
+
+def test_realistic_monthly_shape_matches_weights() -> None:
+    """Per-month created-counts match the measured monthly weights exactly."""
+    p = _realistic_params()
+    ds = _generate_from_params().dataset
+    by_month: Counter[str] = Counter(
+        f"{fam.created_at.year:04d}-{fam.created_at.month:02d}"
+        for fam in ds.families
+        if fam.created_at is not None
+    )
+    # The cohort is exactly partitioned by month (deterministic counts, no sampling
+    # drift), so each month equals its weight precisely.
+    for month, expected in p.monthly_counts.items():
+        assert by_month[month] == expected, (month, by_month[month], expected)
+    assert sum(by_month.values()) == p.total
+
+
+def test_realistic_jan27_is_the_single_busiest_day() -> None:
+    """The 2026-01-27 campaign day is the max created-day, == `spike_count` (761)."""
+    p = _realistic_params()
+    ds = _generate_from_params().dataset
+    by_day: Counter[tuple[int, int, int]] = Counter(
+        (fam.created_at.year, fam.created_at.month, fam.created_at.day)
+        for fam in ds.families
+        if fam.created_at is not None
+    )
+    spike_day = (p.spike_year, p.spike_month, p.spike_day)
+    assert by_day[spike_day] == p.spike_count == 761
+    # It is the single busiest created-day, by a wide margin over the next day.
+    assert by_day[spike_day] == max(by_day.values())
+    second = sorted(by_day.values(), reverse=True)[1]
+    assert by_day[spike_day] > 2 * second
+
+
+def test_realistic_is_deterministic_and_isolated() -> None:
+    """Same params ⇒ byte-identical cohort; default + back_to_school streams untouched."""
+    a = _generate_from_params()
+    b = _generate_from_params()
+    assert [f.model_dump() for f in a.dataset.families] == [
+        f.model_dump() for f in b.dataset.families
+    ]
+    assert a.dismissed_family_ids == b.dismissed_family_ids
+
+    # The cohort draws from its OWN RNG ⇒ the default generate stream is byte-identical.
+    before = generate(n=24, seed=42)
+    _ = _generate_from_params()
+    after = generate(n=24, seed=42)
+    assert [f.model_dump() for f in before.families] == [f.model_dump() for f in after.families]
+
+
+def test_realistic_recovery_mix_is_sane() -> None:
+    """Derived recovery_state is a believable mix: active + recovered + dismissed all present."""
+    p = _realistic_params()
+    cohort = _generate_from_params()
+    counts = _derive(cohort)
+
+    active = counts[RecoveryState.STALLED] + counts[RecoveryState.WORKING]
+    recovered = counts[RecoveryState.RECOVERED]
+    dismissed = counts[RecoveryState.DISMISSED]
+
+    # Dismissed == the seeded count exactly (the dismiss events flip those families).
+    assert dismissed == p.dismissed_count
+    assert len(cohort.dismissed_family_ids) == p.dismissed_count
+    # Active stalls == active_count minus the dismissed (which were active-shaped).
+    assert active == p.active_count - p.dismissed_count
+    # The bulk of the cohort is HISTORY (moved on) ⇒ derives recovered.
+    assert recovered > 0
+    assert recovered > active  # history dominates the active board
+    # Everything is accounted for.
+    assert active + recovered + dismissed == p.total
+
+
+def test_realistic_active_stalls_are_recent() -> None:
+    """Active stalls concentrate their `stalled_since` in the last `active_window_days`."""
+    p = _realistic_params()
+    cohort = _generate_from_params()
+    dismissed = set(cohort.dismissed_family_ids)
+    epoch = datetime(2026, 6, 15, tzinfo=UTC)  # the demo "now" anchor (synthetic _EPOCH)
+    window_start = epoch.timestamp() - p.active_window_days * 86400
+
+    # Active = the families with a stalled_since that are NOT dismissed; assert all
+    # such recent stalls sit in the active window.
+    recent_stalls = [
+        fam
+        for fam in cohort.dataset.families
+        if fam.stalled_since is not None and fam.family_id not in dismissed
+    ]
+    assert recent_stalls, "expected active stalls in the cohort"
+    for fam in recent_stalls:
+        assert fam.stalled_since is not None
+        assert window_start <= fam.stalled_since.timestamp() <= epoch.timestamp(), fam.stalled_since
+
+
+def test_realistic_is_synthetic_only() -> None:
+    """The cohort carries the same synthetic markers as the default world (INV-1)."""
+    import re
+
+    ds = _generate_from_params().dataset
+    for fam in ds.families:
+        assert fam.primary_contact_synthetic_email.endswith("@example.invalid")
+        assert fam.display_name.startswith("The ") and fam.display_name.endswith(" Family")
+    zip_re = re.compile(r"\b\d{5}(?:-\d{4})?\b")
+    for lead in ds.leads:
+        assert lead.synthetic_email.endswith("@example.invalid")
+        assert "555-01" in lead.synthetic_phone
+        assert lead.region and not zip_re.search(lead.region)
+    rows: list[object] = [
+        *ds.families,
+        *ds.leads,
+        *ds.app_forms,
+        *ds.enrollment_forms,
+        *ds.community_profiles,
+    ]
+    for row in rows:
+        assert "household_income" not in type(row).model_fields  # type: ignore[attr-defined]
+    # No funding_state at-or-past the first-installment floor on an ACTIVE stall.
+    for fam in ds.families:
+        if fam.stalled_since is not None:
+            assert fam.funding_state not in {
+                FundingState.FIRST_INSTALLMENT_RECEIVED,
+                FundingState.FUNDED,
+            }

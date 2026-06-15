@@ -40,14 +40,17 @@ def _build_repository(params: Params) -> FamilyRepository:
     Default (no/blank/``june`` env) ⇒ the unchanged 24-family June demo cohort —
     so the June-anchored count/recency fixtures and the 404 tests are untouched.
     ``COCKPIT_SCENARIO=back_to_school`` ⇒ the SEPARATE deterministic volume cohort
-    (``generate_back_to_school``), sized/anchored entirely from params (INV-11),
-    so the running app can serve the back-to-school surge with no fixture churn.
-    This is the least-disruptive wiring: one composition-root env read, no change
-    to the repository seam, Settings registry, or any router.
+    (``generate_back_to_school``). ``COCKPIT_SCENARIO=realistic`` ⇒ the
+    cadence-calibrated cohort (``generate_realistic``): its dismiss-target ids are
+    recorded in ``_realistic_dismissed_family_ids`` so the observability log can
+    seed the matching dismiss events (the dismissed slice). Every cohort is sized
+    entirely from params (INV-11), so the running app can serve any scenario with
+    no fixture churn. One composition-root env read; no change to the repository
+    seam, Settings registry, or any router.
     """
     import os
 
-    from app.data.synthetic import generate_back_to_school
+    from app.data.synthetic import generate_back_to_school, generate_realistic
 
     scenario = (os.environ.get("COCKPIT_SCENARIO", "") or "").strip().lower()
     if scenario == "back_to_school":
@@ -62,7 +65,20 @@ def _build_repository(params: Params) -> FamilyRepository:
             spread_days=bts.spread_days,
         )
         return InMemoryFamilyRepository(dataset)
+    if scenario == "realistic":
+        cohort = generate_realistic(params=params.realistic)
+        # Record the dismiss targets so the observability log can seed the dismiss
+        # events for the same families (the dismissed slice of History).
+        _realistic_dismissed_family_ids.clear()
+        _realistic_dismissed_family_ids.extend(cohort.dismissed_family_ids)
+        return InMemoryFamilyRepository(cohort.dataset)
     return InMemoryFamilyRepository.seeded()
+
+
+# Dismiss-target ids from the realistic cohort (empty under other scenarios). The
+# observability log seeds one dismiss event per id so those families derive
+# ``dismissed`` (A-19) — recency/state are DERIVED from the log, never stored.
+_realistic_dismissed_family_ids: list[UUID] = []
 
 
 # Singleton notes store — the FR-2.3 timeline (A-3 in-memory, append-only).
@@ -153,10 +169,33 @@ def _seed_followed_up_contacts(log: ObservabilityLog) -> None:
         seeded += 1
 
 
+def _seed_realistic_dismissals(log: ObservabilityLog) -> None:
+    """Log one dismiss event per realistic-cohort dismiss target (A-19).
+
+    No-op under the default/back_to_school scenarios (the id list is empty). Each
+    event is dated at the demo now so it post-dates the family's recent stall and
+    holds (not superseded). This is what makes the History/dismissed slice
+    non-empty under ``COCKPIT_SCENARIO=realistic``.
+    """
+    from datetime import UTC, datetime
+
+    if not _realistic_dismissed_family_ids:
+        return
+    dismissed_at = datetime(2026, 6, 15, tzinfo=UTC)  # the demo now (synthetic _EPOCH)
+    for family_id in _realistic_dismissed_family_ids:
+        log.log_dismiss(
+            family_id=family_id,
+            human="seed-operator",
+            reason="Family went quiet and was set aside during recovery triage (synthetic seed).",
+            created_at=dismissed_at,
+        )
+
+
 def _build_observability_log() -> ObservabilityLog:
-    """Build the demo audit log, pre-seeded with a few followed_up contacts (A-14)."""
+    """Build the demo audit log, pre-seeded with followed_up contacts + dismissals (A-14/A-19)."""
     log = InMemoryObservabilityLog()
     _seed_followed_up_contacts(log)
+    _seed_realistic_dismissals(log)
     return log
 
 

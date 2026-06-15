@@ -31,8 +31,12 @@ from __future__ import annotations
 
 import random
 from dataclasses import dataclass, field
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
+from typing import TYPE_CHECKING
 from uuid import UUID
+
+if TYPE_CHECKING:
+    from app.core.params import Realistic
 
 from app.ai.schemas.brand import (
     BrandMemoryItem,
@@ -738,6 +742,326 @@ def generate_back_to_school(
         ds.enrollment_forms.append(enrollment)
         ds.community_profiles.append(profile)
     return ds
+
+
+# --------------------------------------------------------------------------- #
+# The realistic-cadence cohort — a SEPARATE deterministic cohort calibrated to
+# GT's measured top-of-funnel cadence (aggregate-only numbers, INV-1). Like
+# `generate_back_to_school` it draws from its OWN `random.Random(seed)`, so the
+# default `generate` and `back_to_school` streams stay byte-identical.
+#
+# Stall / resolution model (documented here so it can't silently drift):
+#   * `total` families inquire (created_at) across the measured window, spread to
+#     match the `monthly_counts` weights EXACTLY (deterministic counts, not
+#     sampling) — with the campaign `spike_count` on the spike day and the mild
+#     `secondary_bumps` on their days; the per-month remainder fills the other
+#     in-window days as evenly as possible. So the lead/created layer reproduces
+#     the seasonal Jan–Mar peak, the Jan-27 burst, and the summer taper.
+#   * Most families are HISTORY: they inquired months ago and moved on, so they
+#     are shaped to DERIVE `recovered` (stage advanced PAST the stall stage AND
+#     forms cleared AND funding ≥ first-installment) with `stalled_since=None` —
+#     they belong to the funnel/history layer, not the active recovery board.
+#   * The most-recent `active_count` families (by build order) are UNRESOLVED
+#     ACTIVE stalls: `stalled_since` in the last `active_window_days` (so the
+#     ACTIVE recovery calendar shows a believable handful per day, not hundreds),
+#     stall_reason mapped so its stall-stage EQUALS current_stage (never
+#     "advanced"), funding below the §5.4 floor, forms not cleared ⇒ derives
+#     `stalled`.
+#   * The first `dismissed_count` of those active stalls are returned as
+#     `dismissed_family_ids`; the composition root (api/deps) logs a dismiss event
+#     for each, so they DERIVE `dismissed` (History/dismissed is non-empty).
+#   Net derived mix: active = `active_count - dismissed_count`, dismissed =
+#   `dismissed_count`, recovered = everything else (`total - active_count`).
+# --------------------------------------------------------------------------- #
+
+# A family shaped as HISTORY must trip the recovery deriver's RECOVERED signals.
+# We give it a tuition-stage spine with all six forms signed and funding FUNDED —
+# so stage-advance, forms-cleared, AND the §5.4 funding gate all read recovered.
+_REALISTIC_HISTORY_STAGE = Stage.TUITION
+
+# Active stalls reuse the back-to-school active-stall stage set + stall map, so
+# the stall-stage equals current_stage (never "advanced") — they stay ACTIVE.
+_REALISTIC_ACTIVE_STAGES: tuple[Stage, ...] = (Stage.INTEREST, Stage.APPLY, Stage.ENROLL)
+
+
+@dataclass(frozen=True)
+class RealisticCohort:
+    """The realistic cohort: the dataset plus the family ids to dismiss (A-19).
+
+    ``dataset`` seeds the repository; ``dismissed_family_ids`` are the active
+    stalls the composition root logs a dismiss event for (so they derive
+    ``dismissed`` rather than ``stalled``). Returned together so the dismiss
+    intent travels with the data and stays deterministic.
+    """
+
+    dataset: SyntheticDataset
+    dismissed_family_ids: list[UUID] = field(default_factory=list)
+
+
+def _realistic_created_days(p: Realistic) -> list[date]:
+    """The ``total`` inquiry DAYS, deterministically calibrated to the monthly shape.
+
+    Returns one :class:`date` per family (length == ``total``), exactly matching
+    each month's count, with the campaign ``spike_count`` on the spike day and the
+    ``secondary_bumps`` on their days; each month's remainder fills the other
+    in-window days as evenly as possible. Pure and deterministic — no RNG.
+    """
+    window_start = date(p.window_start_year, p.window_start_month, p.window_start_day)
+    window_end = date(p.window_end_year, p.window_end_month, p.window_end_day)
+
+    # Forced single-day counts (spike + secondary bumps), keyed by exact date.
+    forced: dict[date, int] = {}
+    forced[date(p.spike_year, p.spike_month, p.spike_day)] = p.spike_count
+    for bump in p.secondary_bumps:
+        bump_day = date(bump.year, bump.month, bump.day)
+        forced[bump_day] = forced.get(bump_day, 0) + bump.count
+
+    days: list[date] = []
+    for month_key, month_total in p.monthly_counts.items():
+        year_s, month_s = month_key.split("-")
+        year, month = int(year_s), int(month_s)
+        # The in-window days of this month.
+        all_days = _days_in_month_within(year, month, window_start, window_end)
+        forced_here = {d: c for d, c in forced.items() if d.year == year and d.month == month}
+        forced_sum = sum(forced_here.values())
+        remainder = month_total - forced_sum
+        if remainder < 0:
+            raise ValueError(
+                f"realistic.monthly_counts[{month_key}] is smaller than its forced day counts"
+            )
+        spread_days = [d for d in all_days if d not in forced_here]
+        # Emit the forced days at their exact counts.
+        for d, c in forced_here.items():
+            days.extend([d] * c)
+        # Spread the remainder across the non-forced days as evenly as possible
+        # (round-robin ⇒ deterministic, no RNG, stable across runs).
+        if spread_days:
+            for i in range(remainder):
+                days.append(spread_days[i % len(spread_days)])
+        elif remainder:
+            raise ValueError(f"realistic.monthly_counts[{month_key}] has no in-window spread days")
+    return days
+
+
+def _days_in_month_within(
+    year: int, month: int, window_start: date, window_end: date
+) -> list[date]:
+    """Every day of ``year-month`` that lies inside ``[window_start, window_end]``."""
+    first = date(year, month, 1)
+    # First day of the next month, then step back one day for this month's last day.
+    next_month = date(year + 1, 1, 1) if month == 12 else date(year, month + 1, 1)
+    out: list[date] = []
+    d = max(first, window_start)
+    last = min(next_month - timedelta(days=1), window_end)
+    while d <= last:
+        out.append(d)
+        d += timedelta(days=1)
+    return out
+
+
+def _build_realistic_history_family(
+    rng: random.Random, *, created: datetime
+) -> tuple[FamilyRecord, LeadsNew, AppForm, EnrollmentForms, CommunityProfile]:
+    """Build one HISTORY family that DERIVES recovered (moved on; no active stall).
+
+    Tuition-stage, all six forms signed, funding FUNDED, ``stalled_since=None`` —
+    so stage-advance, forms-cleared, and the §5.4 funding gate all read recovered.
+    The family belongs to the funnel/history layer, not the active board.
+    """
+    family_id = _uuid(rng)
+    lead_id = _uuid(rng)
+    app_form_id = _uuid(rng)
+    enrollment_form_id = _uuid(rng)
+    community_profile_id = _uuid(rng)
+
+    surname = rng.choice(_SURNAMES)
+    given = rng.choice(_GIVEN_NAMES)
+    region = rng.choice(_REGIONS)
+    stage = _REALISTIC_HISTORY_STAGE
+    funding_type = _weighted_choice(rng, _FUNDING_TYPE_WEIGHTS)
+    product = _weighted_choice(rng, _PRODUCT_WEIGHTS)
+    attribution_source = rng.choice(_ATTRIBUTION_SOURCES)
+    email = _synthetic_email(rng, surname)
+    utm = _synthetic_utm(rng, attribution_source)
+
+    family = FamilyRecord(
+        family_id=family_id,
+        display_name=f"The {surname} Family",
+        primary_contact_synthetic_email=email,
+        lead_id=lead_id,
+        app_form_id=app_form_id,
+        enrollment_form_id=enrollment_form_id,
+        community_profile_id=community_profile_id,
+        current_stage=stage,
+        stall_reason=None,
+        stalled_since=None,
+        funding_type=funding_type,
+        funding_state=FundingState.FUNDED,
+        attribution_source=attribution_source,
+        attribution_utm=utm,
+        crm_seam_status=_seam_status(rng),
+        work_queue_score=round(rng.uniform(0.0, 1.0), 4),
+        created_at=created,
+        updated_at=min(created + timedelta(days=rng.randint(1, 30)), _EPOCH),
+    )
+    lead = LeadsNew(
+        lead_id=lead_id,
+        family_id=family_id,
+        synthetic_first_name=given,
+        synthetic_last_name=surname,
+        synthetic_email=email,
+        synthetic_phone=_synthetic_phone(rng),
+        source=attribution_source,
+        utm=utm,
+        product_interest=product,
+        grade_interest=rng.choice(_GRADES),
+        region=region,
+        created_at=created,
+    )
+    app_form = _build_app_form(rng, app_form_id, family_id, stage, created)
+    enrollment = _build_enrollment(rng, enrollment_form_id, family_id, stage, created)
+    profile = _build_profile(rng, community_profile_id, family_id, created)
+    return family, lead, app_form, enrollment, profile
+
+
+def _build_realistic_active_family(
+    rng: random.Random, *, created: datetime, stalled_since: datetime
+) -> tuple[FamilyRecord, LeadsNew, AppForm, EnrollmentForms, CommunityProfile]:
+    """Build one ACTIVE stall (recent, unresolved) — reuses the BTS active shape.
+
+    Stage in the pre-tuition funnel, stall_reason mapped so its stall-stage equals
+    current_stage (never "advanced"), funding below the §5.4 floor, forms not
+    cleared ⇒ derives ``stalled``. ``stalled_since`` is the recent anchor; the
+    family inquired earlier (``created``).
+    """
+    family_id = _uuid(rng)
+    lead_id = _uuid(rng)
+    app_form_id = _uuid(rng)
+    enrollment_form_id = _uuid(rng)
+    community_profile_id = _uuid(rng)
+
+    surname = rng.choice(_SURNAMES)
+    given = rng.choice(_GIVEN_NAMES)
+    region = rng.choice(_REGIONS)
+    stage = rng.choice(_REALISTIC_ACTIVE_STAGES)
+    funding_type = _weighted_choice(rng, _FUNDING_TYPE_WEIGHTS)
+    product = _weighted_choice(rng, _PRODUCT_WEIGHTS)
+    attribution_source = rng.choice(_ATTRIBUTION_SOURCES)
+    email = _synthetic_email(rng, surname)
+    utm = _synthetic_utm(rng, attribution_source)
+
+    stall_reason = rng.choice(_BTS_STALL_BY_STAGE[stage])
+    funding_state = rng.choice(
+        (FundingState.NONE, FundingState.APPLIED, FundingState.AWARDED_SELFREPORT)
+    )
+
+    family = FamilyRecord(
+        family_id=family_id,
+        display_name=f"The {surname} Family",
+        primary_contact_synthetic_email=email,
+        lead_id=lead_id,
+        app_form_id=app_form_id,
+        enrollment_form_id=enrollment_form_id,
+        community_profile_id=community_profile_id,
+        current_stage=stage,
+        stall_reason=stall_reason,
+        stalled_since=stalled_since,
+        funding_type=funding_type,
+        funding_state=funding_state,
+        attribution_source=attribution_source,
+        attribution_utm=utm,
+        crm_seam_status=_seam_status(rng),
+        work_queue_score=round(rng.uniform(0.0, 1.0), 4),
+        created_at=created,
+        updated_at=min(created + timedelta(days=rng.randint(0, 14)), stalled_since),
+    )
+    lead = LeadsNew(
+        lead_id=lead_id,
+        family_id=family_id,
+        synthetic_first_name=given,
+        synthetic_last_name=surname,
+        synthetic_email=email,
+        synthetic_phone=_synthetic_phone(rng),
+        source=attribution_source,
+        utm=utm,
+        product_interest=product,
+        grade_interest=rng.choice(_GRADES),
+        region=region,
+        created_at=created,
+    )
+    app_form = _build_app_form(rng, app_form_id, family_id, stage, created)
+    enrollment = _build_enrollment(rng, enrollment_form_id, family_id, stage, created)
+    profile = _build_profile(rng, community_profile_id, family_id, created)
+    return family, lead, app_form, enrollment, profile
+
+
+def generate_realistic(*, params: Realistic) -> RealisticCohort:
+    """Generate the realistic-cadence cohort, calibrated to GT's measured cadence.
+
+    A SEPARATE deterministic cohort drawn from its own ``random.Random(seed)`` —
+    the default ``generate`` and ``back_to_school`` streams are untouched
+    (byte-identical), so their determinism guards hold. ``total`` families inquire
+    across the measured window matching ``monthly_counts`` exactly (with the
+    campaign ``spike_count`` and ``secondary_bumps``); the most-recent
+    ``active_count`` are unresolved active stalls (``stalled_since`` in the last
+    ``active_window_days``), of which ``dismissed_count`` are returned for the
+    composition root to dismiss; the rest derive ``recovered``. Every shape number
+    is a param (INV-11); all rows are synthetic (INV-1). See the module-level
+    stall/resolution model comment for the full contract.
+
+    Args:
+        params: the validated ``realistic`` params block (§8).
+
+    Returns:
+        A :class:`RealisticCohort` — the dataset plus the dismiss-target ids.
+    """
+    if params.active_count > params.total:
+        raise ValueError("realistic.active_count cannot exceed total")
+
+    created_days = _realistic_created_days(params)
+    assert len(created_days) == params.total
+
+    rng = random.Random(params.seed)
+    epoch_floor = _EPOCH - timedelta(days=params.active_window_days)
+
+    ds = SyntheticDataset()
+    dismissed_family_ids: list[UUID] = []
+
+    # The LAST `active_count` inquiry-days (in build order) become the active
+    # stalls. created_days is month-ordered, so the tail is the most-recent slice
+    # of inquiries — a believable "recently went quiet" cohort.
+    active_start = params.total - params.active_count
+
+    for i, day in enumerate(created_days):
+        created = datetime(day.year, day.month, day.day, tzinfo=UTC) + timedelta(
+            minutes=rng.randint(0, 1439)
+        )
+        if i >= active_start:
+            # Active stall: a recent stalled_since spread across the active window.
+            # Clamped to [created, _EPOCH] so a family never "stalls before it
+            # inquired" (the active tail's created can itself be recent).
+            stalled_since = epoch_floor + timedelta(
+                days=rng.randint(0, params.active_window_days),
+                minutes=rng.randint(0, 1439),
+            )
+            stalled_since = min(max(stalled_since, created), _EPOCH)
+            family, lead, app_form, enrollment, profile = _build_realistic_active_family(
+                rng, created=created, stalled_since=stalled_since
+            )
+            # The first `dismissed_count` active stalls are the dismiss targets.
+            if (i - active_start) < params.dismissed_count:
+                dismissed_family_ids.append(family.family_id)
+        else:
+            family, lead, app_form, enrollment, profile = _build_realistic_history_family(
+                rng, created=created
+            )
+        ds.families.append(family)
+        ds.leads.append(lead)
+        ds.app_forms.append(app_form)
+        ds.enrollment_forms.append(enrollment)
+        ds.community_profiles.append(profile)
+
+    return RealisticCohort(dataset=ds, dismissed_family_ids=dismissed_family_ids)
 
 
 # --------------------------------------------------------------------------- #

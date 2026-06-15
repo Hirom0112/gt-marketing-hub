@@ -34,6 +34,33 @@ back_to_school:             # S12 W2 — the SEPARATE deterministic volume cohor
   spike_share: 0.53           # fraction of the cohort whose stall_date lands on the spike day
   spread_days: 40             # off-spike families spread BACKWARD this many days (the overdue tail)
 
+realistic:                  # the SEPARATE deterministic cohort calibrated to GT's real inquiry cadence (INV-1/INV-11)
+  total: 5146                 # measured inquiries 2026-01-23 → 2026-06-13 (~36/day), aggregate-only
+  seed: 5146                  # the cohort's own RNG seed (isolated from the default + back_to_school streams)
+  window_start_year: 2026     # inquiry window lower bound (inclusive)
+  window_start_month: 1
+  window_start_day: 23
+  window_end_year: 2026       # inquiry window upper bound (inclusive)
+  window_end_month: 6
+  window_end_day: 13
+  monthly_counts:             # the measured monthly shape; sum MUST equal total
+    "2026-01": 1203           # Jan — incl. the 2026-01-27 campaign spike
+    "2026-02": 1324           # Feb — peak month, two mild secondary bumps
+    "2026-03": 1302           # Mar — season peak
+    "2026-04": 832            # Apr — tapering
+    "2026-05": 462            # May — into summer
+    "2026-06": 23             # Jun — partial month, ends 06-13
+  spike_year: 2026            # the ONE campaign-burst day
+  spike_month: 1
+  spike_day: 27
+  spike_count: 761            # inquiries landing on the campaign day (the single busiest created-day)
+  secondary_bumps:            # mild within-month bumps (extra inquiries concentrated on a single day)
+    - { year: 2026, month: 2, day: 12, count: 188 }
+    - { year: 2026, month: 2, day: 15, count: 132 }
+  active_count: 140           # recent UNRESOLVED stalls → the ACTIVE recovery board (a fraction of 36/day)
+  active_window_days: 35      # active families' stalled_since spread across the last N days from the demo now
+  dismissed_count: 22         # active-shaped families set aside via a logged dismiss event (History non-empty)
+
 funding:                    # FR-2.7 — RESEARCH.md Q1; amounts NEVER hardcoded elsewhere
   award_amounts:
     tefa_standard: 10474            # $/yr standard private-school student

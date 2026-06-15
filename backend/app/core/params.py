@@ -145,6 +145,67 @@ class BackToSchool(_StrictModel):
     spread_days: int
 
 
+class SecondaryBump(_StrictModel):
+    """A single within-month inquiry bump in the realistic cohort (a one-day cluster)."""
+
+    year: int
+    month: int
+    day: int
+    count: int
+
+
+class Realistic(_StrictModel):
+    """The realistic-cadence synthetic cohort shape (INV-1/INV-11).
+
+    A SEPARATE deterministic cohort calibrated to GT's measured top-of-funnel
+    cadence (aggregate-only): ``total`` inquiries spread across ``monthly_counts``
+    within the ``[window_start, window_end]`` inquiry window, with one campaign
+    spike (``spike_count`` on the ``spike_*`` day) and optional ``secondary_bumps``.
+    A recent ``active_count`` slice are UNRESOLVED stalls whose ``stalled_since``
+    falls in the last ``active_window_days`` (the ACTIVE board), of which
+    ``dismissed_count`` are set aside via a logged dismiss event; the rest of the
+    cohort is HISTORY (derives RECOVERED). Drawn from its own ``seed`` so the
+    default + back_to_school streams stay byte-identical.
+    """
+
+    total: int
+    seed: int
+    window_start_year: int
+    window_start_month: int
+    window_start_day: int
+    window_end_year: int
+    window_end_month: int
+    window_end_day: int
+    # Year-month string ("2026-01") → inquiry count. Keys are validated as data;
+    # the sum is asserted against ``total`` so the calibration can't silently drift.
+    monthly_counts: dict[str, int]
+    spike_year: int
+    spike_month: int
+    spike_day: int
+    spike_count: int
+    secondary_bumps: list[SecondaryBump]
+    active_count: int
+    active_window_days: int
+    dismissed_count: int
+
+    @model_validator(mode="after")
+    def _shape_is_consistent(self) -> Realistic:
+        month_total = sum(self.monthly_counts.values())
+        if month_total != self.total:
+            raise ValueError(
+                f"realistic.monthly_counts must sum to total {self.total}, got {month_total}"
+            )
+        if self.spike_count > self.total:
+            raise ValueError("realistic.spike_count cannot exceed total")
+        if self.dismissed_count > self.active_count:
+            raise ValueError("realistic.dismissed_count cannot exceed active_count")
+        if self.active_count > self.total:
+            raise ValueError("realistic.active_count cannot exceed total")
+        if self.active_window_days <= 0:
+            raise ValueError("realistic.active_window_days must be positive")
+        return self
+
+
 class AwardAmounts(_StrictModel):
     """funding.award_amounts — TEFA tiers, $/yr (RESEARCH.md Q1)."""
 
@@ -384,6 +445,7 @@ class Params(_StrictModel):
     enrollment: Enrollment
     bulk: Bulk
     back_to_school: BackToSchool
+    realistic: Realistic
     funding: Funding
     eval_thresholds: EvalThresholds
     cost_caps: CostCaps
