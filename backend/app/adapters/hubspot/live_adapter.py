@@ -180,8 +180,18 @@ class LiveHubSpotCRMAdapter(CRMAdapter):
         return str(created["id"])
 
     def _associate(self, from_path: str, from_id: str, to_object: str, to_id: str) -> None:
-        """Ensure an association exists between two objects (idempotent on HubSpot)."""
-        path = f"{from_path}/{from_id}/associations/{to_object}/{to_id}"
+        """Ensure a DEFAULT association exists between two objects (idempotent).
+
+        Uses the CRM **v4** default-association endpoint
+        (``/crm/v4/objects/{from}/{id}/associations/default/{to}/{id}``), which
+        creates the HubSpot-defined default labels (e.g. deal↔contact) without a
+        caller-supplied association type id. The v3 PUT without a type id 404s on
+        the live portal, so v4-default is the correct surface. ``from_path`` is a
+        v3 object path (``/crm/v3/objects/{type}``); we lift the object type off
+        its tail to build the v4 URL so the call sites stay unchanged.
+        """
+        from_type = from_path.rsplit("/", 1)[-1]
+        path = f"/crm/v4/objects/{from_type}/{from_id}/associations/default/{to_object}/{to_id}"
         self._request("PUT", path)
 
     # --------------------------------------------------------- property builders
@@ -231,6 +241,7 @@ class LiveHubSpotCRMAdapter(CRMAdapter):
         return SyncResult(
             simulated=False,
             recorded_id=deal_id,
+            contact_id=contact_id,
             family_id=family_record.family_id,
             stage=family_record.current_stage,
         )
@@ -279,11 +290,32 @@ class LiveHubSpotCRMAdapter(CRMAdapter):
     def send_message(self, message: dict[str, Any]) -> SendResult:
         """Create a Note (``hs_note_body`` + ``hs_timestamp``) and associate it (§7.1).
 
-        Associates the note to the contact and/or deal when their ids are supplied.
-        Returns the live note id as ``recorded_id``.
+        Associates the note to the contact and/or deal. The ids may be supplied
+        directly (``contact_id`` / ``deal_id``), OR resolved from a ``family_id``
+        by ``gt_synthetic_id`` (the upsert key; guard 1 — never email). The
+        approve path (S10 W3) threads only ``family_id`` + ``body``, so this
+        resolution lets the deterministic decision route write a Note that lands
+        on the same Contact + Deal ``push_family`` created. A ``family_id`` that
+        resolves to nothing still creates the Note (no crash) — the note is the
+        durable record even if association targets are absent. Returns the live
+        note id as ``recorded_id``.
         """
         channel = str(message.get("channel", "email"))
         body = str(message.get("body", ""))
+
+        # Resolve association ids: prefer explicit ids, else look up by the
+        # family's gt_synthetic_id (never email — guard 1). Resolution happens
+        # BEFORE the note create so a budget breach (guard 3) fails closed early.
+        contact_id = message.get("contact_id")
+        deal_id = message.get("deal_id")
+        family_id = message.get("family_id")
+        if family_id is not None and (contact_id is None or deal_id is None):
+            gt_id = str(family_id)
+            if contact_id is None:
+                contact_id = self._resolve_id(_CONTACTS, gt_id)
+            if deal_id is None:
+                deal_id = self._resolve_id(_DEALS, gt_id)
+
         timestamp = _hs_now_ms()
         created = self._request(
             "POST",
@@ -292,14 +324,17 @@ class LiveHubSpotCRMAdapter(CRMAdapter):
         ).json()
         note_id = str(created["id"])
 
-        contact_id = message.get("contact_id")
         if contact_id:
             self._associate(_NOTES, note_id, "contacts", str(contact_id))
-        deal_id = message.get("deal_id")
         if deal_id:
             self._associate(_NOTES, note_id, "deals", str(deal_id))
 
         return SendResult(simulated=False, recorded_id=note_id, channel=channel)
+
+    def _resolve_id(self, object_path: str, gt_id: str) -> str | None:
+        """Resolve a contact/deal object id by ``gt_synthetic_id`` (never email)."""
+        match = self._search_by_gt_id(object_path, gt_id, [_GT_SYNTHETIC_ID])
+        return None if match is None else str(match["id"])
 
 
 def _parse_hs_timestamp(raw: object) -> datetime | None:

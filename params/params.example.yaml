@@ -91,10 +91,15 @@ crm:                        # S10 — HubSpot CRM seam (ANALYSIS/hubspot-complem
     tuition: "3840835275"
     closed_lost: "closedlost"
   # Synthetic write-lock allowlist (guard 1, INV-1) — only synthetic crosses.
+  # The .test/.invalid markers are the in-repo synthetic shape (HubSpot rejects
+  # those reserved TLDs as invalid emails); gtschool-synthetic.com is a valid-TLD
+  # but unmistakably-synthetic domain so the LIVE adapter can actually write a
+  # Contact (it is NOT a real GT/vendor domain — see real_domain_denylist).
   synthetic_email_domains:
     - example.test
     - example.invalid
     - synthetic.gtschool.test
+    - gtschool-synthetic.com
   # Real domains the write-lock denies (defense in depth atop the allowlist).
   real_domain_denylist:
     - gauntlethq.com

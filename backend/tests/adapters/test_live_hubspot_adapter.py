@@ -339,6 +339,55 @@ def test_send_message_creates_note_and_associates() -> None:
     assert "hs_note_body" in note_props and "hs_timestamp" in note_props
 
 
+def test_send_message_resolves_ids_by_gt_synthetic_id() -> None:
+    """send_message with a family_id (no ids) resolves contact/deal by gt_synthetic_id.
+
+    The approve path (S10 W3) threads only ``family_id`` + ``body`` — the live
+    adapter resolves the contact and deal ids by ``gt_synthetic_id`` and
+    associates the new Note to BOTH. The lookups key on gt_synthetic_id, never
+    email (guard 1).
+    """
+    fake = _FakeHubSpot()
+    adapter = _adapter(fake)
+    record = _family()
+    # Seed the portal so the gt_synthetic_id resolves to a contact + deal.
+    adapter.push_family(record)
+
+    result = adapter.send_message(
+        {
+            "family_id": str(record.family_id),
+            "channel": "email",
+            "body": "Quick follow-up about your enrollment.",
+        }
+    )
+
+    assert isinstance(result, SendResult)
+    assert result.recorded_id
+    # The note was associated to BOTH the contact and the deal it resolved. The
+    # v4 default-association path is .../associations/default/{toObject}/{id}, so
+    # the to-object is the segment AFTER "default".
+    assocs = [r for r in fake.requests if "/associations/" in r.url.path and "notes" in r.url.path]
+    targets = {r.url.path.split("/associations/default/")[1].split("/")[0] for r in assocs}
+    assert targets == {"contacts", "deals"}, f"note must link contact+deal, got {targets}"
+    # Every lookup keyed on gt_synthetic_id, never email.
+    searches = [r for r in fake.requests if r.url.path.endswith("/search")]
+    for req in searches:
+        assert "gt_synthetic_id" in req.content.decode()
+        assert record.primary_contact_synthetic_email not in req.content.decode()
+
+
+def test_send_message_missing_resolution_still_creates_note() -> None:
+    """A family_id that resolves to no objects still creates the Note (no crash)."""
+    fake = _FakeHubSpot()  # empty store — nothing to resolve
+    adapter = _adapter(fake)
+
+    result = adapter.send_message({"family_id": str(uuid4()), "channel": "email", "body": "hi"})
+
+    assert result.recorded_id
+    note_creates = [r for r in fake.requests if "notes" in r.url.path and r.method == "POST"]
+    assert note_creates, "the note is created even when association targets are absent"
+
+
 # ===========================================================================
 # GUARD 1 — synthetic write-lock (INV-1): passing + BLOCKING
 # ===========================================================================

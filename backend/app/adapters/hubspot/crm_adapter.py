@@ -54,6 +54,12 @@ class SyncResult(BaseModel):
     recorded_id: str
     family_id: UUID
     stage: Stage
+    # The associated CRM contact id, when the push created/upserted one — the
+    # live HubSpot contact id under CRM_MODE=live, so the cockpit can deep-link
+    # the captured Contact alongside the Deal (S10 W3). None for the simulated
+    # recorder (which has no contact object), and optional so adding it is
+    # non-breaking for existing SyncResult construction.
+    contact_id: str | None = None
 
 
 class SendResult(BaseModel):
