@@ -24,6 +24,7 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from uuid import UUID
 
+from app.core.pipeline import pipeline_counts as core_pipeline_counts
 from app.data.models import (
     AppForm,
     CommunityProfile,
@@ -148,8 +149,7 @@ class InMemoryFamilyRepository(FamilyRepository):
         )
 
     def pipeline_counts(self) -> dict[Stage, int]:
-        # Every stage present (zero-filled) so the dashboard renders all four.
-        counts: dict[Stage, int] = dict.fromkeys(Stage, 0)
-        for family in self._families:
-            counts[family.current_stage] += 1
-        return counts
+        # Delegate to the pure core counter (FR-2.1): the counting contract lives
+        # in `core/pipeline.py` so it is defined once. A SQL-backed store maps the
+        # same contract to a `GROUP BY current_stage`.
+        return core_pipeline_counts(self._families)
