@@ -13,6 +13,7 @@ from app.api.content import router as content_router
 from app.api.families import router as families_router
 from app.api.funding import router as funding_router
 from app.api.geo import router as geo_router
+from app.api.marketing import router as marketing_router
 from app.api.notes import router as notes_router
 from app.api.seam import router as seam_router
 
@@ -59,6 +60,12 @@ app.include_router(content_router)
 # sampling run, logged to the audit spine, NFR-6). Sampling is offline/simulated
 # (INV-9); insufficient samples fail closed and disable the action (INV-3).
 app.include_router(geo_router)
+
+# Marketing breadth (FR-3.6/3.8/3.10/3.11/3.12; ARCH §6) — /creators, /sentiment,
+# /kpi, /content/schedule (GET+POST), /pipeline (GET + /advance), /recipes. The
+# schedule gate + pipeline guard are fail-closed (blocked vs simulated_sent, INV-3);
+# dispatch is SIMULATED, never live (INV-9); recipes attribute Tom Babb (INV-7).
+app.include_router(marketing_router)
 
 
 # AWS Lambda + API Gateway entrypoint (ARCHITECTURE.md §12).

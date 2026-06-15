@@ -14,8 +14,8 @@ the router):
   ``GET  /content/schedule`` — the simulated post queue.
   ``POST /content/schedule`` — build + gate + simulate-send; fail-closed (blocked
                                vs simulated_sent), NEVER live (INV-9).
-  ``GET  /pipeline``         — the seeded concept→image→video artifacts.
-  ``POST /pipeline/advance`` — the §4 cheapest-first guard; fail-closed (422).
+  ``GET  /content/pipeline`` — the seeded concept→image→video artifacts.
+  ``POST /content/pipeline/advance`` — the §4 cheapest-first guard; fail-closed (422).
   ``GET  /recipes``          — every recipe attributes Tom Babb (INV-7).
 """
 
@@ -195,9 +195,7 @@ def _schedule_body(*, decision: str, passed: bool) -> dict[str, object]:
 
 def test_post_schedule_approved_passing_simulated_sent() -> None:
     """A passing validation + approve ⇒ dispatch_status simulated_sent (simulated)."""
-    resp = client.post(
-        "/content/schedule", json=_schedule_body(decision="approve", passed=True)
-    )
+    resp = client.post("/content/schedule", json=_schedule_body(decision="approve", passed=True))
     assert resp.status_code == 200
     body = resp.json()
     assert body["dispatch_status"] == "simulated_sent"
@@ -208,9 +206,7 @@ def test_post_schedule_approved_passing_simulated_sent() -> None:
 
 def test_post_schedule_failing_validation_blocked() -> None:
     """A failing validation ⇒ dispatch_status blocked, 200 (fail-closed, not 500)."""
-    resp = client.post(
-        "/content/schedule", json=_schedule_body(decision="approve", passed=False)
-    )
+    resp = client.post("/content/schedule", json=_schedule_body(decision="approve", passed=False))
     assert resp.status_code == 200
     body = resp.json()
     assert body["dispatch_status"] == "blocked"
@@ -220,9 +216,7 @@ def test_post_schedule_failing_validation_blocked() -> None:
 
 def test_post_schedule_unapproved_blocked() -> None:
     """A non-approve decision ⇒ blocked even with a passing validation (INV-3)."""
-    resp = client.post(
-        "/content/schedule", json=_schedule_body(decision="pending", passed=True)
-    )
+    resp = client.post("/content/schedule", json=_schedule_body(decision="pending", passed=True))
     assert resp.status_code == 200
     assert resp.json()["dispatch_status"] == "blocked"
 
@@ -231,18 +225,14 @@ def test_post_schedule_logs_to_observability() -> None:
     """POST /content/schedule appends a schedule proposal to the audit log (NFR-6)."""
     log = deps.get_observability_log()
     before = len(log.list_proposals())
-    resp = client.post(
-        "/content/schedule", json=_schedule_body(decision="approve", passed=True)
-    )
+    resp = client.post("/content/schedule", json=_schedule_body(decision="approve", passed=True))
     assert resp.status_code == 200
     assert len(log.list_proposals()) == before + 1
 
 
 def test_post_schedule_never_live() -> None:
     """A live dispatch_mode is never accepted/produced — the response is simulated."""
-    resp = client.post(
-        "/content/schedule", json=_schedule_body(decision="approve", passed=True)
-    )
+    resp = client.post("/content/schedule", json=_schedule_body(decision="approve", passed=True))
     assert resp.json()["dispatch_mode"] == "simulated"
 
 
@@ -253,7 +243,7 @@ def test_post_schedule_never_live() -> None:
 
 def test_get_pipeline_returns_concept_image_video() -> None:
     """GET /pipeline returns the seeded concept/image/video artifacts."""
-    resp = client.get("/pipeline")
+    resp = client.get("/content/pipeline")
     assert resp.status_code == 200
     body = resp.json()
     for stage in ("concept", "image", "video"):
@@ -273,7 +263,7 @@ def test_get_pipeline_returns_concept_image_video() -> None:
 def test_post_pipeline_advance_selected_passing_unlocks() -> None:
     """A selected + passing concept advances to the next (image) stage."""
     resp = client.post(
-        "/pipeline/advance",
+        "/content/pipeline/advance",
         json={"stage": "concept", "status": "selected", "validation": {"passed": True}},
     )
     assert resp.status_code == 200
@@ -283,7 +273,7 @@ def test_post_pipeline_advance_selected_passing_unlocks() -> None:
 def test_post_pipeline_advance_unselected_blocked() -> None:
     """An unselected concept cannot advance ⇒ 422 (fail-closed, INV-3)."""
     resp = client.post(
-        "/pipeline/advance",
+        "/content/pipeline/advance",
         json={"stage": "concept", "status": "generated", "validation": {"passed": True}},
     )
     assert resp.status_code == 422
@@ -292,7 +282,7 @@ def test_post_pipeline_advance_unselected_blocked() -> None:
 def test_post_pipeline_advance_unvalidated_blocked() -> None:
     """A selected but failing-validation concept cannot advance ⇒ 422 (INV-3)."""
     resp = client.post(
-        "/pipeline/advance",
+        "/content/pipeline/advance",
         json={"stage": "concept", "status": "selected", "validation": {"passed": False}},
     )
     assert resp.status_code == 422

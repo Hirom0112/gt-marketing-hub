@@ -17,6 +17,9 @@ from app.adapters.brand_memory.sqlite_store import SqliteBrandMemoryStore
 from app.adapters.funding.base import FundingSignalAdapter
 from app.adapters.geo_sampling.base import GeoSamplingAdapter
 from app.adapters.hubspot.crm_adapter import CRMAdapter
+from app.adapters.media.base import MediaGenAdapter
+from app.adapters.sentiment.base import SentimentAdapter
+from app.adapters.social.base import SocialAdapter
 from app.ai.client import AnthropicLLMClient, LLMClient
 from app.ai.schemas.brand import BrandRule
 from app.core.eval_gate import BrandJudge
@@ -213,6 +216,36 @@ def get_geo_sampling_adapter_dep() -> GeoSamplingAdapter:
     known sampling stream (e.g. the insufficient-samples fail-closed path).
     """
     return registry.get_geo_sampling_adapter()
+
+
+def get_sentiment_adapter_dep() -> SentimentAdapter:
+    """FastAPI dependency yielding the §7.5 sentiment-feed adapter (INV-6/INV-9).
+
+    Delegates to the §7 registry (v1 ⇒ a placeholder, aggregate-only source over
+    synthetic data, ``source_mode='placeholder'``; live ⇒ fail-loud). The summary
+    is AGGREGATE only — no per-person or child-keyed field (INV-6) — and no live
+    feed is ever polled (INV-9). Tests override this to inject a known summary.
+    """
+    return registry.get_sentiment_adapter()
+
+
+def get_social_adapter_dep() -> SocialAdapter:
+    """FastAPI dependency yielding the §7.4 social-posting adapter (INV-9).
+
+    Delegates to the §7 registry (v1 ⇒ a simulated, backend-held queue with
+    simulated receipts; live ⇒ fail-loud). Every v1 dispatch is SIMULATED — a
+    live send is never performed here (INV-9, OUT-2). Tests override this.
+    """
+    return registry.get_social_adapter()
+
+
+def get_media_gen_adapter_dep() -> MediaGenAdapter:
+    """FastAPI dependency yielding the §7.3 media-gen adapter (INV-9, OUT-1).
+
+    Delegates to the §7 registry (v1 ⇒ a placeholder, $0-spend stub; live ⇒
+    fail-loud). No live media is generated in v1 (OUT-1). Tests override this.
+    """
+    return registry.get_media_gen_adapter()
 
 
 def get_brand_memory_store_dep() -> BrandMemoryStore:
