@@ -2,6 +2,7 @@ import ActionPanel from './ActionPanel';
 import { apiBaseUrl } from './config';
 import FundingTracker from './FundingTracker';
 import LandingDashboard from './LandingDashboard';
+import ContentWorkspace from './marketing/ContentWorkspace';
 import SeamView from './SeamView';
 import WorkQueue from './WorkQueue';
 
@@ -24,6 +25,9 @@ export default function App(): JSX.Element {
         <ActionPanel familyId="fam-a" />
         <FundingTracker familyId="fam-a" />
         <SeamView />
+      </section>
+      <section aria-label="Marketing workspace" className="marketing-workspace">
+        <ContentWorkspace />
       </section>
     </main>
   );
