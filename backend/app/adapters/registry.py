@@ -13,10 +13,19 @@ INV-9 posture is fail-loud — never silently fall through to a live send.
 
 from __future__ import annotations
 
+import os
+
+from app.adapters.brand_memory.base import BrandMemoryStore
+from app.adapters.brand_memory.sqlite_store import SqliteBrandMemoryStore
 from app.adapters.funding.base import FundingSignalAdapter
 from app.adapters.funding.simulated import SimulatedFundingSignalAdapter
 from app.adapters.hubspot.crm_adapter import CRMAdapter, SimulatedCRMAdapter
 from app.core.settings import get_settings
+
+# Default on-disk home for the persistent brand-memory store when no override is
+# supplied (ASSUMPTIONS A-11). The path is a config seam (env > default), not a
+# hardcoded magic in logic (INV-11) — overridable via ``BRAND_MEMORY_DB_PATH``.
+_DEFAULT_BRAND_MEMORY_DB_PATH = "data/brand_memory.db"
 
 
 def get_crm_adapter() -> CRMAdapter:
@@ -64,3 +73,20 @@ def get_funding_signal_adapter() -> FundingSignalAdapter:
         "for a supplied GT-controlled signal source (ARCHITECTURE.md §7.2; "
         "INV-9/INV-10 fail-loud). v1 is locked to SEND_MODE='simulate'."
     )
+
+
+def get_brand_memory_store() -> BrandMemoryStore:
+    """Return the persistent brand-memory store (FR-3.2, D-8, A-11, INV-9).
+
+    Brand memory MUST be server-side persistent, not browser localStorage (D-8).
+    No Postgres in this env (A-3), so per A-11 the v1 local impl is the
+    stdlib-``sqlite3``-backed :class:`SqliteBrandMemoryStore` (no new
+    dependency). A kept item survives store re-instantiation against the same
+    on-disk path. The production Postgres table (with deny-by-default RLS, INV-5)
+    is authored in ``app/data/migrations/0002_brand_memory.sql``.
+
+    The backing file path is a config seam: ``BRAND_MEMORY_DB_PATH`` if set, else
+    the documented default (INV-11 — a seam, not a hardcoded magic in logic).
+    """
+    db_path = os.environ.get("BRAND_MEMORY_DB_PATH") or _DEFAULT_BRAND_MEMORY_DB_PATH
+    return SqliteBrandMemoryStore(db_path)

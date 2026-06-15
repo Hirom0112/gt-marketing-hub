@@ -19,6 +19,8 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
+import pytest
+
 from app.adapters.brand_memory.base import BrandMemoryStore
 from app.adapters.brand_memory.sqlite_store import SqliteBrandMemoryStore
 from app.adapters.registry import get_brand_memory_store
@@ -30,11 +32,7 @@ from app.ai.schemas.brand import (
 from app.ai.schemas.content import Channel, GeneratedBy, Provenance
 
 _MIGRATION = (
-    Path(__file__).resolve().parents[2]
-    / "app"
-    / "data"
-    / "migrations"
-    / "0002_brand_memory.sql"
+    Path(__file__).resolve().parents[2] / "app" / "data" / "migrations" / "0002_brand_memory.sql"
 )
 
 
@@ -92,7 +90,7 @@ def test_kept_item_survives_reinstantiation(tmp_path: Path) -> None:
 def test_upsert_returns_and_updates(tmp_path: Path) -> None:
     """`upsert` returns the stored item and a re-upsert replaces it (idempotent id)."""
     store = SqliteBrandMemoryStore(tmp_path / "bm.db")
-    returned = store.upsert(_item("bm-x", content_weight := 1.0))  # noqa: F841
+    returned = store.upsert(_item("bm-x", weight=1.0))
     assert returned.id == "bm-x"
 
     updated = _item("bm-x", weight=2.0)
@@ -168,8 +166,12 @@ def test_list_active_filters_inactive_and_by_channel(tmp_path: Path) -> None:
     assert "bm-active-ig" not in email_ids
 
 
-def test_registry_returns_sqlite_store() -> None:
-    """`get_brand_memory_store` returns a `SqliteBrandMemoryStore` (A-11 local impl)."""
+def test_registry_returns_sqlite_store(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """`get_brand_memory_store` returns a `SqliteBrandMemoryStore` (A-11 local impl).
+
+    The backing path comes from the ``BRAND_MEMORY_DB_PATH`` env seam (INV-11).
+    """
+    monkeypatch.setenv("BRAND_MEMORY_DB_PATH", str(tmp_path / "registry-bm.db"))
     store = get_brand_memory_store()
     assert isinstance(store, BrandMemoryStore)
     assert isinstance(store, SqliteBrandMemoryStore)
