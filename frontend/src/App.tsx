@@ -1,3 +1,4 @@
+import ActionPanel from './ActionPanel';
 import { apiBaseUrl } from './config';
 import LandingDashboard from './LandingDashboard';
 import WorkQueue from './WorkQueue';
@@ -18,6 +19,7 @@ export default function App(): JSX.Element {
       <LandingDashboard />
       <section aria-label="Enrollment workspace" className="enrollment-workspace">
         <WorkQueue />
+        <ActionPanel familyId="fam-a" />
       </section>
     </main>
   );
