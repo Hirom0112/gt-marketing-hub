@@ -35,9 +35,12 @@ from app.data.synthetic import (
     generate_brand_memory,
     generate_brand_rules,
     generate_content_batch,
+    generate_geo_content_pieces,
     generate_library_assets,
     generate_recipes,
 )
+from app.marketing.geo import validate_competitor_set
+from app.marketing.schemas.geo import GeoContentPiece
 
 # The §9 V-2 banned-pattern (performance multipliers like "4X speed") and the
 # §9 V-3 minor-targeting signal ("Hey kids, ..."), mirrored from
@@ -202,6 +205,47 @@ def test_library_assets_counts_and_types() -> None:
         assert asset.validation.strip()  # only validated content enters the library
         assert asset.tags
         assert asset.provenance.generated_by is GeneratedBy.SYNTHETIC_SEED
+
+
+# --------------------------------------------------------------------------- #
+# §11.5 GEO content pieces — enables S5 (real ICP prompts, gifted-school set,
+# 0% baseline, samplingNote). These are VALID seeds (good GEO content), not the
+# BLOCK demos — the block demos live in the §11.4 content batch.
+# --------------------------------------------------------------------------- #
+def test_geo_content_pieces_seed_inventory() -> None:
+    """≥3 GeoContentPieces on real ICP prompts (CONTENT_SPEC §11.5, INV-1/INV-6)."""
+    pieces = generate_geo_content_pieces()
+    assert len(pieces) >= 3
+    assert all(isinstance(p, GeoContentPiece) for p in pieces)
+
+    # Ids are unique across the inventory.
+    assert len({p.id for p in pieces}) == len(pieces)
+
+    for piece in pieces:
+        # Real ICP prompt — non-empty target_prompt (schema enforces min_length=1).
+        assert piece.target_prompt.strip()
+        # §7.3 / INV-6: the LOCKED gifted-school competitor universe, nothing else.
+        assert validate_competitor_set(piece.competitor_set) is True
+        # §7.1: every piece starts at the 0% baseline.
+        assert piece.baseline_coverage == 0.0
+        # §7.4 / §11.5: a repeated-sampling note is present and non-empty.
+        assert piece.sampling_note is not None
+        assert piece.sampling_note.strip()
+        # A structured body and a pre-validated validation ref (schema min_length=1).
+        assert piece.body.strip()
+        assert piece.validation.strip()
+        # Synthetic-seed provenance throughout (INV-1).
+        assert piece.provenance.generated_by is GeneratedBy.SYNTHETIC_SEED
+
+
+def test_geo_content_pieces_pass_grounding_gate() -> None:
+    """Each seed is VALID GEO content — passes V-1/V-2 through the real gate."""
+    from app.core.eval_gate import RuleVerdict, check_v1, check_v2
+
+    pieces = generate_geo_content_pieces()
+    for piece in pieces:
+        assert check_v1(piece) is RuleVerdict.PASS
+        assert check_v2(piece) is RuleVerdict.PASS
 
 
 # --------------------------------------------------------------------------- #
