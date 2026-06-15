@@ -22,6 +22,12 @@ from app.adapters.funding.simulated import SimulatedFundingSignalAdapter
 from app.adapters.geo_sampling.base import GeoSamplingAdapter
 from app.adapters.geo_sampling.simulated import SimulatedGeoSamplingAdapter
 from app.adapters.hubspot.crm_adapter import CRMAdapter, SimulatedCRMAdapter
+from app.adapters.media.base import MediaGenAdapter
+from app.adapters.media.placeholder import PlaceholderMediaGenAdapter
+from app.adapters.sentiment.base import SentimentAdapter
+from app.adapters.sentiment.placeholder import PlaceholderSentimentAdapter
+from app.adapters.social.base import SocialAdapter
+from app.adapters.social.simulated import SimulatedSocialAdapter
 from app.core.settings import get_settings
 
 # Default on-disk home for the persistent brand-memory store when no override is
@@ -100,6 +106,83 @@ def get_geo_sampling_adapter() -> GeoSamplingAdapter:
         "No production GeoSamplingAdapter in v1: SEND_MODE='live' is reserved "
         "for a supplied live AI-engine sampling impl (ARCHITECTURE.md §7.6; "
         "INV-9 fail-loud). v1 is locked to SEND_MODE='simulate'."
+    )
+
+
+def get_media_gen_adapter() -> MediaGenAdapter:
+    """Return the media-gen adapter for the current mode (§7.3, OUT-1, INV-9).
+
+    The §7.3 boundary generates image/video assets. Live generation is OUT in v1
+    (PROJECT §7, OUT-1: **$0 spend**), so it keys on its own dedicated mode seam
+    ``MEDIA_GEN_MODE`` (read only through :func:`app.core.settings.get_settings`):
+
+    - ``placeholder`` (v1 lock) ⇒ a fresh :class:`PlaceholderMediaGenAdapter`
+      (synthetic stub refs, no live gen, $0 spend; INV-9).
+    - ``live`` ⇒ ``NotImplementedError`` — no production media-gen impl in v1;
+      fail loud rather than silently generate and overspend (INV-9, OUT-1).
+
+    Raises:
+        NotImplementedError: when ``MEDIA_GEN_MODE=live`` (no production impl in v1).
+    """
+    mode = get_settings().media_gen_mode
+    if mode == "placeholder":
+        return PlaceholderMediaGenAdapter()
+    raise NotImplementedError(
+        "No production MediaGenAdapter in v1: MEDIA_GEN_MODE='live' is reserved "
+        "for a supplied production media-gen impl (ARCHITECTURE.md §7.3; "
+        "INV-9 fail-loud, OUT-1 $0 spend). v1 is locked to MEDIA_GEN_MODE='placeholder'."
+    )
+
+
+def get_social_adapter() -> SocialAdapter:
+    """Return the social-posting adapter for the current mode (§7.4, OUT-2, INV-9).
+
+    The §7.4 boundary schedules/publishes posts. Live posting is OUT in v1
+    (PROJECT §7, OUT-2), so it keys on its own dedicated mode seam
+    ``SOCIAL_POST_MODE`` (read only through :func:`app.core.settings.get_settings`):
+
+    - ``simulate`` (v1 lock) ⇒ a fresh :class:`SimulatedSocialAdapter`
+      (backend-held queue, simulated receipts, no live send; INV-9).
+    - ``live`` ⇒ ``NotImplementedError`` — no production social impl in v1; fail
+      loud rather than silently send (INV-9, OUT-2).
+
+    Raises:
+        NotImplementedError: when ``SOCIAL_POST_MODE=live`` (no production impl in v1).
+    """
+    mode = get_settings().social_post_mode
+    if mode == "simulate":
+        return SimulatedSocialAdapter()
+    raise NotImplementedError(
+        "No production SocialAdapter in v1: SOCIAL_POST_MODE='live' is reserved "
+        "for a supplied production social-posting impl (ARCHITECTURE.md §7.4; "
+        "INV-9 fail-loud). v1 is locked to SOCIAL_POST_MODE='simulate'."
+    )
+
+
+def get_sentiment_adapter() -> SentimentAdapter:
+    """Return the sentiment-feed adapter for the current mode (§7.5, OUT-5, INV-6/9).
+
+    The §7.5 boundary returns an **aggregate-only** sentiment summary (no minor
+    targeting, INV-6). A live feed is OUT in v1 (PROJECT §7, OUT-5); it has no
+    dedicated mode var, so it shares the v1 ``SEND_MODE`` lock as its mode seam
+    (read only through :func:`app.core.settings.get_settings`), as funding/geo do:
+
+    - ``simulate`` (v1 lock) ⇒ a fresh :class:`PlaceholderSentimentAdapter`
+      (aggregate over synthetic data, ``source_mode='placeholder'``, no live
+      feed; INV-6, INV-9).
+    - ``live`` ⇒ ``NotImplementedError`` — no production sentiment impl in v1;
+      fail loud rather than silently poll a live feed (INV-9, INV-6).
+
+    Raises:
+        NotImplementedError: when ``SEND_MODE=live`` (no production impl in v1).
+    """
+    mode = get_settings().send_mode
+    if mode == "simulate":
+        return PlaceholderSentimentAdapter()
+    raise NotImplementedError(
+        "No production SentimentAdapter in v1: SEND_MODE='live' is reserved for a "
+        "supplied production sentiment-feed impl (ARCHITECTURE.md §7.5; "
+        "INV-9 fail-loud, INV-6 aggregate-only). v1 is locked to SEND_MODE='simulate'."
     )
 
 
