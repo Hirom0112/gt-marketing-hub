@@ -16,15 +16,14 @@ from __future__ import annotations
 from pathlib import Path
 from uuid import UUID
 
+from app.ai.schemas.content import Channel, GeneratedBy, Provenance
+from app.core.params import Params, load_params
 from app.marketing.creator_scoring import (
     CreatorSignals,
     authenticity_score,
     fit_score,
     surface,
 )
-
-from app.ai.schemas.content import Channel, GeneratedBy, Provenance
-from app.core.params import Params, load_params
 from app.marketing.schemas.discovery import (
     AudienceSegment,
     CreatorDataMode,
@@ -32,7 +31,7 @@ from app.marketing.schemas.discovery import (
 )
 
 # The committed example file is the authoritative params source for these tests.
-EXAMPLE_PARAMS = Path(__file__).resolve().parents[3] / "params" / "params.example.yaml"
+EXAMPLE_PARAMS = Path(__file__).resolve().parents[4] / "params" / "params.example.yaml"
 
 
 def _params() -> Params:
