@@ -72,28 +72,17 @@ def test_generates_n_families_with_joined_source_rows() -> None:
     for fam in ds.families:
         assert fam.lead_id == leads_by_family[fam.family_id].lead_id
         assert fam.app_form_id == apps_by_family[fam.family_id].app_form_id
-        assert (
-            fam.enrollment_form_id == enroll_by_family[fam.family_id].enrollment_form_id
-        )
-        assert (
-            fam.community_profile_id
-            == profiles_by_family[fam.family_id].community_profile_id
-        )
+        assert fam.enrollment_form_id == enroll_by_family[fam.family_id].enrollment_form_id
+        assert fam.community_profile_id == profiles_by_family[fam.family_id].community_profile_id
 
     # Deterministic under a fixed seed: same seed ⇒ identical output.
     ds_again: SyntheticDataset = generate(n=50, seed=1234)
-    assert [f.model_dump() for f in ds.families] == [
-        f.model_dump() for f in ds_again.families
-    ]
-    assert [r.model_dump() for r in ds.leads] == [
-        r.model_dump() for r in ds_again.leads
-    ]
+    assert [f.model_dump() for f in ds.families] == [f.model_dump() for f in ds_again.families]
+    assert [r.model_dump() for r in ds.leads] == [r.model_dump() for r in ds_again.leads]
 
     # A different seed ⇒ a different dataset (the seed actually drives generation).
     ds_other: SyntheticDataset = generate(n=50, seed=9999)
-    assert [f.model_dump() for f in ds.families] != [
-        f.model_dump() for f in ds_other.families
-    ]
+    assert [f.model_dump() for f in ds.families] != [f.model_dump() for f in ds_other.families]
 
 
 def test_no_pii_shaped_values_in_output() -> None:
@@ -120,8 +109,7 @@ def test_no_pii_shaped_values_in_output() -> None:
         *ds.community_profiles,
     ]
     for row in all_rows:
-        if hasattr(row, "model_fields"):
-            assert "household_income" not in row.model_fields  # type: ignore[attr-defined]
+        assert "household_income" not in type(row).model_fields  # type: ignore[attr-defined]
 
     # Names are obviously-synthetic household labels ("The <Surname> Family"), not
     # bare "First Last" personal names — defuses the name component of C-SYN-2.
