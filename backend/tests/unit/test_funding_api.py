@@ -15,7 +15,7 @@ core is wired behind HTTP faithfully, not that the math is re-derived in the API
 from __future__ import annotations
 
 from collections.abc import Iterator
-from uuid import UUID, uuid4
+from uuid import uuid4
 
 import pytest
 from fastapi.testclient import TestClient

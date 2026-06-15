@@ -10,7 +10,9 @@ from mangum import Mangum
 
 from app.api.ai_actions import router as ai_actions_router
 from app.api.families import router as families_router
+from app.api.funding import router as funding_router
 from app.api.notes import router as notes_router
+from app.api.seam import router as seam_router
 
 app = FastAPI(title="GT Growth Cockpit", version="0.1.0")
 
@@ -32,6 +34,17 @@ app.include_router(ai_actions_router)
 # Per-family notes timeline (FR-2.3; A-8) — /families/{id}/notes GET + POST.
 # Manual notes + deterministic state-change auto-notes; no LLM, no proposals.
 app.include_router(notes_router)
+
+# Funding view + GT-controlled signal advance (FR-2.7; ARCH §6, §5.4) —
+# /families/{id}/funding GET + /families/{id}/funding/signal POST. Deterministic
+# TEFA math + the §5.4 funding-state machine; the signal is GT-controlled (INV-10),
+# never an Odyssey API.
+app.include_router(funding_router)
+
+# Supabase↔HubSpot seam (FR-1.3/2.6; ARCH §4.7/§6) — /seam GET +
+# /seam/{id}/reconcile POST. The reconcile is human-gated and LOGGED (NFR-6); a
+# flagged conflict fails closed (INV-4).
+app.include_router(seam_router)
 
 
 # AWS Lambda + API Gateway entrypoint (ARCHITECTURE.md §12).

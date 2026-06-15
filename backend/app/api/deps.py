@@ -12,6 +12,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from app.adapters import registry
+from app.adapters.funding.base import FundingSignalAdapter
 from app.adapters.hubspot.crm_adapter import CRMAdapter
 from app.ai.client import AnthropicLLMClient, LLMClient
 from app.core.eval_gate import BrandJudge
@@ -136,3 +137,14 @@ def get_crm_adapter_dep() -> CRMAdapter:
     Tests override this with a known `SimulatedCRMAdapter` to inspect `sent_log`.
     """
     return registry.get_crm_adapter()
+
+
+def get_funding_signal_adapter_dep() -> FundingSignalAdapter:
+    """FastAPI dependency yielding the §7.2 GT-controlled signal adapter (INV-10).
+
+    Delegates to the §7 registry (v1 ⇒ a simulated synthetic source; live ⇒
+    fail-loud). The signal is GT-controlled — GT-confirmed enrollment, a
+    first-installment receipt, the family's self-report — NOT an Odyssey/TEFA
+    feed (INV-10; none exists). Tests override this to inject a known signal.
+    """
+    return registry.get_funding_signal_adapter()
