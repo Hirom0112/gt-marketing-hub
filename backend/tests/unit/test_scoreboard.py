@@ -17,14 +17,13 @@ from __future__ import annotations
 from pathlib import Path
 from uuid import UUID
 
+from app.core.params import Params, load_params
 from app.core.scoreboard import (
     EvalSummary,
     MarketingSummary,
     Scoreboard,
     build_scoreboard,
 )
-
-from app.core.params import Params, load_params
 from app.observability.log_store import (
     DecisionAction,
     InMemoryObservabilityLog,
@@ -60,7 +59,7 @@ def _params() -> Params:
 def _seed_log() -> InMemoryObservabilityLog:
     """A deterministic cross-funnel audit mix.
 
-    Enrollment: 4 enrollment-draft proposals + 1 GEO proposal.
+    Enrollment: 5 enrollment-draft proposals + 1 GEO proposal.
       - PID_DRAFT_APPROVE   : grounding eval pass  → human APPROVE
       - PID_DRAFT_APPROVE_2 : grounding eval pass  → human APPROVE
       - PID_DRAFT_REJECT    : grounding eval FAIL  → human DISCARD
@@ -128,7 +127,7 @@ def test_scoreboard_cross_funnel() -> None:
 
     # --- Enrollment funnel: counts derived from logged proposals/decisions ----
     enr = board.enrollment
-    assert enr.draft_proposals == 4  # 4 enrollment_draft proposals (GEO excluded)
+    assert enr.draft_proposals == 5  # 5 enrollment_draft proposals (GEO excluded)
     assert enr.approved == 2  # two APPROVE decisions
     assert enr.rejected == 1  # one DISCARD decision
     assert enr.edited == 1  # one EDIT decision
