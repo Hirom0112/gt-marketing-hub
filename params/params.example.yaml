@@ -79,3 +79,39 @@ kpi:                        # FR-3.11 — per-channel KPI rollup vs baseline/tar
 
 scheduler:                  # FR-3.6 / OUT-2 — dispatch is SIMULATED in v1
   dispatch_mode: simulated          # never 'live' in v1 (INV-9, OUT-2)
+
+crm:                        # S10 — HubSpot CRM seam (ANALYSIS/hubspot-complement-plan.md)
+  # Cockpit Stage enum value → HubSpot deal stage id. Provisioned by
+  # scripts/provision_hubspot.py against the live portal; the adapter reads ids
+  # from params, never hardcodes them (INV-11). Example ids shown for shape.
+  stage_map:
+    interest: "3840835272"
+    apply: "3840835273"
+    enroll: "3840835274"
+    tuition: "3840835275"
+    closed_lost: "closedlost"
+  # Synthetic write-lock allowlist (guard 1, INV-1) — only synthetic crosses.
+  synthetic_email_domains:
+    - example.test
+    - example.invalid
+    - synthetic.gtschool.test
+  # Real domains the write-lock denies (defense in depth atop the allowlist).
+  real_domain_denylist:
+    - gauntlethq.com
+    - trilogy.com
+    - modal.com
+    - humanlayer.dev
+    - foxhomesteam.com
+    - lge.com
+    - outlier.ai
+  # gt_* custom HubSpot property internal names provisioned by the script.
+  gt_properties:
+    deal:
+      - gt_synthetic_id
+      - gt_funding_state
+      - gt_stall_reason
+      - gt_priority
+      - gt_forms_signed
+      - gt_apply_date
+    contact:
+      - gt_synthetic_id

@@ -273,6 +273,36 @@ class Scheduler(_StrictModel):
         return value
 
 
+class CrmGtProperties(_StrictModel):
+    """crm.gt_properties — the gt_* custom HubSpot property internal names (S10).
+
+    Provisioned by ``scripts/provision_hubspot.py`` and read by the live adapter
+    so a property name lives in exactly one place (INV-11): the adapter never
+    hardcodes ``gt_synthetic_id`` et al.
+    """
+
+    deal: list[str]
+    contact: list[str]
+
+
+class Crm(_StrictModel):
+    """S10 HubSpot CRM seam config (ANALYSIS/hubspot-complement-plan.md §4).
+
+    Every value the live adapter and the provisioning script need that is not
+    code: the cockpit-stage ↔ HubSpot-stage-id map (portable to GT's real
+    pipeline by re-provisioning), the synthetic write-lock allowlist/denylist
+    (guard 1, INV-1), and the gt_* property names (INV-11).
+    """
+
+    # Cockpit Stage enum value → HubSpot deal stage id. The live adapter looks a
+    # stage up here; a missing stage must fail closed (INV-4 posture) — enforced
+    # in the pure mapping helper, not silently defaulted.
+    stage_map: dict[str, str]
+    synthetic_email_domains: list[str]
+    real_domain_denylist: list[str]
+    gt_properties: CrmGtProperties
+
+
 class Params(_StrictModel):
     """Typed view of the whole params file — one field per §8 top-level block."""
 
@@ -287,6 +317,7 @@ class Params(_StrictModel):
     creator_scoring: CreatorScoring
     kpi: Kpi
     scheduler: Scheduler
+    crm: Crm
 
 
 def _resolve_path(path: Path | None) -> Path:
