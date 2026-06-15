@@ -26,7 +26,19 @@ type LoadState =
   | { status: 'error'; message: string }
   | { status: 'ready'; items: WorkQueueItem[] };
 
-export default function WorkQueue(): JSX.Element {
+// Optional selection wiring. The work queue renders standalone with no props
+// (read-only list); when a parent supplies `onSelectFamily`, each row becomes a
+// clickable control that switches the focused deal panel, and the
+// `selectedFamilyId` row is visually marked active.
+interface WorkQueueProps {
+  selectedFamilyId?: string;
+  onSelectFamily?: (familyId: string) => void;
+}
+
+export default function WorkQueue({
+  selectedFamilyId,
+  onSelectFamily,
+}: WorkQueueProps = {}): JSX.Element {
   const [state, setState] = useState<LoadState>({ status: 'loading' });
 
   useEffect(() => {
@@ -92,23 +104,67 @@ export default function WorkQueue(): JSX.Element {
           className="work-queue-list"
           style={{ listStyle: 'none', margin: 0, padding: 0 }}
         >
-          {state.items.map((item, i) => (
-            <li
-              key={item.family_id}
-              className="work-queue-row"
-              data-testid="work-queue-row"
-              style={{ borderTop: i ? '1px solid var(--line)' : 'none' }}
-            >
-              <div
-                data-testid={`work-queue-row-${item.family_id}`}
-                className="work-queue-row-inner"
-                style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: 'var(--s-3)',
-                  padding: 'var(--s-3) var(--s-4)',
-                }}
+          {state.items.map((item, i) => {
+            const selectable = onSelectFamily !== undefined;
+            const isActive = selectable && item.family_id === selectedFamilyId;
+            const innerStyle = {
+              display: 'flex',
+              alignItems: 'center',
+              gap: 'var(--s-3)',
+              padding: 'var(--s-3) var(--s-4)',
+              width: '100%',
+              textAlign: 'left' as const,
+              font: 'inherit',
+              color: 'inherit',
+              cursor: selectable ? 'pointer' : 'default',
+              // Active row uses tokens only (no raw hex): a flow wash fill and an
+              // ink border to mark the focused family.
+              background: isActive ? 'var(--flow-wash)' : 'transparent',
+              border: 'none',
+              borderLeft: isActive
+                ? '3px solid var(--ink)'
+                : '3px solid transparent',
+            };
+            return (
+              <li
+                key={item.family_id}
+                className={`work-queue-row${isActive ? ' active' : ''}`}
+                data-testid="work-queue-row"
+                aria-current={isActive ? 'true' : undefined}
+                style={{ borderTop: i ? '1px solid var(--line)' : 'none' }}
               >
+                {selectable ? (
+                  <button
+                    type="button"
+                    data-testid={`work-queue-row-${item.family_id}`}
+                    className="work-queue-row-inner"
+                    onClick={() => onSelectFamily(item.family_id)}
+                    style={innerStyle}
+                  >
+                    {renderRowContent(item, i)}
+                  </button>
+                ) : (
+                  <div
+                    data-testid={`work-queue-row-${item.family_id}`}
+                    className="work-queue-row-inner"
+                    style={innerStyle}
+                  >
+                    {renderRowContent(item, i)}
+                  </div>
+                )}
+              </li>
+            );
+          })}
+        </ol>
+      </Card>
+    </section>
+  );
+}
+
+// Shared row body for both the static (read-only) and clickable variants.
+function renderRowContent(item: WorkQueueItem, i: number): JSX.Element {
+  return (
+    <>
                 <span
                   className="mono"
                   aria-hidden
@@ -163,11 +219,6 @@ export default function WorkQueue(): JSX.Element {
                 >
                   {item.recoverability}
                 </span>
-              </div>
-            </li>
-          ))}
-        </ol>
-      </Card>
-    </section>
+    </>
   );
 }
