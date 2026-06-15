@@ -15,6 +15,7 @@ from app.adapters import registry
 from app.adapters.brand_memory.base import BrandMemoryStore
 from app.adapters.brand_memory.sqlite_store import SqliteBrandMemoryStore
 from app.adapters.funding.base import FundingSignalAdapter
+from app.adapters.geo_sampling.base import GeoSamplingAdapter
 from app.adapters.hubspot.crm_adapter import CRMAdapter
 from app.ai.client import AnthropicLLMClient, LLMClient
 from app.ai.schemas.brand import BrandRule
@@ -199,6 +200,19 @@ def get_funding_signal_adapter_dep() -> FundingSignalAdapter:
     feed (INV-10; none exists). Tests override this to inject a known signal.
     """
     return registry.get_funding_signal_adapter()
+
+
+def get_geo_sampling_adapter_dep() -> GeoSamplingAdapter:
+    """FastAPI dependency yielding the §7.6 GEO sampling adapter (INV-9; FR-3.7/4.4).
+
+    Delegates to the §7 registry (v1 ⇒ a simulated, offline source; live ⇒
+    fail-loud). GEO coverage is sampled by **repeated, variance-reported** runs of
+    an AI engine's citations (CONTENT_SPEC §7.4); live polling of real engines is
+    OUT in v1, so under ``SEND_MODE='simulate'`` this returns the simulated impl —
+    no live engine call ever happens here (INV-9). Tests override this to inject a
+    known sampling stream (e.g. the insufficient-samples fail-closed path).
+    """
+    return registry.get_geo_sampling_adapter()
 
 
 def get_brand_memory_store_dep() -> BrandMemoryStore:

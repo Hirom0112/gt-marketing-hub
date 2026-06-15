@@ -12,6 +12,7 @@ from app.api.ai_actions import router as ai_actions_router
 from app.api.content import router as content_router
 from app.api.families import router as families_router
 from app.api.funding import router as funding_router
+from app.api.geo import router as geo_router
 from app.api.notes import router as notes_router
 from app.api.seam import router as seam_router
 
@@ -52,6 +53,12 @@ app.include_router(seam_router)
 # brand memory, discard strengthens a dont signal), /content/library (kept+
 # validated search). Nothing publishes without an explicit keep (INV-2/INV-3).
 app.include_router(content_router)
+
+# GEO tracking (FR-3.7/4.4; ARCH §5.5/§6) — /geo GET (coverage vs the 0% baseline
+# + lift, a deterministic default pass) + /geo/sample POST (a fresh repeated-
+# sampling run, logged to the audit spine, NFR-6). Sampling is offline/simulated
+# (INV-9); insufficient samples fail closed and disable the action (INV-3).
+app.include_router(geo_router)
 
 
 # AWS Lambda + API Gateway entrypoint (ARCHITECTURE.md §12).
