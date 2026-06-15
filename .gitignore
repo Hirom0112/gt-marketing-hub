@@ -1,0 +1,18 @@
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+.uv/
+# Node
+node_modules/
+dist/
+build/
+# Env & secrets
+.env
+.env.*
+!.env.example
+params/params.yaml
+!params/params.example.yaml
+# OS
+.DS_Store
