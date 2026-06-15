@@ -9,8 +9,10 @@ from __future__ import annotations
 
 from uuid import UUID
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
+from app.ai.schemas.enrollment_draft import DraftAction, EnrollmentDraftProposal
+from app.core.eval_gate import ValidationResult
 from app.core.family_record import DealView
 from app.data.models import (
     AppForm,
@@ -20,6 +22,12 @@ from app.data.models import (
     LeadsNew,
     SeamStatus,
     Stage,
+)
+from app.observability.log_store import (
+    DecisionAction,
+    DecisionRecord,
+    EvalRecord,
+    ProposalRecord,
 )
 
 
@@ -71,3 +79,64 @@ class WorkQueueItem(BaseModel):
     score: float
     recoverability: float
     value: float
+
+
+# --------------------------------------------------------------------------- #
+# S2 AI action surface (FR-2.4; ARCH §5.2/§6; INV-2/INV-3/INV-4).
+# --------------------------------------------------------------------------- #
+class DraftRequest(BaseModel):
+    """`POST /ai/enrollment/draft` body — which family + which channel (§6)."""
+
+    family_id: UUID
+    action: DraftAction
+
+
+class DraftResponse(BaseModel):
+    """The §5.2 draft outcome surfaced to the client (INV-3/INV-4 at the boundary).
+
+    The proposal body is surfaced **only** when ``surfaced`` is True (the eval
+    passed). On a block/degrade ``proposal`` is ``None`` (no usable body to act
+    on — the UI offers the deterministic template fallback) but ``proposal_id``
+    is always present so the client can call the decision endpoint, and
+    ``failed_rules`` carries the gate's reasons for the audit-aware UI.
+    """
+
+    proposal_id: UUID
+    surfaced: bool
+    degraded: bool
+    failed_rules: list[str] = Field(default_factory=list)
+    proposal: EnrollmentDraftProposal | None = None
+    validation: ValidationResult | None = None
+
+
+class DecisionRequest(BaseModel):
+    """`POST /proposals/{id}/decision` body — the human verdict (§6; §4.9).
+
+    ``edited_payload`` carries the human's edits when ``action`` is ``edit``; it
+    is ignored for approve/discard.
+    """
+
+    action: DecisionAction
+    edited_payload: dict[str, object] | None = None
+
+
+class DecisionResponse(BaseModel):
+    """The decision result — the ONLY state-applying path (INV-2; NFR-6).
+
+    On ``approve`` a SIMULATED send was recorded (``send_simulated`` True) and
+    ``seam_status`` carries the recomputed §4.7 seam; on edit/discard there is no
+    send and ``seam_status`` is ``None``.
+    """
+
+    proposal_id: UUID
+    action: DecisionAction
+    send_simulated: bool = False
+    seam_status: SeamStatus | None = None
+
+
+class AuditResponse(BaseModel):
+    """The §10 audit view for one proposal — proposal + its evals + decisions (NFR-6)."""
+
+    proposal: ProposalRecord
+    evals: list[EvalRecord] = Field(default_factory=list)
+    decisions: list[DecisionRecord] = Field(default_factory=list)

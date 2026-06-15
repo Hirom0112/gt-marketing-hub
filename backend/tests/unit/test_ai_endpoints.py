@@ -162,8 +162,9 @@ def test_draft_returns_only_passing_proposal() -> None:
     # The blocked proposal is STILL logged with its failing eval (INV-4 audit).
     listing = client.get("/proposals")
     assert listing.status_code == 200
-    logged_ids = {row["proposal_id"] for row in listing.json()}
+    logged_ids = {row["proposal"]["proposal_id"] for row in listing.json()}
     assert blocked_id in logged_ids
+    assert proposal_id in logged_ids  # the passing one is logged too
     blocked_audit = client.get(f"/proposals/{blocked_id}").json()
     assert blocked_audit["evals"][0]["passed"] is False
 
@@ -264,9 +265,7 @@ def test_draft_unknown_family_404() -> None:
         _proposal_json(uuid4(), body="x")
     )
     app.dependency_overrides[deps.get_brand_judge] = _on_brand_judge
-    resp = client.post(
-        "/ai/enrollment/draft", json={"family_id": str(uuid4()), "action": "email"}
-    )
+    resp = client.post("/ai/enrollment/draft", json={"family_id": str(uuid4()), "action": "email"})
     assert resp.status_code == 404
 
 
