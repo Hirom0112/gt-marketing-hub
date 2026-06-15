@@ -1,38 +1,41 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { AlertTriangle, CalendarDays, List } from 'lucide-react';
 import ActionPanel from '../ActionPanel';
 import DealView from '../DealView';
 import FundingTracker from '../FundingTracker';
-import WorkQueue from '../WorkQueue';
 import CloseTipsPanel from '../enrollment/CloseTipsPanel';
-import EnrollmentCalendar from '../enrollment/EnrollmentCalendar';
+import EnrollmentCalendar, {
+  type DrillBulk,
+  type SortKey,
+} from '../enrollment/EnrollmentCalendar';
+import ShowAllList from '../enrollment/ShowAllList';
 import NotesTimeline, {
   type NotesTimelineHandle,
 } from '../enrollment/NotesTimeline';
+import { ToastHost, useToasts } from '../enrollment/toast';
 import { type RecoverableRow, summarizeRecovery } from '../enrollment/recency';
+import { fmtUSD } from '../enrollment/format';
 import { apiBaseUrl } from '../config';
 import { Card, WorkspaceToggle } from '../ui';
+import type { SendPartition } from '../enrollment/BulkBar';
 
-// The operator page (S11 W2; A-17). This cockpit is the CATCH-AND-FORWARD layer,
-// not the system of record: the operator's job is (1) see a stall the moment it
-// happens, (2) capture context, (3) push to HubSpot. The page is therefore TWO
-// primary surfaces only — a CALENDAR (find) on the LEFT and a family WORK-PANEL
-// (act) on the RIGHT — under a thin SITUATION STRIP ("money on the table").
+// The operator page (S12 W4; A-17/A-19/A-20). CATCH-AND-FORWARD, not a system of
+// record. TWO surfaces: a LEFT find (calendar that degrades to a heat map at
+// volume → drill → ranked list; or the "Show all" working set) and a RIGHT
+// family work-panel (act). Under a thin SITUATION STRIP ("money on the table").
 //
-// The funnel scoreboard + the CRM-seam ledger moved to Leadership (A-17); the
-// ranked work queue is DEMOTED to an optional "show everything regardless of
-// date" list behind the calendar⇆all toggle. Nothing else competes for the
-// operator's primary attention. Internals fetch real data; this container only
-// places them and owns the focused-family SELECTION.
+// The recovery LOOP this container wires: see a stall on the calendar → drill a
+// busy day or open Show-all → single OR bulk eval-gated action → the forward is
+// recorded SERVER-SIDE (every action POSTs a real route; INV-2 no client write)
+// → the moved families re-pull and reflect their new recovery_state. The bulk
+// routes, the shared selection Set, and the toasts all live HERE (one owner),
+// passed down to the calendar drill + show-all list.
 
-// GET /families item — only the fields we read here (the API returns more).
 interface FamilySummary {
   family_id: string;
   display_name: string;
 }
 
-// The left surface: the default calendar (find by stall date), or the demoted
-// "all families regardless of date" ranked list (the old work queue).
 type LeftView = 'calendar' | 'all';
 
 type FamiliesState =
@@ -40,30 +43,70 @@ type FamiliesState =
   | { status: 'error'; message: string }
   | { status: 'ready' };
 
+// The audited dismiss reasons (mock parity) — offered in the bulk + single
+// reason pickers. A dismiss is the one new write on the audit spine (A-19).
+const DISMISS_REASONS = [
+  'Declined',
+  'Bad fit',
+  'Duplicate record',
+  'Gone dark',
+] as const;
+
+// ── Bulk route responses (W2 contract) ───────────────────────────────────────
+interface BulkNudgeResponse {
+  batch_id: string;
+  counts: { sent: number; blocked: number; capped: number };
+  sent: Array<{ family_id: string; note_id: string }>;
+  blocked: Array<{ family_id: string; failed_rules: string[] }>;
+  capped: string[];
+}
+interface BulkSeedResponse {
+  batch_id: string;
+  counts: { captured: number };
+  captured: Array<{ family_id: string; deal_id: string; seam_status: string }>;
+}
+interface BulkDismissResponse {
+  batch_id: string;
+  counts: { dismissed: number };
+  dismissed: string[];
+}
+
 export default function EnrollmentWorkspace(): JSX.Element {
   const [familiesState, setFamiliesState] = useState<FamiliesState>({
     status: 'loading',
   });
   const [selectedFamilyId, setSelectedFamilyId] = useState<string | null>(null);
-  // The left surface defaults to the CALENDAR (the primary "find"); the toggle
-  // swaps to the demoted "all families" list.
   const [leftView, setLeftView] = useState<LeftView>('calendar');
-  // The /work-queue rows the situation strip summarizes (derived headline
-  // numbers, INV-11 spirit — never hardcoded). The WorkQueue component still
-  // fetches its own copy for the ranked list; this read feeds only the headline.
   const [recoveryRows, setRecoveryRows] = useState<RecoverableRow[] | null>(
     null,
   );
-  // Bumped after an approved follow-up to force the deal view to re-pull the
-  // (now updated) recency; the notes timeline re-pulls via its imperative ref.
   const [dealRefresh, setDealRefresh] = useState(0);
+  // Bumped after a bulk write so the show-all list + situation strip re-pull the
+  // queue and reflect the moved families' new recovery_state (no client write).
+  const [queueRefresh, setQueueRefresh] = useState(0);
   const notesRef = useRef<NotesTimelineHandle>(null);
+  const toasts = useToasts();
 
-  // The follow-up loop: on an approved AI action, the backend stamped recency +
-  // wrote a deterministic auto-note. Re-pull both so they surface immediately.
+  // ── The shared selection Set + bulk picker state (one owner) ────────────────
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [pendingDismiss, setPendingDismiss] = useState(false);
+  const [partition, setPartition] = useState<SendPartition | undefined>();
+  const [sort, setSort] = useState<SortKey>('recoverable');
+
   const handleActionApproved = useCallback((): void => {
     setDealRefresh((n) => n + 1);
+    setQueueRefresh((n) => n + 1);
     notesRef.current?.refresh();
+  }, []);
+
+  const reloadRows = useCallback((): void => {
+    fetch(`${apiBaseUrl}/work-queue`)
+      .then((res) => {
+        if (!res.ok) throw new Error(`work-queue request failed: ${res.status}`);
+        return res.json() as Promise<RecoverableRow[]>;
+      })
+      .then((rows) => setRecoveryRows(rows))
+      .catch(() => setRecoveryRows((prev) => prev));
   }, []);
 
   useEffect(() => {
@@ -77,13 +120,9 @@ export default function EnrollmentWorkspace(): JSX.Element {
         if (cancelled) return;
         const first = families[0]?.family_id ?? null;
         if (first === null) {
-          setFamiliesState({
-            status: 'error',
-            message: 'no families returned',
-          });
+          setFamiliesState({ status: 'error', message: 'no families returned' });
           return;
         }
-        // Default the focus to the first (real) family id once loaded.
         setSelectedFamilyId(first);
         setFamiliesState({ status: 'ready' });
       })
@@ -98,29 +137,178 @@ export default function EnrollmentWorkspace(): JSX.Element {
     };
   }, []);
 
-  // Pull the work-queue once for the situation-strip headline figures. Read-only
-  // GET (INV-2); failures degrade silently to a hidden strip (the ranked list in
-  // WorkQueue surfaces its own error state).
+  // The situation-strip rows re-pull whenever a write moves families (queueRefresh).
   useEffect(() => {
-    let cancelled = false;
-    fetch(`${apiBaseUrl}/work-queue`)
-      .then((res) => {
-        if (!res.ok) throw new Error(`work-queue request failed: ${res.status}`);
-        return res.json() as Promise<RecoverableRow[]>;
-      })
-      .then((rows) => {
-        if (!cancelled) setRecoveryRows(rows);
-      })
-      .catch(() => {
-        if (!cancelled) setRecoveryRows(null);
-      });
-    return () => {
-      cancelled = true;
-    };
+    reloadRows();
+  }, [reloadRows, queueRefresh]);
+
+  // ── Selection helpers ───────────────────────────────────────────────────────
+  const clearSel = useCallback((): void => {
+    setSelected(new Set());
+    setPendingDismiss(false);
+    setPartition(undefined);
   }, []);
 
-  // The live deal panel — rendered ONLY once a real family id is selected, so
-  // no child ever fetches against a non-real id (avoids the 422 entirely).
+  const toggleSel = useCallback((familyId: string): void => {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(familyId)) next.delete(familyId);
+      else next.add(familyId);
+      return next;
+    });
+  }, []);
+
+  const selectAll = useCallback((ids: readonly string[]): void => {
+    setSelected(new Set(ids.slice(0, 80)));
+  }, []);
+
+  // ── Bulk writes — every action POSTs a real route, then re-pulls (INV-2) ─────
+  const afterBulk = useCallback((): void => {
+    clearSel();
+    setQueueRefresh((n) => n + 1);
+    setDealRefresh((n) => n + 1);
+  }, [clearSel]);
+
+  const bulkNudge = useCallback((): void => {
+    const ids = Array.from(selected);
+    if (ids.length === 0) return;
+    fetch(`${apiBaseUrl}/ai/enrollment/bulk-nudge`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ family_ids: ids }),
+    })
+      .then((res) => {
+        if (!res.ok) throw new Error(`bulk-nudge failed: ${res.status}`);
+        return res.json() as Promise<BulkNudgeResponse>;
+      })
+      .then((data) => {
+        const { sent, blocked, capped } = data.counts;
+        // Render the partition — blocked families are SHOWN, never hidden
+        // (visible fail-closed gate; INV-3/4).
+        toasts.push(`${sent} nudges sent`, {
+          tone: blocked > 0 ? 'gate' : 'flow',
+          kick:
+            blocked > 0 || capped > 0
+              ? `${blocked} blocked by the gate · ${capped} over the cap`
+              : 'batched · eval-gated',
+        });
+        afterBulk();
+      })
+      .catch((err: unknown) => {
+        const message = err instanceof Error ? err.message : 'unknown error';
+        toasts.push('Bulk nudge failed', { tone: 'signal', kick: message });
+      });
+  }, [selected, toasts, afterBulk]);
+
+  const bulkCapture = useCallback((): void => {
+    const ids = Array.from(selected);
+    if (ids.length === 0) return;
+    fetch(`${apiBaseUrl}/enrollment/families/bulk-seed`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ family_ids: ids }),
+    })
+      .then((res) => {
+        if (!res.ok) throw new Error(`bulk-seed failed: ${res.status}`);
+        return res.json() as Promise<BulkSeedResponse>;
+      })
+      .then((data) => {
+        toasts.push(`${data.counts.captured} captured to HubSpot`, {
+          kick: 'catch the wave · forward the batch',
+        });
+        afterBulk();
+      })
+      .catch((err: unknown) => {
+        const message = err instanceof Error ? err.message : 'unknown error';
+        toasts.push('Bulk capture failed', { tone: 'signal', kick: message });
+      });
+  }, [selected, toasts, afterBulk]);
+
+  const bulkDismiss = useCallback(
+    (reason: string): void => {
+      const ids = Array.from(selected);
+      if (ids.length === 0) return;
+      fetch(`${apiBaseUrl}/enrollment/families/bulk-dismiss`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ family_ids: ids, reason }),
+      })
+        .then((res) => {
+          if (!res.ok) throw new Error(`bulk-dismiss failed: ${res.status}`);
+          return res.json() as Promise<BulkDismissResponse>;
+        })
+        .then((data) => {
+          toasts.push(`${data.counts.dismissed} dismissed`, {
+            tone: 'gate',
+            kick: `moved to history · ${reason}`,
+          });
+          afterBulk();
+        })
+        .catch((err: unknown) => {
+          const message = err instanceof Error ? err.message : 'unknown error';
+          toasts.push('Bulk dismiss failed', { tone: 'signal', kick: message });
+        });
+    },
+    [selected, toasts, afterBulk],
+  );
+
+  // A single-family dismiss (the work-panel "Dismiss this family") rides the same
+  // bulk route with a one-id array (A-19 — one audited dismiss path).
+  const dismissOne = useCallback(
+    (familyId: string, reason: string): void => {
+      fetch(`${apiBaseUrl}/enrollment/families/bulk-dismiss`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ family_ids: [familyId], reason }),
+      })
+        .then((res) => {
+          if (!res.ok) throw new Error(`dismiss failed: ${res.status}`);
+          return res.json() as Promise<BulkDismissResponse>;
+        })
+        .then(() => {
+          toasts.push('Family dismissed', {
+            tone: 'gate',
+            kick: `moved to history · ${reason}`,
+          });
+          handleActionApproved();
+        })
+        .catch((err: unknown) => {
+          const message = err instanceof Error ? err.message : 'unknown error';
+          toasts.push('Dismiss failed', { tone: 'signal', kick: message });
+        });
+    },
+    [toasts, handleActionApproved],
+  );
+
+  // The shared bulk wiring object (one source of truth for both surfaces).
+  const bulk = useMemo<DrillBulk>(
+    () => ({
+      selected,
+      onToggle: toggleSel,
+      onSelectAll: selectAll,
+      onClear: clearSel,
+      onNudge: bulkNudge,
+      onCapture: bulkCapture,
+      onDismissStart: () => setPendingDismiss(true),
+      pendingDismiss,
+      reasons: DISMISS_REASONS,
+      onDismiss: bulkDismiss,
+      onCancelDismiss: () => setPendingDismiss(false),
+      partition,
+    }),
+    [
+      selected,
+      toggleSel,
+      selectAll,
+      clearSel,
+      bulkNudge,
+      bulkCapture,
+      pendingDismiss,
+      bulkDismiss,
+      partition,
+    ],
+  );
+
   function renderDealPanel(): JSX.Element {
     if (familiesState.status === 'error') {
       return (
@@ -146,7 +334,12 @@ export default function EnrollmentWorkspace(): JSX.Element {
     }
     return (
       <Card className="work-panel">
-        <DealView familyId={selectedFamilyId} refreshKey={dealRefresh} />
+        <DealView
+          familyId={selectedFamilyId}
+          refreshKey={dealRefresh}
+          dismissReasons={DISMISS_REASONS}
+          onDismiss={dismissOne}
+        />
         <div className="work-panel-rule" aria-hidden />
         <ActionPanel
           familyId={selectedFamilyId}
@@ -164,31 +357,35 @@ export default function EnrollmentWorkspace(): JSX.Element {
 
   const viewOptions = [
     { key: 'calendar' as const, label: 'Calendar', icon: CalendarDays },
-    { key: 'all' as const, label: 'All families', icon: List },
+    { key: 'all' as const, label: 'Show all', icon: List },
   ];
 
+  // Selecting a family from any surface drops any open bulk picker focus but
+  // keeps the selection Set (so an operator can act on one while a batch is up).
+  const selectFamily = useCallback((id: string): void => {
+    setSelectedFamilyId(id);
+  }, []);
+
   return (
-    <section
-      aria-label="Enrollment workspace"
-      className="enrollment-workspace"
-    >
-      {/* Narrative beat 1 — "money on the table": a thin one-line strip at the
-          very top, derived from the /work-queue rows (INV-11 spirit). */}
+    <section aria-label="Enrollment workspace" className="enrollment-workspace">
       {recoveryRows !== null && <SituationBar rows={recoveryRows} />}
 
-      {/* The two primary surfaces: calendar (find) | family work-panel (act). */}
       <div className="operator-grid">
         <div className="operator-find">
-          {/* The left-surface header: a title + a one-click Calendar ⇆ All
-              toggle. The calendar is the default "find"; "All families" reveals
-              the demoted ranked list regardless of date. */}
           <div className="find-head">
-            <span className="lab find-head-title">Find a stall</span>
+            <span className="lab find-head-title">
+              {leftView === 'calendar'
+                ? 'Recovery calendar — by the day they stalled'
+                : 'Show all — the ranked working set'}
+            </span>
             <div data-testid="enrollment-view-toggle">
               <WorkspaceToggle
                 options={viewOptions}
                 active={leftView}
-                onSelect={setLeftView}
+                onSelect={(v) => {
+                  setLeftView(v);
+                  clearSel();
+                }}
                 ariaLabel="Enrollment view"
               />
             </div>
@@ -197,34 +394,37 @@ export default function EnrollmentWorkspace(): JSX.Element {
           {leftView === 'calendar' ? (
             <EnrollmentCalendar
               selectedFamilyId={selectedFamilyId ?? undefined}
-              onSelectFamily={setSelectedFamilyId}
+              onSelectFamily={selectFamily}
+              bulk={bulk}
+              sort={sort}
+              onSort={setSort}
             />
           ) : (
-            <WorkQueue
+            <ShowAllList
               selectedFamilyId={selectedFamilyId ?? undefined}
-              onSelectFamily={setSelectedFamilyId}
+              onSelectFamily={selectFamily}
+              bulk={bulk}
+              sort={sort}
+              onSort={setSort}
+              refreshKey={queueRefresh}
             />
           )}
         </div>
 
         <div className="operator-act">{renderDealPanel()}</div>
       </div>
+
+      <ToastHost toasts={toasts.toasts} dismiss={toasts.dismiss} />
     </section>
   );
 }
 
-// The situation strip — a single line of derived headline numbers at the very
-// top of the operator page, computed client-side from the fetched /work-queue
-// rows (INV-11 spirit: nothing hardcoded). Reads as a triage headline:
-// "⚠ N stalled · N overdue · $X recoverable this week". Per A-17, "stalled"
-// EXCLUDES brand-new fresh leads (still inside the contact window).
+// The situation strip — derived headline numbers from the /work-queue rows
+// (INV-11 spirit: nothing hardcoded). "⚠ N active stalls · N gone overdue · $X
+// at risk on the board". A-17: a fresh lead is still inside its contact window,
+// so it is NOT a stall the loop is leaving on the table.
 function SituationBar({ rows }: { rows: readonly RecoverableRow[] }): JSX.Element {
   const { stalled, overdue, recoverableValue } = summarizeRecovery(rows);
-  const dollars = recoverableValue.toLocaleString('en-US', {
-    style: 'currency',
-    currency: 'USD',
-    maximumFractionDigits: 0,
-  });
   return (
     <div data-testid="situation-bar">
       <Card className="situation-bar">
@@ -233,19 +433,16 @@ function SituationBar({ rows }: { rows: readonly RecoverableRow[] }): JSX.Elemen
           <span className="mono situation-figure" data-testid="situation-stalled">
             {stalled}
           </span>{' '}
-          stalled
+          active stalls
         </span>
         <span className="situation-dot" aria-hidden>
           ·
         </span>
         <span className="situation-item">
-          <span
-            className="mono situation-figure"
-            data-testid="situation-overdue"
-          >
+          <span className="mono situation-figure" data-testid="situation-overdue">
             {overdue}
           </span>{' '}
-          overdue
+          gone overdue
         </span>
         <span className="situation-dot" aria-hidden>
           ·
@@ -255,9 +452,9 @@ function SituationBar({ rows }: { rows: readonly RecoverableRow[] }): JSX.Elemen
             className="mono situation-figure situation-money"
             data-testid="situation-recoverable"
           >
-            {dollars}
+            {fmtUSD(recoverableValue)}
           </span>{' '}
-          recoverable this week
+          at risk on the board
         </span>
       </Card>
     </div>

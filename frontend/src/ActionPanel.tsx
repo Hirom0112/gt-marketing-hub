@@ -282,18 +282,25 @@ function FailClosedBanner({
   icon: LucideIcon;
   children: ReactNode;
 }): JSX.Element {
-  const wash = tone === 'signal' ? 'var(--signal-wash)' : 'var(--gate-wash)';
   const solid = tone === 'signal' ? 'var(--signal)' : 'var(--gate)';
   const ink = tone === 'signal' ? 'var(--signal-ink)' : 'var(--gate-ink)';
+  // A blocked/disabled AI action reads as STRUCK-THROUGH (S12 W4): the
+  // `--disabled-hatch` warm stripe makes the fail-closed gate VISIBLE (INV-3/4)
+  // — the operator sees the action is off, not merely tinted.
+  const background =
+    tone === 'signal'
+      ? 'var(--disabled-hatch), var(--signal-wash)'
+      : 'var(--gate-wash)';
   return (
     <div
       data-testid={testId}
+      data-hatch={tone === 'signal' ? 'on' : undefined}
       role={role}
       style={{
         marginTop: 'var(--s-3)',
         padding: 'var(--s-3) var(--s-4)',
         borderRadius: 'var(--r-md)',
-        background: wash,
+        background,
         border: `1px solid ${solid}`,
         color: ink,
       }}

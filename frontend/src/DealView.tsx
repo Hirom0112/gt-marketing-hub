@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { AlertTriangle, CheckCircle2, ExternalLink, UploadCloud } from 'lucide-react';
+import { AlertTriangle, CheckCircle2, ExternalLink, UploadCloud, XCircle } from 'lucide-react';
 import {
   apiBaseUrl,
   hubspotContactUrl,
@@ -7,6 +7,8 @@ import {
 } from './config';
 import { Button, Chip } from './ui';
 import RecencyChip from './enrollment/RecencyChip';
+import CompletionRing from './enrollment/CompletionRing';
+import SeamDot, { type SeamStatus } from './enrollment/SeamDot';
 
 // Deal view (FR-2.2). Fetches GET /families/{id} and surfaces the deal_view
 // summary: stall reason, funding type, MAP signal (map_score), attribution
@@ -32,6 +34,8 @@ interface DealViewData {
   forms_total?: number | null;
   next_unsigned_form?: string | null;
   contact_status?: string | null;
+  // S12 W1 — the derived recovery state (A-19), composed in the API layer.
+  recovery_state?: 'stalled' | 'working' | 'recovered' | 'dismissed' | null;
 }
 
 // We only read deal_view; the rest of the family response is ignored here.
@@ -61,6 +65,11 @@ interface DealViewProps {
   familyId: string;
   // Bump to force a re-fetch (e.g. after an approved follow-up updates recency).
   refreshKey?: number;
+  // The audited dismiss reasons (S12 W4; A-19) for the "Dismiss this family"
+  // picker. The dismiss WRITE is owned by the parent (one route) — DealView only
+  // offers the reason and calls back; it never writes (INV-2).
+  dismissReasons?: readonly string[];
+  onDismiss?: (familyId: string, reason: string) => void;
 }
 
 type LoadState =
@@ -107,10 +116,10 @@ function DealField({
   );
 }
 
-// The CRM-seam status as a CLEAN NAMED CHIP — never a raw UUID (A-17). The seam
-// is the forward step's state: synced (in HubSpot / flow), conflict (needs a
-// human / signal), unsynced or anything else (not yet pushed / neutral). The
-// `deal-seam-status` testid carries the named status the suite reads.
+// The CRM-seam status as a CLEAN NAMED CHIP with a SeamDot (S12 W4) — never a raw
+// UUID (A-17). The seam is the forward step's state: synced (in HubSpot / flow),
+// conflict (needs a human / signal), unsynced or anything else (not yet pushed /
+// neutral). The `deal-seam-status` testid carries the named status the suite reads.
 function SeamField({ status }: { status: string }): JSX.Element {
   const normalized = status.toLowerCase();
   const tone: 'flow' | 'signal' | 'neutral' =
@@ -119,6 +128,12 @@ function SeamField({ status }: { status: string }): JSX.Element {
       : normalized === 'conflict'
         ? 'signal'
         : 'neutral';
+  const dotStatus: SeamStatus =
+    normalized === 'synced'
+      ? 'synced'
+      : normalized === 'conflict'
+        ? 'conflict'
+        : 'unsynced';
   return (
     <div
       style={{
@@ -132,19 +147,51 @@ function SeamField({ status }: { status: string }): JSX.Element {
       }}
     >
       <div className="lab">HubSpot seam</div>
-      <span data-testid="deal-seam-status">
+      <span
+        data-testid="deal-seam-status"
+        style={{ display: 'inline-flex', alignItems: 'center', gap: 'var(--s-2)' }}
+      >
+        <SeamDot status={dotStatus} />
         <Chip tone={tone}>{status}</Chip>
       </span>
     </div>
   );
 }
 
+// The recovery-state tag in the panel header (S12 W4; A-19). recovered/working
+// read teal (forward progress), dismissed neutral, stalled signal.
+function RecoveryTag({ state }: { state: string }): JSX.Element {
+  const tone: 'flow' | 'signal' | 'neutral' =
+    state === 'recovered' || state === 'working'
+      ? 'flow'
+      : state === 'stalled'
+        ? 'signal'
+        : 'neutral';
+  const label =
+    state === 'working'
+      ? 'Working'
+      : state === 'recovered'
+        ? 'Recovered'
+        : state === 'dismissed'
+          ? 'Dismissed'
+          : 'Stalled';
+  return (
+    <span data-testid="deal-recovery-state">
+      <Chip tone={tone}>{label}</Chip>
+    </span>
+  );
+}
+
 export default function DealView({
   familyId,
   refreshKey,
+  dismissReasons,
+  onDismiss,
 }: DealViewProps): JSX.Element {
   const [state, setState] = useState<LoadState>({ status: 'loading' });
   const [seed, setSeed] = useState<SeedState>({ status: 'idle' });
+  // The "Dismiss this family" reason picker (closed by default).
+  const [dismissing, setDismissing] = useState(false);
 
   function seedToHubSpot(): void {
     setSeed({ status: 'seeding' });
@@ -166,6 +213,7 @@ export default function DealView({
   useEffect(() => {
     // A new family resets the capture state (no stale ids across selections).
     setSeed({ status: 'idle' });
+    setDismissing(false);
   }, [familyId]);
 
   useEffect(() => {
@@ -229,6 +277,9 @@ export default function DealView({
           {deal.display_name}
         </h2>
         <div style={{ display: 'inline-flex', alignItems: 'center', gap: 'var(--s-2)' }}>
+          {deal.recovery_state != null && (
+            <RecoveryTag state={deal.recovery_state} />
+          )}
           {deal.contact_status != null && (
             <RecencyChip status={deal.contact_status} testId="deal-recency" />
           )}
@@ -283,25 +334,43 @@ export default function DealView({
         >
           <div className="lab">Where they left off</div>
           <div
-            data-testid="deal-completion"
-            className="mono"
-            style={{ marginTop: 'var(--s-1)', fontSize: 'var(--fs-sm)', color: 'var(--ink)' }}
+            style={{
+              marginTop: 'var(--s-2)',
+              display: 'flex',
+              alignItems: 'center',
+              gap: 'var(--s-3)',
+            }}
           >
-            {deal.completion_pct == null
-              ? PLACEHOLDER
-              : `${deal.completion_pct}% application complete`}
-            {deal.forms_total != null
-              ? ` · ${deal.forms_signed ?? 0}/${deal.forms_total} forms signed`
-              : ''}
-          </div>
-          {deal.next_unsigned_form != null && (
-            <div
-              data-testid="deal-next-form"
-              style={{ marginTop: 'var(--s-1)', fontSize: 'var(--fs-sm)', color: 'var(--signal-ink)' }}
-            >
-              Stuck on: {deal.next_unsigned_form}
+            {deal.completion_pct != null && (
+              <CompletionRing pct={deal.completion_pct} />
+            )}
+            <div style={{ minWidth: 0 }}>
+              <div
+                data-testid="deal-completion"
+                className="mono"
+                style={{ fontSize: 'var(--fs-sm)', color: 'var(--ink)' }}
+              >
+                {deal.completion_pct == null
+                  ? PLACEHOLDER
+                  : `${deal.completion_pct}% application complete`}
+                {deal.forms_total != null
+                  ? ` · ${deal.forms_signed ?? 0}/${deal.forms_total} forms signed`
+                  : ''}
+              </div>
+              {deal.next_unsigned_form != null && (
+                <div
+                  data-testid="deal-next-form"
+                  style={{
+                    marginTop: 'var(--s-1)',
+                    fontSize: 'var(--fs-sm)',
+                    color: 'var(--signal-ink)',
+                  }}
+                >
+                  Stuck on: {deal.next_unsigned_form}
+                </div>
+              )}
             </div>
-          )}
+          </div>
         </div>
       )}
 
@@ -369,7 +438,82 @@ export default function DealView({
             {seed.message}
           </span>
         )}
+        {/* Dismiss this family (S12 W4; A-19) — an audited remove from the active
+            board. The WRITE is the parent's (one route); this only opens the
+            reason picker and calls back. Hidden once already dismissed. */}
+        {onDismiss !== undefined &&
+          dismissReasons !== undefined &&
+          deal.recovery_state !== 'dismissed' &&
+          deal.recovery_state !== 'recovered' && (
+            <Button
+              icon={XCircle}
+              data-testid="dismiss-family-start"
+              onClick={() => setDismissing((on) => !on)}
+            >
+              Dismiss this family…
+            </Button>
+          )}
       </div>
+
+      {dismissing && onDismiss !== undefined && dismissReasons !== undefined && (
+        <div
+          data-testid="dismiss-family-reasons"
+          style={{
+            marginTop: 'var(--s-2)',
+            display: 'flex',
+            flexWrap: 'wrap',
+            gap: 'var(--s-2)',
+            alignItems: 'center',
+            padding: 'var(--s-2) var(--s-3)',
+            background: 'var(--surface-2)',
+            border: '1px solid var(--line)',
+            borderRadius: 'var(--r-md)',
+          }}
+        >
+          <span className="lab">reason:</span>
+          {dismissReasons.map((r) => (
+            <button
+              key={r}
+              type="button"
+              data-testid={`dismiss-family-reason-${r}`}
+              onClick={() => {
+                onDismiss(familyId, r);
+                setDismissing(false);
+              }}
+              style={{
+                border: '1px solid var(--line)',
+                background: 'var(--surface)',
+                fontSize: 11.5,
+                fontWeight: 600,
+                padding: '5px 10px',
+                borderRadius: 'var(--r-pill)',
+                color: 'var(--ink)',
+                cursor: 'pointer',
+                fontFamily: 'inherit',
+              }}
+            >
+              {r}
+            </button>
+          ))}
+          <button
+            type="button"
+            data-testid="dismiss-family-cancel"
+            onClick={() => setDismissing(false)}
+            style={{
+              border: '1px solid transparent',
+              background: 'transparent',
+              color: 'var(--muted)',
+              fontSize: 11.5,
+              fontWeight: 600,
+              padding: '5px 10px',
+              cursor: 'pointer',
+              fontFamily: 'inherit',
+            }}
+          >
+            cancel
+          </button>
+        </div>
+      )}
 
       {seed.status === 'captured' && (
         <CapturePanel data={seed.data} />

@@ -35,8 +35,11 @@ const WORK_QUEUE_PAYLOAD = [
     score: 0.91,
     recoverability: 0.95,
     value: 10474,
+    recoverable_now: 9000,
+    freshness: 0.9,
     contact_status: 'overdue',
     last_contact_at: null,
+    recovery_state: 'stalled',
   },
   {
     family_id: FAM_TWO,
@@ -45,8 +48,11 @@ const WORK_QUEUE_PAYLOAD = [
     score: 0.74,
     recoverability: 0.6,
     value: 30000,
+    recoverable_now: 20000,
+    freshness: 0.95,
     contact_status: 'fresh',
     last_contact_at: null,
+    recovery_state: 'stalled',
   },
 ];
 
@@ -73,6 +79,7 @@ function familyResponse(): unknown {
       next_unsigned_form: 'enrollment_agreement',
       contact_status: 'overdue',
       last_contact_at: null,
+      recovery_state: 'stalled',
     },
     family: {},
     lead: {},
@@ -92,6 +99,9 @@ const CALENDAR_PAYLOAD = {
       contact_status: 'overdue',
       value: 10474,
       score: 0.91,
+      recoverable_now: 9000,
+      freshness: 0.9,
+      recovery_state: 'stalled',
     },
     {
       family_id: FAM_TWO,
@@ -102,6 +112,9 @@ const CALENDAR_PAYLOAD = {
       contact_status: 'fresh',
       value: 30000,
       score: 0.74,
+      recoverable_now: 20000,
+      freshness: 0.95,
+      recovery_state: 'stalled',
     },
   ],
 };
@@ -165,6 +178,29 @@ function routedFetchMock(): ReturnType<typeof vi.fn> {
       };
     } else if (/\/proposals\/[^/]+\/decision$/.test(u)) {
       payload = { decision_id: 'dec-1', action: 'approve', seam_status: 'synced' };
+    } else if (/\/ai\/enrollment\/bulk-nudge$/.test(u)) {
+      payload = {
+        batch_id: 'b-1',
+        counts: { sent: 1, blocked: 1, capped: 0 },
+        sent: [{ family_id: FAM_ONE, note_id: 'note-x' }],
+        blocked: [{ family_id: FAM_TWO, failed_rules: ['v2_grounding'] }],
+        capped: [],
+      };
+    } else if (/\/enrollment\/families\/bulk-seed$/.test(u)) {
+      payload = {
+        batch_id: 'b-2',
+        counts: { captured: 2 },
+        captured: [
+          { family_id: FAM_ONE, deal_id: 'd-1', seam_status: 'synced' },
+          { family_id: FAM_TWO, deal_id: 'd-2', seam_status: 'synced' },
+        ],
+      };
+    } else if (/\/enrollment\/families\/bulk-dismiss$/.test(u)) {
+      payload = {
+        batch_id: 'b-3',
+        counts: { dismissed: 1 },
+        dismissed: [FAM_ONE],
+      };
     } else {
       // Default — empty object/array tolerant.
       payload = init?.method === 'POST' ? {} : {};
@@ -220,15 +256,15 @@ describe('EnrollmentWorkspace', () => {
     expect(urlsCalled().some((u) => u.includes('fam-a'))).toBe(false);
   });
 
-  it('switches the focused family from the demoted all-families list', async () => {
+  it('switches the focused family from the show-all ranked list', async () => {
     vi.stubGlobal('fetch', routedFetchMock());
     render(<EnrollmentWorkspace />);
 
-    // Reveal the demoted ranked list, then click the second family's row.
+    // Reveal the ranked working set, then click the second family's row.
     const toggle = await screen.findByTestId('enrollment-view-toggle');
-    fireEvent.click(within(toggle).getByRole('tab', { name: /all families/i }));
+    fireEvent.click(within(toggle).getByRole('tab', { name: /show all/i }));
 
-    const secondRow = await screen.findByTestId(`work-queue-row-${FAM_TWO}`);
+    const secondRow = await screen.findByTestId(`drill-row-${FAM_TWO}`);
     fireEvent.click(secondRow);
 
     await waitFor(() => {
@@ -265,26 +301,55 @@ describe('EnrollmentWorkspace', () => {
     );
   });
 
-  it('defaults to the calendar and toggles to the demoted all-families list', async () => {
+  it('defaults to the calendar and toggles to the show-all ranked list', async () => {
     vi.stubGlobal('fetch', routedFetchMock());
     render(<EnrollmentWorkspace />);
 
-    // Calendar is the default primary "find": it's visible, the ranked queue is
-    // demoted out of view.
+    // Calendar is the default primary "find": it's visible, the ranked list is
+    // out of view.
     expect(await screen.findByTestId('enrollment-calendar')).toBeInTheDocument();
-    expect(screen.queryByTestId('work-queue')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('show-all-list')).not.toBeInTheDocument();
 
-    // One click on "All families" swaps to the demoted ranked list.
+    // One click on "Show all" swaps to the ranked working set.
     const toggle = screen.getByTestId('enrollment-view-toggle');
-    fireEvent.click(within(toggle).getByRole('tab', { name: /all families/i }));
+    fireEvent.click(within(toggle).getByRole('tab', { name: /show all/i }));
 
-    expect(await screen.findByTestId('work-queue')).toBeInTheDocument();
+    expect(await screen.findByTestId('show-all-list')).toBeInTheDocument();
     expect(screen.queryByTestId('enrollment-calendar')).not.toBeInTheDocument();
 
     // ...and back to the calendar (still one action).
     fireEvent.click(within(toggle).getByRole('tab', { name: /calendar/i }));
     expect(await screen.findByTestId('enrollment-calendar')).toBeInTheDocument();
-    expect(screen.queryByTestId('work-queue')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('show-all-list')).not.toBeInTheDocument();
+  });
+
+  it('bulk-nudges a selection from show-all and renders the gate partition toast', async () => {
+    vi.stubGlobal('fetch', routedFetchMock());
+    render(<EnrollmentWorkspace />);
+
+    // Open the show-all list, select a row, then bulk-nudge.
+    const toggle = await screen.findByTestId('enrollment-view-toggle');
+    fireEvent.click(within(toggle).getByRole('tab', { name: /show all/i }));
+
+    const check = await screen.findByTestId(`drill-row-check-${FAM_ONE}`);
+    fireEvent.click(check);
+
+    // The bulk bar appears; nudge the selection.
+    const nudge = await screen.findByTestId('bulk-nudge');
+    fireEvent.click(nudge);
+
+    // The bulk-nudge route was POSTed...
+    await waitFor(() => {
+      expect(
+        urlsCalled().some((u) => u.includes('/ai/enrollment/bulk-nudge')),
+      ).toBe(true);
+    });
+
+    // ...and the partition (1 sent · 1 blocked) is SHOWN in a toast — blocked
+    // families are never hidden (visible fail-closed gate, INV-3/4).
+    const toast = await screen.findByTestId('toast');
+    expect(toast).toHaveTextContent('1 nudges sent');
+    expect(toast).toHaveTextContent('1 blocked by the gate');
   });
 
   it('refreshes the deal view + notes after an approved follow-up', async () => {

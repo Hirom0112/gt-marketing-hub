@@ -197,3 +197,57 @@ describe('DealView — Seed to HubSpot capture panel', () => {
     );
   });
 });
+
+// --------------------------------------------------------------------------- #
+// S12 W4 — work-panel additions: recovery-state tag, completion ring, seam dot,
+// and the audited "Dismiss this family" reason picker (delegated write, INV-2).
+// --------------------------------------------------------------------------- #
+
+const STALLED_PAYLOAD = {
+  deal_view: {
+    ...ENROLLED_PAYLOAD.deal_view,
+    recovery_state: 'stalled',
+  },
+  family: {},
+  lead: {},
+  app_form: {},
+};
+
+describe('DealView — S12 W4 work-panel', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+
+  it('renders the recovery-state tag, completion ring, and a seam dot', async () => {
+    mockFetch(STALLED_PAYLOAD);
+    render(<DealView familyId="fam-123" />);
+
+    expect(await screen.findByTestId('deal-recovery-state')).toHaveTextContent(
+      'Stalled',
+    );
+    // The completion ring (52px conic dial) shows the rounded application %.
+    expect(screen.getByTestId('completion-ring-label')).toHaveTextContent('46%');
+    // The seam field carries a colour-coded SeamDot alongside the named status.
+    expect(screen.getByTestId('seam-dot')).toHaveAttribute('data-seam', 'synced');
+  });
+
+  it('opens the dismiss reason picker and delegates the write (no client write)', async () => {
+    mockFetch(STALLED_PAYLOAD);
+    const onDismiss = vi.fn();
+    render(
+      <DealView
+        familyId="fam-123"
+        dismissReasons={['Declined', 'Bad fit']}
+        onDismiss={onDismiss}
+      />,
+    );
+
+    fireEvent.click(await screen.findByTestId('dismiss-family-start'));
+    // The reason rail appears; picking a reason calls back with (id, reason).
+    fireEvent.click(
+      await screen.findByTestId('dismiss-family-reason-Declined'),
+    );
+    expect(onDismiss).toHaveBeenCalledWith('fam-123', 'Declined');
+  });
+});
