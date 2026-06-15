@@ -160,8 +160,7 @@ def test_content_batch_counts_and_block_coverage() -> None:
 
 def test_content_batch_block_candidates_actually_block() -> None:
     """The V-2/V-3 demo candidates BLOCK through the real eval gate (test-only import)."""
-    from app.core.eval_gate import check_v2, check_v3
-    from app.core.eval_gate import RuleVerdict
+    from app.core.eval_gate import RuleVerdict, check_v2, check_v3
 
     batch = generate_content_batch()
 

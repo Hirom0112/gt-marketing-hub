@@ -34,6 +34,30 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from uuid import UUID
 
+from app.ai.schemas.brand import (
+    BrandMemoryItem,
+    BrandMemoryKind,
+    BrandMemorySignal,
+    BrandRule,
+    EnforcedBy,
+    LibraryAsset,
+    LibraryAssetType,
+    MarketingRecipe,
+    RecipeParam,
+    RecipeParamType,
+    RuleType,
+    Severity,
+)
+from app.ai.schemas.content import (
+    AudienceTag,
+    Channel,
+    ContentCandidate,
+    ContentFormat,
+    GeneratedBy,
+    HumanDecision,
+    LifecycleStage,
+    Provenance,
+)
 from app.data.models import (
     AppForm,
     CommunityProfile,
@@ -453,3 +477,482 @@ def generate(n: int, seed: int = 0) -> SyntheticDataset:
         ds.enrollment_forms.append(enrollment)
         ds.community_profiles.append(profile)
     return ds
+
+
+# --------------------------------------------------------------------------- #
+# Marketing seed inventory (CONTENT_SPEC §11). Distinct from the family spine:
+# these are the fixed, synthetic brand-OS + content seeds that make the S4
+# content engine, the brand judge, and BOTH §9 BLOCK paths (V-2 grounding, V-3
+# COPPA) demoable on synthetic data alone. They are *fixed content* (not RNG-
+# drawn) so they're byte-reproducible by construction, and carry no wall-clock
+# (a fixed ISO timestamp is baked in) — determinism per CLAUDE.md §4.1.
+#
+# This module stays the only seed writer (NFR-1) and imports no LLM/eval/adapter
+# code (INV-1, CLAUDE.md §3) — only the pure schema models above. The lone real
+# name anywhere is the INTENTIONAL Tom Babb attribution (INV-7): the marketing
+# skills are HIS, attributed, never claimed as the builder's authorship.
+# --------------------------------------------------------------------------- #
+
+# Fixed ISO timestamp for every seed record's provenance (no wall clock).
+_SEED_TS = _EPOCH.isoformat()
+
+# INV-7 (LOCKED): every recipe's attribution names Tom Babb. Single canonical
+# string so the attribution can never silently drift off a recipe.
+_TOM_BABB_ATTRIBUTION = (
+    "Marketing skills attributed to Tom Babb (GT School). Illustrative seed "
+    "template pending the real Tom Babb source; not the builder's authorship."
+)
+
+
+def _seed_provenance() -> Provenance:
+    """Provenance shared by every §11 seed record: synthetic_seed + fixed timestamp."""
+    return Provenance(generated_by=GeneratedBy.SYNTHETIC_SEED, created_at=_SEED_TS)
+
+
+def generate_brand_memory() -> list[BrandMemoryItem]:
+    """The §11.1 brand-memory seed inventory — ≥8 items that condition S4 generation.
+
+    Fixed, synthetic, deterministic. Covers ≥3 ``voice_attribute``, ≥3
+    ``exemplar`` (short_caption / faq_block / email_body), and ≥2
+    ``dont_rule``/``signal`` — including the two named rules that make the §9
+    V-4/gate enforcement demonstrable: "Don't use speed multipliers"
+    (``signal=discarded``) and "Don't target children". Each is ``active``,
+    versioned, weighted, with ``synthetic_seed`` provenance (FR-3.2).
+    """
+    prov = _seed_provenance()
+    return [
+        BrandMemoryItem(
+            id="bm-voice-mastery",
+            kind=BrandMemoryKind.VOICE_ATTRIBUTE,
+            content="Confident, mastery-focused, parent-respectful.",
+            weight=1.0,
+            active=True,
+            version=1,
+            provenance=prov,
+        ),
+        BrandMemoryItem(
+            id="bm-voice-concrete",
+            kind=BrandMemoryKind.VOICE_ATTRIBUTE,
+            content="Concrete over hype — describe the program, never promise outcomes.",
+            weight=1.0,
+            active=True,
+            version=1,
+            provenance=prov,
+        ),
+        BrandMemoryItem(
+            id="bm-voice-plain",
+            kind=BrandMemoryKind.VOICE_ATTRIBUTE,
+            content="Plain language, no jargon; speak to the parent's real decision.",
+            weight=0.8,
+            active=True,
+            version=1,
+            provenance=prov,
+        ),
+        BrandMemoryItem(
+            id="bm-exemplar-short-caption",
+            kind=BrandMemoryKind.EXEMPLAR,
+            content=(
+                "Gifted K-8, built around mastery. See how a GT School day actually "
+                "works for your child."
+            ),
+            signal=BrandMemorySignal.KEPT,
+            channel_scope=[Channel.INSTAGRAM],
+            weight=0.7,
+            active=True,
+            version=1,
+            provenance=prov,
+        ),
+        BrandMemoryItem(
+            id="bm-exemplar-faq-block",
+            kind=BrandMemoryKind.EXEMPLAR,
+            content=(
+                "Q: Is GT School a test-prep program? A: No. GT School is a mastery-based "
+                "gifted K-8 program; students advance when they have truly learned the material."
+            ),
+            signal=BrandMemorySignal.KEPT,
+            channel_scope=[Channel.GEO],
+            weight=0.7,
+            active=True,
+            version=1,
+            provenance=prov,
+        ),
+        BrandMemoryItem(
+            id="bm-exemplar-email-body",
+            kind=BrandMemoryKind.EXEMPLAR,
+            content=(
+                "Thanks for your interest in GT School. Here is what the next step looks "
+                "like for your family, and a time to talk it through with our team."
+            ),
+            signal=BrandMemorySignal.KEPT,
+            channel_scope=[Channel.EMAIL],
+            weight=0.7,
+            active=True,
+            version=1,
+            provenance=prov,
+        ),
+        BrandMemoryItem(
+            id="bm-dont-speed-multipliers",
+            kind=BrandMemoryKind.DONT_RULE,
+            content=(
+                "Don't use speed multipliers. Claims like '4X speed' / '2X faster' are "
+                "unverifiable performance multiplier hype and get discarded."
+            ),
+            signal=BrandMemorySignal.DISCARDED,
+            weight=1.0,
+            active=True,
+            version=1,
+            provenance=prov,
+        ),
+        BrandMemoryItem(
+            id="bm-dont-target-children",
+            kind=BrandMemoryKind.DONT_RULE,
+            content=(
+                "Don't target children. Never address or target minors; speak to parents "
+                "and educators only (COPPA-safe)."
+            ),
+            signal=BrandMemorySignal.DISCARDED,
+            weight=1.0,
+            active=True,
+            version=1,
+            provenance=prov,
+        ),
+    ]
+
+
+def generate_brand_rules() -> list[BrandRule]:
+    """The §11.2 brand-rule seed inventory — ≥4 rules as data that drive §9 V-2/V-4.
+
+    Two ``never`` rules ("no unverifiable performance claims" / "never target
+    minors"), one ``must`` ("lead with the program, not hype"), one ``avoid``
+    ("avoid test-prep framing"). Each carries the right ``enforced_by`` /
+    ``severity``, is ``active``, with ``synthetic_seed`` provenance (FR-3.12).
+    """
+    prov = _seed_provenance()
+    return [
+        BrandRule(
+            id="br-no-unverifiable-claims",
+            rule_type=RuleType.NEVER,
+            statement=("No unverifiable performance claims (4X/2X speed, fastest, guaranteed)."),
+            enforced_by=EnforcedBy.GROUNDING,
+            severity=Severity.BLOCK,
+            active=True,
+            provenance=prov,
+        ),
+        BrandRule(
+            id="br-never-target-minors",
+            rule_type=RuleType.NEVER,
+            statement="Never target or address minors; parents and educators only.",
+            enforced_by=EnforcedBy.COPPA,
+            severity=Severity.BLOCK,
+            active=True,
+            provenance=prov,
+        ),
+        BrandRule(
+            id="br-lead-with-program",
+            rule_type=RuleType.MUST,
+            statement="Lead with the program and the parent's decision, not hype.",
+            enforced_by=EnforcedBy.BRAND,
+            severity=Severity.WARN,
+            active=True,
+            provenance=prov,
+        ),
+        BrandRule(
+            id="br-avoid-test-prep",
+            rule_type=RuleType.AVOID,
+            statement="Avoid test-prep framing; GT is mastery-based gifted K-8.",
+            enforced_by=EnforcedBy.BRAND,
+            severity=Severity.WARN,
+            active=True,
+            provenance=prov,
+        ),
+    ]
+
+
+def generate_recipes() -> list[MarketingRecipe]:
+    """The §11.3 recipe seed inventory — ≥3 runnable templates, each Tom-Babb-attributed.
+
+    "GEO FAQ builder", "Parent nurture email", "Comparison-table generator".
+    INV-7 (LOCKED): EVERY recipe's ``attribution`` names Tom Babb — the marketing
+    skills are HIS, attributed, never the builder's. Each is marked
+    ``synthetic_seed`` and flagged illustrative pending the real source (§8.5).
+    """
+    prov = _seed_provenance()
+    return [
+        MarketingRecipe(
+            id="recipe-geo-faq-builder",
+            name="GEO FAQ builder",
+            attribution=_TOM_BABB_ATTRIBUTION,
+            description=(
+                "Builds an authoritative FAQ block engineered to win AI-search "
+                "citations on a target prompt against a competitor set (§7)."
+            ),
+            parameters=[
+                RecipeParam(
+                    key="targetPrompt",
+                    label="Target AI-search prompt",
+                    type=RecipeParamType.STRING,
+                    required=True,
+                ),
+                RecipeParam(
+                    key="competitorSet",
+                    label="Competitor set",
+                    type=RecipeParamType.STRING,
+                    required=True,
+                ),
+            ],
+            prompt_template=(
+                "Write a concise, grounded FAQ block answering '{targetPrompt}' for "
+                "prospective parents, citing only verifiable facts about GT School and "
+                "honestly contrasting with {competitorSet}. No performance multipliers."
+            ),
+            output_channel=Channel.GEO,
+            output_format=ContentFormat.FAQ_BLOCK,
+            brand_rule_refs=["br-no-unverifiable-claims", "br-avoid-test-prep"],
+            version=1,
+            provenance=prov,
+        ),
+        MarketingRecipe(
+            id="recipe-parent-nurture-email",
+            name="Parent nurture email",
+            attribution=_TOM_BABB_ATTRIBUTION,
+            description=(
+                "Drafts a stage- and persona-aware nurture email that leads with the "
+                "program and the parent's next decision, never hype."
+            ),
+            parameters=[
+                RecipeParam(
+                    key="stage",
+                    label="Funnel stage",
+                    type=RecipeParamType.ENUM,
+                    required=True,
+                    options=["interest", "apply", "enroll", "tuition"],
+                ),
+                RecipeParam(
+                    key="persona",
+                    label="Parent persona",
+                    type=RecipeParamType.STRING,
+                    required=True,
+                ),
+            ],
+            prompt_template=(
+                "Write a warm, plain-language nurture email for a {persona} parent at the "
+                "{stage} stage. Lead with the program and a concrete next step; no "
+                "guarantees, no speed multipliers, parents only."
+            ),
+            output_channel=Channel.EMAIL,
+            output_format=ContentFormat.EMAIL_BODY,
+            brand_rule_refs=["br-lead-with-program", "br-never-target-minors"],
+            version=1,
+            provenance=prov,
+        ),
+        MarketingRecipe(
+            id="recipe-comparison-table-generator",
+            name="Comparison-table generator",
+            attribution=_TOM_BABB_ATTRIBUTION,
+            description=(
+                "Generates an honest, source-able comparison table of GT School vs a "
+                "competitor set for GEO surfaces (§7)."
+            ),
+            parameters=[
+                RecipeParam(
+                    key="competitorSet",
+                    label="Competitor set",
+                    type=RecipeParamType.STRING,
+                    required=True,
+                ),
+            ],
+            prompt_template=(
+                "Build a comparison table of GT School vs {competitorSet} across mastery "
+                "model, grade band, and format. Use only verifiable, source-able rows; "
+                "never claim '#1', 'fastest', or any unverifiable multiplier."
+            ),
+            output_channel=Channel.GEO,
+            output_format=ContentFormat.COMPARISON_TABLE,
+            brand_rule_refs=["br-no-unverifiable-claims"],
+            version=1,
+            provenance=prov,
+        ),
+    ]
+
+
+def _candidate(
+    *,
+    suffix: str,
+    channel: Channel,
+    fmt: ContentFormat,
+    concept: str,
+    copy_text: str,
+    audience: AudienceTag,
+    claims: list[str] | None = None,
+) -> ContentCandidate:
+    """Build one fixed §11.4 ContentCandidate in the shared demo batch."""
+    return ContentCandidate(
+        id=f"cc-seed-{suffix}",
+        batch_id="batch-seed-demo-001",
+        prompt="Seed demo: draft on-brand GT School marketing copy.",
+        channel=channel,
+        format=fmt,
+        concept=concept,
+        copy=copy_text,
+        claims=claims or [],
+        audience_tag=audience,
+        lifecycle=LifecycleStage.CANDIDATE,
+        decision=HumanDecision(),
+        provenance=_seed_provenance(),
+    )
+
+
+def generate_content_batch() -> list[ContentCandidate]:
+    """The §11.4 content batch — ≥6 candidates in one batch, with both BLOCK demos.
+
+    One ``batch_id`` groups the run. The batch deliberately includes one
+    candidate that FAILS §9 V-2 (``copy_text`` contains "4X speed") and one that
+    FAILS V-3 (a minor-targeting signal — "Hey kids, ages 9-12..."; note the
+    ``audience_tag`` itself can never be a minor, INV-6, so the V-3 failure is
+    encoded in the copy), so BOTH BLOCK paths are demoable. The rest are clean.
+    """
+    return [
+        # Clean candidates (pass all four rules).
+        _candidate(
+            suffix="clean-short-caption",
+            channel=Channel.INSTAGRAM,
+            fmt=ContentFormat.SHORT_CAPTION,
+            concept="Show a real mastery-based GT School day to prospective parents.",
+            copy_text=(
+                "Mastery-based gifted K-8. See how a GT School day actually fits your child's pace."
+            ),
+            audience=AudienceTag.PROSPECTIVE_PARENT,
+        ),
+        _candidate(
+            suffix="clean-faq",
+            channel=Channel.GEO,
+            fmt=ContentFormat.FAQ_BLOCK,
+            concept="Answer 'is GT School test prep?' for AI-search.",
+            copy_text=(
+                "Q: Is GT School a test-prep program? A: No. It is a mastery-based gifted "
+                "K-8 program where students advance once they have learned the material."
+            ),
+            audience=AudienceTag.GENERAL,
+        ),
+        _candidate(
+            suffix="clean-email",
+            channel=Channel.EMAIL,
+            fmt=ContentFormat.EMAIL_BODY,
+            concept="Warm nurture email leading with the next step.",
+            copy_text=(
+                "Thanks for your interest in GT School. Here is what the next step looks "
+                "like for your family and a time to talk it through with our team."
+            ),
+            audience=AudienceTag.PROSPECTIVE_PARENT,
+        ),
+        _candidate(
+            suffix="clean-comparison",
+            channel=Channel.GEO,
+            fmt=ContentFormat.COMPARISON_TABLE,
+            concept="Honest GT vs alternatives table for GEO.",
+            copy_text=(
+                "GT School: mastery-based, gifted K-8, online. A clear, source-able "
+                "comparison of model, grade band, and format."
+            ),
+            audience=AudienceTag.GENERAL,
+        ),
+        # V-2 BLOCK demo: an unverifiable performance multiplier ("4X speed").
+        _candidate(
+            suffix="block-v2-speed",
+            channel=Channel.INSTAGRAM,
+            fmt=ContentFormat.AD_COPY,
+            concept="Hype variant that overclaims — must BLOCK on grounding (V-2).",
+            copy_text=(
+                "Kids learn at 4X speed with GT School — the fastest gifted program anywhere!"
+            ),
+            audience=AudienceTag.PROSPECTIVE_PARENT,
+            claims=["Kids learn at 4X speed"],
+        ),
+        # V-3 BLOCK demo: a minor-targeting signal in the copy (COPPA, V-3).
+        _candidate(
+            suffix="block-v3-minor",
+            channel=Channel.TIKTOK,
+            fmt=ContentFormat.SHORT_CAPTION,
+            concept="Copy that addresses children directly — must BLOCK on COPPA (V-3).",
+            copy_text=(
+                "Hey kids, ages 9-12 — sign up yourself and start your GT School adventure today!"
+            ),
+            audience=AudienceTag.GENERAL,
+        ),
+    ]
+
+
+def generate_library_assets() -> list[LibraryAsset]:
+    """The §11.4 library seed inventory — ≥4 kept + validated assets.
+
+    Across ``copy`` / ``faq_block`` / ``comparison_table`` asset types. Only
+    validated content enters the library, so each carries a passing
+    ``validation`` id and ``lifecycle=kept`` (FR-3.4); ``synthetic_seed``
+    provenance throughout.
+    """
+    prov = _seed_provenance()
+    return [
+        LibraryAsset(
+            id="lib-copy-mastery-caption",
+            title="Mastery-based day — short caption",
+            asset_type=LibraryAssetType.COPY,
+            channel=Channel.INSTAGRAM,
+            format=ContentFormat.SHORT_CAPTION,
+            body=(
+                "Mastery-based gifted K-8. See how a GT School day actually fits your child's pace."
+            ),
+            tags=["mastery", "k8", "prospective_parent"],
+            search_text="mastery-based gifted k-8 day short caption prospective parent",
+            validation="vr-seed-pass-001",
+            lifecycle=LifecycleStage.KEPT,
+            provenance=prov,
+        ),
+        LibraryAsset(
+            id="lib-faq-not-test-prep",
+            title="FAQ: is GT School test prep?",
+            asset_type=LibraryAssetType.FAQ_BLOCK,
+            channel=Channel.GEO,
+            format=ContentFormat.FAQ_BLOCK,
+            body=(
+                "Q: Is GT School a test-prep program? A: No. It is a mastery-based gifted "
+                "K-8 program where students advance once they have learned the material."
+            ),
+            tags=["faq", "test-prep", "mastery", "geo"],
+            search_text="faq is gt school test prep mastery gifted k-8 geo",
+            validation="vr-seed-pass-002",
+            lifecycle=LifecycleStage.KEPT,
+            provenance=prov,
+        ),
+        LibraryAsset(
+            id="lib-faq-funding",
+            title="FAQ: how does TEFA funding work?",
+            asset_type=LibraryAssetType.FAQ_BLOCK,
+            channel=Channel.GEO,
+            format=ContentFormat.FAQ_BLOCK,
+            body=(
+                "Q: How does funding work? A: Eligible families may use a TEFA award "
+                "toward tuition, disbursed in installments. Our team walks you through it."
+            ),
+            tags=["faq", "funding", "tefa"],
+            search_text="faq funding tefa award installments tuition",
+            validation="vr-seed-pass-003",
+            lifecycle=LifecycleStage.KEPT,
+            provenance=prov,
+        ),
+        LibraryAsset(
+            id="lib-comparison-gt-vs-alts",
+            title="Comparison table: GT School vs alternatives",
+            asset_type=LibraryAssetType.COMPARISON_TABLE,
+            channel=Channel.GEO,
+            format=ContentFormat.COMPARISON_TABLE,
+            body=(
+                "GT School: mastery-based, gifted K-8, online. A clear, source-able "
+                "comparison of model, grade band, and format vs alternatives."
+            ),
+            tags=["comparison", "geo", "competitors"],
+            search_text="comparison table gt school vs alternatives mastery gifted k-8 geo",
+            validation="vr-seed-pass-004",
+            lifecycle=LifecycleStage.KEPT,
+            provenance=prov,
+        ),
+    ]
