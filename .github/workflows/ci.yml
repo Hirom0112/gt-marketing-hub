@@ -1,0 +1,69 @@
+name: CI
+
+# Same gate as the pre-push hook (CLAUDE.md §5), CI-blocking on push & PR.
+# Order: PII-scan -> dep-budget -> ruff lint -> ruff format -> mypy -> pytest.
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# Cancel superseded runs on the same ref to save minutes.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  gate:
+    name: quality gate
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      # --- Gate step 1: PII / secret scan (THREAT_MODEL.md §5, C-SYN-2/C-SEC-3)
+      - name: PII / secret scan
+        run: python scripts/pii_scan.py
+
+      # --- Gate step 2: runtime dependency budget (TECH_STACK.md §4.1)
+      - name: Dependency budget
+        run: python scripts/check_dep_budget.py
+
+      - name: Install backend deps
+        working-directory: backend
+        run: uv sync --all-extras --dev
+
+      # --- Gate step 3: ruff lint
+      - name: Ruff lint
+        working-directory: backend
+        run: uv run ruff check .
+
+      # --- Gate step 4: ruff format check
+      - name: Ruff format check
+        working-directory: backend
+        run: uv run ruff format --check .
+
+      # --- Gate step 5: mypy strict
+      - name: mypy (strict)
+        working-directory: backend
+        run: uv run mypy app
+
+      # --- Gate step 6: pytest
+      - name: pytest
+        working-directory: backend
+        run: uv run pytest -q
