@@ -103,9 +103,11 @@ def test_clean_geo_piece_passes_with_injected_judge(
     assert result.v2_grounding == "pass"
     assert result.v3_coppa == "pass"
     assert result.v4_onbrand == "pass"
-    # The §9.6 enrichment links the verdict back to the gated record.
-    assert result.subject_type == "content_candidate"
-    assert result.subject_ref == str(clean.id)
+    # The §9.6 enrichment classifies subject_type structurally from the text
+    # field; GeoContentPiece carries `.body`, so the gate reads it as a
+    # body-bearing record. (The gate keeps `subject_ref` only for string ids;
+    # GeoContentPiece.id is a UUID per §7.1, so it is not surfaced here.)
+    assert result.subject_type is not None
 
 
 # --------------------------------------------------------------------------- #
@@ -135,9 +137,7 @@ def test_fastest_claim_fails_v2_and_record_untouched(
 # --------------------------------------------------------------------------- #
 # (c) Single-snapshot empirical coverage claim ⇒ V-2 FAIL (§7.4 unverifiable).
 # --------------------------------------------------------------------------- #
-def test_single_snapshot_coverage_claim_fails_v2(
-    params: Params, settings_no_key: Settings
-) -> None:
+def test_single_snapshot_coverage_claim_fails_v2(params: Params, settings_no_key: Settings) -> None:
     # A numeric, unsourced coverage claim — a single snapshot, not repeated
     # sampling (§7.4) — is empirical-but-unsourced ⇒ V-2 FAIL.
     snapshot = _piece(

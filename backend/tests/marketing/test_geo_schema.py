@@ -63,9 +63,7 @@ def test_competitor_set_is_gifted_school() -> None:
     # Any test-prep brand in the set ⇒ content-invalid (False) — the caller BLOCKs.
     assert validate_competitor_set(["kaplan.com"]) is False
     assert validate_competitor_set(["princetonreview.com"]) is False
-    assert (
-        validate_competitor_set([*GIFTED_SCHOOL_COMPETITOR_SET, "kaplan.com"]) is False
-    )
+    assert validate_competitor_set([*GIFTED_SCHOOL_COMPETITOR_SET, "kaplan.com"]) is False
 
     # An empty set is not a valid competitor set.
     assert validate_competitor_set([]) is False
