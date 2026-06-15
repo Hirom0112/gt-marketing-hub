@@ -10,6 +10,7 @@ from mangum import Mangum
 
 from app.api.ai_actions import router as ai_actions_router
 from app.api.families import router as families_router
+from app.api.notes import router as notes_router
 
 app = FastAPI(title="GT Growth Cockpit", version="0.1.0")
 
@@ -27,6 +28,10 @@ app.include_router(families_router)
 # /proposals/{id}/decision, /proposals. The decision route is the sole state
 # write (INV-2); every proposal + eval + decision is logged (NFR-6).
 app.include_router(ai_actions_router)
+
+# Per-family notes timeline (FR-2.3; A-8) — /families/{id}/notes GET + POST.
+# Manual notes + deterministic state-change auto-notes; no LLM, no proposals.
+app.include_router(notes_router)
 
 
 # AWS Lambda + API Gateway entrypoint (ARCHITECTURE.md §12).

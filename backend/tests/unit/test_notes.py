@@ -20,7 +20,7 @@ that the auto-note path imports no ``app.ai`` / ``anthropic`` and returns a
 from __future__ import annotations
 
 import ast
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from uuid import uuid4
 
@@ -41,9 +41,9 @@ from app.main import app
 client = TestClient(app)
 
 # Pinned timestamps so the interleave order is deterministic (no clock leakage).
-_T0 = datetime(2026, 6, 1, 9, 0, 0, tzinfo=timezone.utc)
-_T1 = datetime(2026, 6, 1, 10, 0, 0, tzinfo=timezone.utc)
-_T2 = datetime(2026, 6, 1, 11, 0, 0, tzinfo=timezone.utc)
+_T0 = datetime(2026, 6, 1, 9, 0, 0, tzinfo=UTC)
+_T1 = datetime(2026, 6, 1, 10, 0, 0, tzinfo=UTC)
+_T2 = datetime(2026, 6, 1, 11, 0, 0, tzinfo=UTC)
 
 
 def test_notes_timeline_appends_manual_and_auto() -> None:
@@ -130,8 +130,10 @@ def test_post_manual_note_then_get_timeline() -> None:
     family_id = seeded.list_families()[0].family_id
 
     # Fresh notes store per case (the timeline is append-only — avoid cross-test
-    # bleed); override the dep for this client.
-    app.dependency_overrides[get_notes_repository] = lambda: InMemoryNotesRepository()
+    # bleed); override the dep for this client with a single shared instance so
+    # POST and GET hit the same store.
+    notes_store = InMemoryNotesRepository()
+    app.dependency_overrides[get_notes_repository] = lambda: notes_store
     try:
         post = client.post(f"/families/{family_id}/notes", json={"body": "called family"})
         assert post.status_code == 201

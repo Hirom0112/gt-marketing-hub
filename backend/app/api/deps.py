@@ -17,12 +17,17 @@ from app.ai.client import AnthropicLLMClient, LLMClient
 from app.core.eval_gate import BrandJudge
 from app.core.params import Params, load_params
 from app.core.settings import Settings
+from app.data.notes_repository import InMemoryNotesRepository, NotesRepository
 from app.data.repository import FamilyRepository, InMemoryFamilyRepository
 from app.observability.log_store import InMemoryObservabilityLog, ObservabilityLog
 
 # Singleton store, seeded once at process start from the fixed synthetic seed
 # (A-3). Production swaps this for a Supabase-backed FamilyRepository.
 _repository: FamilyRepository = InMemoryFamilyRepository.seeded()
+
+# Singleton notes store — the FR-2.3 timeline (A-3 in-memory, append-only).
+# Production swaps a Supabase-backed NotesRepository behind the same interface.
+_notes_repository: NotesRepository = InMemoryNotesRepository()
 
 # The committed example params, used as a fallback when no local params.yaml
 # exists (it is gitignored and absent in this env). Resolved relative to the
@@ -62,6 +67,11 @@ _observability: list[ObservabilityLog] = [InMemoryObservabilityLog()]
 def get_repository() -> FamilyRepository:
     """FastAPI dependency yielding the active repository (the store seam)."""
     return _repository
+
+
+def get_notes_repository() -> NotesRepository:
+    """FastAPI dependency yielding the active notes store (the FR-2.3 timeline seam)."""
+    return _notes_repository
 
 
 def get_params() -> Params:
