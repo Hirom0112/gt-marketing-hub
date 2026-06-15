@@ -248,6 +248,127 @@ class SeedResponse(BaseModel):
     seam_status: SeamStatus
 
 
+# --------------------------------------------------------------------------- #
+# S12 W2 bulk action surface (A-20; INV-2/INV-3/INV-8/INV-9).
+# Bulk is a THIN batch UX over the existing per-family gated spine — never a new
+# write path. Each route loops the single-family composition internally; the
+# operator's one bulk click is the batch human-approval (INV-2), the per-family
+# eval gate stays non-negotiable (INV-3 fail-closed). One ``batch_id`` tags the
+# audit group (NFR-6). All sends/pushes go through the SIMULATED adapter (INV-9).
+# --------------------------------------------------------------------------- #
+class BulkNudgeRequest(BaseModel):
+    """`POST /ai/enrollment/bulk-nudge` body — the selected families + channel.
+
+    ``action`` defaults to ``nudge`` so a bare family selection still drafts a
+    concrete channel. Each family runs the SAME draft + eval gate as the single
+    route; the bulk click is the batch human-approval (INV-2).
+    """
+
+    family_ids: list[UUID]
+    action: DraftAction = DraftAction.NUDGE
+
+
+class BulkNudgeSent(BaseModel):
+    """One eval-passing family in a bulk-nudge run — recorded send + audit head."""
+
+    family_id: UUID
+    note_id: str
+
+
+class BulkNudgeBlocked(BaseModel):
+    """One eval-FAILING family in a bulk-nudge run — blocked, logged, NO send (INV-3/4)."""
+
+    family_id: UUID
+    failed_rules: list[str] = Field(default_factory=list)
+
+
+class BulkNudgeCounts(BaseModel):
+    """The pre/post partition counts of a bulk-nudge run (the visible gate signal)."""
+
+    sent: int
+    blocked: int
+    capped: int
+
+
+class BulkNudgeResponse(BaseModel):
+    """The `POST /ai/enrollment/bulk-nudge` partition (A-20; INV-3 fail-closed).
+
+    ``sent`` are eval-passing families whose send was recorded via the SIMULATED
+    adapter and whose proposal/eval/approve-decision were logged. ``blocked`` are
+    eval-failing families — logged with their failing eval, NEVER sent (INV-4).
+    ``capped`` are families deferred past the INV-8 per-run cap — never overspent.
+    """
+
+    batch_id: str
+    counts: BulkNudgeCounts
+    sent: list[BulkNudgeSent] = Field(default_factory=list)
+    blocked: list[BulkNudgeBlocked] = Field(default_factory=list)
+    capped: list[UUID] = Field(default_factory=list)
+
+
+class BulkSeedRequest(BaseModel):
+    """`POST /enrollment/families/bulk-seed` body — the families to push (S12 W2)."""
+
+    family_ids: list[UUID]
+
+
+class BulkSeedCaptured(BaseModel):
+    """One captured family in a bulk-seed run — the recorded deal + derived seam."""
+
+    family_id: UUID
+    deal_id: str
+    seam_status: SeamStatus
+
+
+class BulkSeedCounts(BaseModel):
+    """The bulk-seed tally (every requested known family is captured, simulated)."""
+
+    captured: int
+
+
+class BulkSeedResponse(BaseModel):
+    """The `POST /enrollment/families/bulk-seed` result (A-20; INV-9 simulated).
+
+    Loops ``push_family`` through the SIMULATED CRM adapter (CRM_MODE=simulate —
+    no live writes this run, A-17); the seam is DERIVED from the adapter mirror,
+    not asserted ``synced``. One ``batch_id`` tags the audit group (NFR-6).
+    """
+
+    batch_id: str
+    counts: BulkSeedCounts
+    captured: list[BulkSeedCaptured] = Field(default_factory=list)
+
+
+class BulkDismissRequest(BaseModel):
+    """`POST /enrollment/families/bulk-dismiss` body — families + the required reason.
+
+    ``reason`` is REQUIRED and non-blank (the one new write must say why; A-19): a
+    blank reason is rejected 422 before any dismiss is logged.
+    """
+
+    family_ids: list[UUID]
+    reason: str = Field(min_length=1)
+
+
+class BulkDismissCounts(BaseModel):
+    """The bulk-dismiss tally."""
+
+    dismissed: int
+
+
+class BulkDismissResponse(BaseModel):
+    """The `POST /enrollment/families/bulk-dismiss` result (A-19; A-20).
+
+    Loops ``log_dismiss`` (the one new audit write) for each family with the
+    shared ``reason``; dismissed families then derive ``recovery_state=dismissed``.
+    One ``batch_id`` tags the audit group (NFR-6).
+    """
+
+    batch_id: str
+    counts: BulkDismissCounts
+    dismissed: list[UUID] = Field(default_factory=list)
+
+
 class AuditResponse(BaseModel):
     """The §10 audit view for one proposal — proposal + its evals + decisions (NFR-6)."""
 

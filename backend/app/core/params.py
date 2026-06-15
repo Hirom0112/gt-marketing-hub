@@ -113,6 +113,38 @@ class Enrollment(_StrictModel):
     contact: ContactWindows
 
 
+class Bulk(_StrictModel):
+    """S12 W2 bulk-action governance (A-20; INV-8 — the per-run cap + kill).
+
+    ``nudge_per_run_cap`` is the hard ceiling on how many families a single
+    bulk-nudge run may SEND: an eval-passing family beyond the cap is deferred to
+    ``capped`` rather than overspending the metered edge (INV-8). The single
+    canonical home for the bulk cap — never a code literal.
+    """
+
+    nudge_per_run_cap: int
+
+
+class BackToSchool(_StrictModel):
+    """S12 W2 back-to-school volume cohort shape (A-21; INV-1/INV-11).
+
+    The SEPARATE deterministic synthetic cohort (NOT the default June world): a
+    surge of ``count`` active stalls with a single-day Aug spike. Every value is
+    a tunable home (INV-11); the cohort is drawn from its own ``seed`` so the
+    default stream stays byte-identical (the determinism guard holds). ``spike_*``
+    anchor the spike day, ``spike_share`` is the fraction of the cohort whose
+    ``stalled_since`` lands on that day, and ``spread_days`` bands the rest.
+    """
+
+    count: int
+    seed: int
+    spike_year: int
+    spike_month: int
+    spike_day: int
+    spike_share: float
+    spread_days: int
+
+
 class AwardAmounts(_StrictModel):
     """funding.award_amounts — TEFA tiers, $/yr (RESEARCH.md Q1)."""
 
@@ -350,6 +382,8 @@ class Params(_StrictModel):
 
     work_queue: WorkQueue
     enrollment: Enrollment
+    bulk: Bulk
+    back_to_school: BackToSchool
     funding: Funding
     eval_thresholds: EvalThresholds
     cost_caps: CostCaps

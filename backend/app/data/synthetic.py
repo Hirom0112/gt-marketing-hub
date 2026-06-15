@@ -551,6 +551,191 @@ def generate(n: int, seed: int = 0) -> SyntheticDataset:
 
 
 # --------------------------------------------------------------------------- #
+# S12 W2 — the back-to-school VOLUME cohort (A-21; INV-1/INV-11).
+#
+# A SEPARATE deterministic cohort, NOT a mutation of the default June world: it
+# draws from its OWN ``random.Random(seed)`` instance, so the default ``generate``
+# stream stays byte-identical (the `test_synthetic.py` determinism guard holds —
+# "new draws appended" via an isolated RNG). It reproduces the mock v2 shape: a
+# surge of ``count`` ACTIVE stalls with a single-day Aug-24 ``stalled_since``
+# spike (the calendar's ``_stall_date`` anchors on ``stalled_since`` first, so the
+# spike day clusters there). Every family is synthetic (INV-1 — same household
+# fakers as the default world ⇒ PII-scan stays clean) and every shape number
+# comes from params (INV-11), never a code literal.
+# --------------------------------------------------------------------------- #
+# Stall reasons whose recovery-deriver stall-stage (api/families.py
+# ``_STALL_REASON_STAGE``) EQUALS the family's current stage — so a cohort family
+# never reads "advanced past the stall stage" and stays an ACTIVE stall (A-21):
+# INTEREST→{no_response, info_session_no_show}, APPLY→{app_incomplete},
+# ENROLL→{forms_partial, funding_pending}. Distinct from the default
+# ``_STALL_BY_STAGE`` (which includes cross-stage reasons fine for the June world).
+_BTS_STALL_BY_STAGE: dict[Stage, tuple[StallReason, ...]] = {
+    Stage.INTEREST: (StallReason.NO_RESPONSE, StallReason.INFO_SESSION_NO_SHOW),
+    Stage.APPLY: (StallReason.APP_INCOMPLETE,),
+    Stage.ENROLL: (StallReason.FORMS_PARTIAL, StallReason.FUNDING_PENDING),
+}
+
+
+def _stall_date_for(
+    rng: random.Random,
+    *,
+    on_spike: bool,
+    anchor: datetime,
+    spread_days: int,
+) -> datetime:
+    """A back-to-school family's ``stalled_since`` — the spike day or a band around it.
+
+    Spike families land exactly on ``anchor`` (a single-day spike). Off-spike
+    families spread uniformly across ``[-spread_days, +spread_days]`` of the
+    anchor with a deterministic minute-of-day jitter, so the surrounding calendar
+    days fill in without a second clustered peak. All draws come from ``rng``.
+    """
+    if on_spike:
+        offset_days = 0
+    else:
+        offset_days = rng.randint(-spread_days, spread_days)
+    return anchor + timedelta(days=offset_days, minutes=rng.randint(0, 1439))
+
+
+def _build_back_to_school_family(
+    rng: random.Random,
+    *,
+    stalled_since: datetime,
+) -> tuple[FamilyRecord, LeadsNew, AppForm, EnrollmentForms, CommunityProfile]:
+    """Build one ACTIVE back-to-school stall + its four joined source rows (A-21).
+
+    Active = stalled, not recovered: the stage is held to the pre-tuition funnel
+    and the funding_state below the §5.4 first-installment floor, so the derived
+    recovery_state reads ``stalled``/``working`` (never ``recovered``). The
+    family's ``stalled_since`` is the supplied spike/spread anchor — the calendar
+    grouping key. Everything else reuses the default household fakers (INV-1).
+    """
+    family_id = _uuid(rng)
+    lead_id = _uuid(rng)
+    app_form_id = _uuid(rng)
+    enrollment_form_id = _uuid(rng)
+    community_profile_id = _uuid(rng)
+
+    surname = rng.choice(_SURNAMES)
+    given = rng.choice(_GIVEN_NAMES)
+    region = rng.choice(_REGIONS)
+    # Active stalls sit in the pre-tuition funnel (an enrolled/tuition family is
+    # closing, not stalling) so the cohort reads as a recovery surface.
+    stage = rng.choice((Stage.INTEREST, Stage.APPLY, Stage.ENROLL))
+    funding_type = _weighted_choice(rng, _FUNDING_TYPE_WEIGHTS)
+    product = _weighted_choice(rng, _PRODUCT_WEIGHTS)
+    attribution_source = rng.choice(_ATTRIBUTION_SOURCES)
+    email = _synthetic_email(rng, surname)
+    # created_at precedes the stall anchor so the family existed before it stalled.
+    created = stalled_since - timedelta(days=rng.randint(7, 60), minutes=rng.randint(0, 1439))
+    utm = _synthetic_utm(rng, attribution_source)
+
+    # Stall reason mapped so the recovery-deriver stall-stage equals current_stage
+    # ⇒ the family never reads "advanced" (stays an ACTIVE stall; A-21).
+    stall_reason = rng.choice(_BTS_STALL_BY_STAGE[stage])
+    # Below the §5.4 first-installment floor ⇒ never derives RECOVERED on funding.
+    funding_state = rng.choice(
+        (FundingState.NONE, FundingState.APPLIED, FundingState.AWARDED_SELFREPORT)
+    )
+
+    family = FamilyRecord(
+        family_id=family_id,
+        display_name=f"The {surname} Family",
+        primary_contact_synthetic_email=email,
+        lead_id=lead_id,
+        app_form_id=app_form_id,
+        enrollment_form_id=enrollment_form_id,
+        community_profile_id=community_profile_id,
+        current_stage=stage,
+        stall_reason=stall_reason,
+        stalled_since=stalled_since,
+        funding_type=funding_type,
+        funding_state=funding_state,
+        attribution_source=attribution_source,
+        attribution_utm=utm,
+        crm_seam_status=_seam_status(rng),
+        work_queue_score=round(rng.uniform(0.0, 1.0), 4),
+        created_at=created,
+        updated_at=min(created + timedelta(days=rng.randint(0, 14)), stalled_since),
+    )
+
+    lead = LeadsNew(
+        lead_id=lead_id,
+        family_id=family_id,
+        synthetic_first_name=given,
+        synthetic_last_name=surname,
+        synthetic_email=email,
+        synthetic_phone=_synthetic_phone(rng),
+        source=attribution_source,
+        utm=utm,
+        product_interest=product,
+        grade_interest=rng.choice(_GRADES),
+        region=region,
+        created_at=created,
+    )
+
+    app_form = _build_app_form(rng, app_form_id, family_id, stage, created)
+    enrollment = _build_enrollment(rng, enrollment_form_id, family_id, stage, created)
+    profile = _build_profile(rng, community_profile_id, family_id, created)
+    return family, lead, app_form, enrollment, profile
+
+
+def generate_back_to_school(
+    *,
+    count: int,
+    seed: int,
+    spike_year: int,
+    spike_month: int,
+    spike_day: int,
+    spike_share: float,
+    spread_days: int,
+) -> SyntheticDataset:
+    """Generate the deterministic back-to-school volume cohort (A-21; S12 W2).
+
+    A SEPARATE cohort drawn from its own ``random.Random(seed)`` — the default
+    ``generate`` stream is untouched (byte-identical), so the determinism guard
+    stays green. Produces ``count`` ACTIVE stalls; a ``spike_share`` fraction land
+    exactly on ``spike_year-spike_month-spike_day`` (the single-day surge), the
+    rest spread across ``[-spread_days, +spread_days]`` of that anchor. Same seed ⇒
+    byte-identical output. All synthetic (INV-1); every number a param (INV-11).
+
+    Args:
+        count: number of active-stall families in the cohort.
+        seed: the cohort's own RNG seed (isolated from the default stream).
+        spike_year/spike_month/spike_day: the single-day spike anchor.
+        spike_share: fraction of ``count`` whose ``stalled_since`` is the spike day.
+        spread_days: the +/- band the off-spike families spread across.
+
+    Returns:
+        An in-memory :class:`SyntheticDataset` — the volume scenario seed.
+    """
+    if count < 0:
+        raise ValueError("count must be non-negative")
+    if not (0.0 <= spike_share <= 1.0):
+        raise ValueError("spike_share must be in [0, 1]")
+
+    anchor = datetime(spike_year, spike_month, spike_day, tzinfo=UTC)
+    spike_count = round(count * spike_share)
+
+    rng = random.Random(seed)
+    ds = SyntheticDataset()
+    for i in range(count):
+        on_spike = i < spike_count
+        stalled_since = _stall_date_for(
+            rng, on_spike=on_spike, anchor=anchor, spread_days=spread_days
+        )
+        family, lead, app_form, enrollment, profile = _build_back_to_school_family(
+            rng, stalled_since=stalled_since
+        )
+        ds.families.append(family)
+        ds.leads.append(lead)
+        ds.app_forms.append(app_form)
+        ds.enrollment_forms.append(enrollment)
+        ds.community_profiles.append(profile)
+    return ds
+
+
+# --------------------------------------------------------------------------- #
 # Marketing seed inventory (CONTENT_SPEC §11). Distinct from the family spine:
 # these are the fixed, synthetic brand-OS + content seeds that make the S4
 # content engine, the brand judge, and BOTH §9 BLOCK paths (V-2 grounding, V-3

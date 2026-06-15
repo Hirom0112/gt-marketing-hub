@@ -33,9 +33,37 @@ from app.evals.suite import EvalSuiteResult
 from app.marketing.library import ContentLibrary, InMemoryContentLibrary
 from app.observability.log_store import InMemoryObservabilityLog, ObservabilityLog
 
-# Singleton store, seeded once at process start from the fixed synthetic seed
-# (A-3). Production swaps this for a Supabase-backed FamilyRepository.
-_repository: FamilyRepository = InMemoryFamilyRepository.seeded()
+
+def _build_repository(params: Params) -> FamilyRepository:
+    """Seed the in-memory store, honoring the ``COCKPIT_SCENARIO`` toggle (A-21).
+
+    Default (no/blank/``june`` env) ⇒ the unchanged 24-family June demo cohort —
+    so the June-anchored count/recency fixtures and the 404 tests are untouched.
+    ``COCKPIT_SCENARIO=back_to_school`` ⇒ the SEPARATE deterministic volume cohort
+    (``generate_back_to_school``), sized/anchored entirely from params (INV-11),
+    so the running app can serve the back-to-school surge with no fixture churn.
+    This is the least-disruptive wiring: one composition-root env read, no change
+    to the repository seam, Settings registry, or any router.
+    """
+    import os
+
+    from app.data.synthetic import generate_back_to_school
+
+    scenario = (os.environ.get("COCKPIT_SCENARIO", "") or "").strip().lower()
+    if scenario == "back_to_school":
+        bts = params.back_to_school
+        dataset = generate_back_to_school(
+            count=bts.count,
+            seed=bts.seed,
+            spike_year=bts.spike_year,
+            spike_month=bts.spike_month,
+            spike_day=bts.spike_day,
+            spike_share=bts.spike_share,
+            spread_days=bts.spread_days,
+        )
+        return InMemoryFamilyRepository(dataset)
+    return InMemoryFamilyRepository.seeded()
+
 
 # Singleton notes store — the FR-2.3 timeline (A-3 in-memory, append-only).
 # Production swaps a Supabase-backed NotesRepository behind the same interface.
@@ -61,8 +89,13 @@ def _load_params_with_fallback() -> Params:
         return load_params(_EXAMPLE_PARAMS)
 
 
-# Singleton params, resolved once at import (like _repository).
+# Singleton params, resolved once at import (the cohort toggle reads from here).
 _params: Params = _load_params_with_fallback()
+
+# Singleton store, seeded once at process start (A-3). Default = the June demo
+# cohort; ``COCKPIT_SCENARIO=back_to_school`` swaps the volume cohort (A-21).
+# Production swaps this for a Supabase-backed FamilyRepository.
+_repository: FamilyRepository = _build_repository(_params)
 
 # Singleton env snapshot, read once at import (TECH_STACK §5; INV-11). Tests that
 # need a different env override `get_settings_dep`; named so it never clashes with

@@ -34,7 +34,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 from typing import Annotated
-from uuid import UUID, uuid4
+from uuid import NAMESPACE_URL, UUID, uuid4, uuid5
 
 from fastapi import APIRouter, Depends, HTTPException
 
@@ -56,6 +56,11 @@ from app.api.deps import (
 )
 from app.api.schemas import (
     AuditResponse,
+    BulkNudgeBlocked,
+    BulkNudgeCounts,
+    BulkNudgeRequest,
+    BulkNudgeResponse,
+    BulkNudgeSent,
     CloseTipsRequest,
     CloseTipsResponse,
     DecisionRequest,
@@ -193,6 +198,150 @@ def draft_enrollment(
         # UI offers the deterministic template.
         proposal=outcome.proposal if surfaced else None,
         validation=validation,
+    )
+
+
+def _batch_id(prefix: str, family_ids: list[UUID], *, salt: str = "") -> str:
+    """A deterministic ``batch_id`` tagging one bulk audit group (NFR-6; A-20).
+
+    Derived (uuid5) from the prefix + the SORTED family ids + an optional salt so
+    the same selection yields the same id — a stable handle the UI can correlate
+    the partition against, without a second write path. Sorted so selection order
+    does not change the id.
+    """
+    key = f"{prefix}:{salt}:" + ",".join(sorted(str(fid) for fid in family_ids))
+    return f"{prefix}-{uuid5(NAMESPACE_URL, key).hex}"
+
+
+@router.post("/ai/enrollment/bulk-nudge", response_model=BulkNudgeResponse)
+def bulk_nudge(
+    request: BulkNudgeRequest,
+    repository: RepositoryDep,
+    params: ParamsDep,
+    settings: SettingsDep,
+    log: LogDep,
+    client: LLMClientDep,
+    brand_judge: BrandJudgeDep,
+    eval_state: EvalStateDep,
+    crm_adapter: CRMAdapterDep,
+    notes: NotesRepositoryDep,
+) -> BulkNudgeResponse:
+    """Bulk-nudge a selection — a THIN loop over the per-family gated path (A-20).
+
+    NOT a new write path: each family runs the SAME draft + eval gate as
+    :func:`draft_enrollment` (INV-3 fail-closed, per-family non-negotiable). The
+    operator's single bulk click is the batch human-approval (INV-2). For each
+    family within the INV-8 per-run cap:
+
+    * the proposal + its eval are LOGGED regardless of pass/fail (INV-4 audit side);
+    * eval-PASS ⇒ a send is recorded via the SIMULATED CRM adapter (INV-9), an
+      approve DECISION is logged (the audit head), and the family is ``sent``;
+    * eval-FAIL (or suite-red kill) ⇒ the family is ``blocked`` with its
+      ``failed_rules`` — NO send, NO approve-decision (fail-closed, INV-3/4).
+
+    Families beyond ``params.bulk.nudge_per_run_cap`` are deferred to ``capped``
+    without drafting — the metered edge is never overspent (INV-8). One
+    ``batch_id`` tags the whole group (NFR-6). No second write path: this reuses
+    the exact draft/gate/send/log composition of the single route.
+    """
+    batch_id = _batch_id("bulk-nudge", request.family_ids, salt=request.action.value)
+    cap = params.bulk.nudge_per_run_cap
+
+    eval_suite_red = not action_enabled(eval_state, DRAFT_GATING_EVAL)
+
+    sent: list[BulkNudgeSent] = []
+    blocked: list[BulkNudgeBlocked] = []
+    capped: list[UUID] = []
+
+    for index, family_id in enumerate(request.family_ids):
+        # INV-8 per-run cap: beyond the cap, defer (never overspend the edge).
+        if index >= cap:
+            capped.append(family_id)
+            continue
+
+        joined = repository.get_family(family_id)
+        if joined is None:
+            blocked.append(BulkNudgeBlocked(family_id=family_id, failed_rules=["family_not_found"]))
+            continue
+
+        # The SAME per-family draft pipeline as the single route (INV-3).
+        budget = RunBudget.from_config(settings=settings, params=params)
+        outcome = draft_enrollment_message(
+            joined,
+            request.action,
+            client=client,
+            budget=budget,
+            settings=settings,
+            params=params,
+            brand_judge=brand_judge,
+        )
+
+        # LOG the proposal + its eval before any human sees it (ARCH §10; INV-4).
+        proposal_id = uuid4()
+        payload: dict[str, object] = (
+            outcome.proposal.model_dump(mode="json") if outcome.proposal is not None else {}
+        )
+        log.log_proposal(
+            proposal_id=proposal_id,
+            flow=DRAFT_FLOW,
+            schema_version=DRAFT_SCHEMA_VERSION,
+            payload=payload,
+            family_id=family_id,
+        )
+        validation = outcome.validation
+        log.log_eval(
+            proposal_id=proposal_id,
+            eval_name="message_safety_grounding",
+            passed=validation.passed if validation is not None else False,
+            score=validation.brand_score if validation is not None else None,
+        )
+
+        failed_rules = list(validation.failed_rules) if validation is not None else ["v1_schema"]
+        surfaced = outcome.surfaced and not eval_suite_red
+        if eval_suite_red and EVAL_SUITE_RED_RULE not in failed_rules:
+            failed_rules.append(EVAL_SUITE_RED_RULE)
+
+        if not surfaced:
+            # Fail-closed: the eval blocked it. Logged above (audit), NEVER sent,
+            # and NO approve-decision is recorded (INV-3/4).
+            blocked.append(BulkNudgeBlocked(family_id=family_id, failed_rules=failed_rules))
+            continue
+
+        # PASS ⇒ the bulk click is the batch approval: record the approve decision
+        # (the sole decision shape) + a SIMULATED send via the adapter (INV-9), the
+        # SAME composition as the single decision route.
+        log.log_decision(
+            proposal_id=proposal_id,
+            human=DEFAULT_HUMAN,
+            action=DecisionAction.APPROVE,
+        )
+        channel = request.action.value
+        body_excerpt = str(payload.get("body", ""))
+        send = crm_adapter.send_message(
+            {
+                "channel": channel,
+                "proposal_id": str(proposal_id),
+                "family_id": str(family_id),
+                "body": summarize_followup(channel, body_excerpt),
+            }
+        )
+        notes.add_note(
+            Note(
+                family_id=family_id,
+                author=NoteAuthor.SYSTEM,
+                kind=NoteKind.STATE_CHANGE,
+                body=summarize_followup(channel, body_excerpt),
+                created_at=datetime.now(UTC),
+            )
+        )
+        sent.append(BulkNudgeSent(family_id=family_id, note_id=send.recorded_id))
+
+    return BulkNudgeResponse(
+        batch_id=batch_id,
+        counts=BulkNudgeCounts(sent=len(sent), blocked=len(blocked), capped=len(capped)),
+        sent=sent,
+        blocked=blocked,
+        capped=capped,
     )
 
 
