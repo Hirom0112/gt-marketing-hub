@@ -20,7 +20,6 @@ from datetime import UTC, datetime
 from uuid import uuid4
 
 from app.core.family_record import assemble_deal_view
-
 from app.core.seam import MirrorState
 from app.data.models import (
     AppForm,

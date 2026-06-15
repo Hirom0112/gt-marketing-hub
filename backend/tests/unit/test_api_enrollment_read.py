@@ -34,8 +34,6 @@ from app.core.contact_log import last_contact_at
 from app.core.contact_status import ContactStatus, derive_contact_status
 from app.core.family_record import assemble_deal_view
 from app.core.params import Params, load_params
-from app.data.models import FundingState
-from app.observability.log_store import DecisionAction
 from app.core.work_queue import (
     WorkQueueFamily,
     rank_families,
@@ -44,6 +42,7 @@ from app.core.work_queue import (
     score_family,
     value,
 )
+from app.data.models import FundingState
 from app.data.repository import (
     DEFAULT_FAMILY_COUNT,
     DEFAULT_SEED,
@@ -51,6 +50,7 @@ from app.data.repository import (
     JoinedFamily,
 )
 from app.main import app
+from app.observability.log_store import DecisionAction
 
 client = TestClient(app)
 
