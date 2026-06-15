@@ -52,9 +52,7 @@ def test_sample_returns_at_least_min_observations_per_prompt() -> None:
     assert isinstance(adapter, GeoSamplingAdapter)
 
     min_samples = 5
-    observations = adapter.sample(
-        _PROMPTS, _ENGINE, min_samples_per_prompt=min_samples, seed=7
-    )
+    observations = adapter.sample(_PROMPTS, _ENGINE, min_samples_per_prompt=min_samples, seed=7)
 
     assert len(observations) >= min_samples * len(_PROMPTS)
     for obs in observations:
@@ -74,9 +72,9 @@ def test_sample_returns_at_least_min_observations_per_prompt() -> None:
 
 def test_observation_is_frozen() -> None:
     """A ``GeoObservation`` is an immutable record of one sampling run."""
-    obs = SimulatedGeoSamplingAdapter().sample(
-        _PROMPTS, _ENGINE, min_samples_per_prompt=3, seed=1
-    )[0]
+    obs = SimulatedGeoSamplingAdapter().sample(_PROMPTS, _ENGINE, min_samples_per_prompt=3, seed=1)[
+        0
+    ]
     with pytest.raises(ValidationError):
         obs.brand_cited = True  # type: ignore[misc]
 
@@ -101,9 +99,7 @@ def test_deterministic_under_fixed_seed() -> None:
 def test_stochastic_across_runs() -> None:
     """Observations VARY across ``run_index`` — repeated sampling, not a snapshot."""
     adapter = SimulatedGeoSamplingAdapter()
-    observations = adapter.sample(
-        _PROMPTS, _ENGINE, min_samples_per_prompt=12, seed=99
-    )
+    observations = adapter.sample(_PROMPTS, _ENGINE, min_samples_per_prompt=12, seed=99)
     prompt = _PROMPTS[0]
     runs = [o for o in observations if o.prompt == prompt]
     distinct = {o.cited_domains for o in runs}
@@ -114,9 +110,7 @@ def test_stochastic_across_runs() -> None:
 def test_gt_brand_near_zero_baseline() -> None:
     """GT starts near the 0% baseline — rarely cited under the seed default (Q6)."""
     adapter = SimulatedGeoSamplingAdapter()
-    observations = adapter.sample(
-        _PROMPTS, _ENGINE, min_samples_per_prompt=40, seed=5
-    )
+    observations = adapter.sample(_PROMPTS, _ENGINE, min_samples_per_prompt=40, seed=5)
     brand_hits = sum(1 for o in observations if o.brand_cited)
     # Coverage-vs-0%-baseline is demonstrable: GT is cited in a small minority.
     assert brand_hits < len(observations) // 2
