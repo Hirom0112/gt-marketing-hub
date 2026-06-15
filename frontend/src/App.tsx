@@ -1,44 +1,95 @@
-import ActionPanel from './ActionPanel';
+import { useState } from 'react';
+import { BarChart3, LayoutGrid, Megaphone } from 'lucide-react';
+import './theme.css';
 import { apiBaseUrl } from './config';
-import EvalGate from './EvalGate';
-import FundingTracker from './FundingTracker';
-import LandingDashboard from './LandingDashboard';
-import ContentWorkspace from './marketing/ContentWorkspace';
-import GeoBoard from './marketing/GeoBoard';
-import MarketingBreadth from './marketing/MarketingBreadth';
-import Scoreboard from './Scoreboard';
-import SeamView from './SeamView';
-import WorkQueue from './WorkQueue';
+import { Chip, WorkspaceToggle, type WorkspaceOption } from './ui';
+import EnrollmentWorkspace from './workspaces/EnrollmentWorkspace';
+import MarketingWorkspace from './workspaces/MarketingWorkspace';
+import LeadershipWorkspace from './workspaces/LeadershipWorkspace';
 
-// App shell + the read-only S0 landing dashboard (FR-2.1) and the S1 enrollment
-// work queue (FR-2.5). The shell resolves its API base URL from the build-time
-// env (TECH_STACK §5.1), mounts the landing dashboard (GET /pipeline), and the
-// enrollment workspace's work queue (GET /work-queue). The pipeline board and
-// deal view are routed per-family surfaces wired in a later UI slice.
+// S8 Wave 1 app shell — the new three-workspace IA (Enrollment / Marketing /
+// Leadership) selected from a top-bar toggle. Exactly one workspace mounts at a
+// time. This wave delivers the dep + tokens + primitives + shell; the inner
+// real components are mounted UNCHANGED via thin workspace containers (Wave 2
+// re-skins them). The API base URL (TECH_STACK §5.1) is surfaced as a status
+// chip + a testid the acceptance test reads.
+type Workspace = 'enrollment' | 'marketing' | 'leadership';
+
+const WORKSPACES: ReadonlyArray<WorkspaceOption<Workspace>> = [
+  { key: 'enrollment', label: 'Enrollment', icon: LayoutGrid },
+  { key: 'marketing', label: 'Marketing', icon: Megaphone },
+  { key: 'leadership', label: 'Leadership', icon: BarChart3 },
+];
+
 export default function App(): JSX.Element {
+  const [workspace, setWorkspace] = useState<Workspace>('enrollment');
+
   return (
-    <main className="app-shell">
-      <header>
-        <h1>GT Growth Cockpit</h1>
-        <p>Enrollment &amp; growth operations cockpit</p>
+    <div
+      className="app-shell"
+      style={{
+        minHeight: '100vh',
+        background: 'var(--paper)',
+        color: 'var(--ink)',
+      }}
+    >
+      <header
+        style={{
+          position: 'sticky',
+          top: 0,
+          zIndex: 10,
+          display: 'flex',
+          alignItems: 'center',
+          gap: 'var(--s-4)',
+          flexWrap: 'wrap',
+          padding: '12px 20px',
+          background: 'var(--surface)',
+          borderBottom: '1px solid var(--line)',
+        }}
+      >
+        <h1
+          style={{
+            fontSize: 'var(--fs-lg)',
+            fontWeight: 700,
+            letterSpacing: '-0.02em',
+            margin: 0,
+          }}
+        >
+          GT Growth Cockpit
+        </h1>
+
+        <WorkspaceToggle
+          options={WORKSPACES}
+          active={workspace}
+          onSelect={setWorkspace}
+          ariaLabel="Workspace"
+        />
+
+        <div
+          style={{
+            marginLeft: 'auto',
+            display: 'flex',
+            alignItems: 'center',
+            gap: 'var(--s-2)',
+          }}
+        >
+          <Chip tone="flow" title="Connected API base URL (TECH_STACK §5.1)">
+            <span data-testid="api-base-url">API · {apiBaseUrl}</span>
+          </Chip>
+        </div>
       </header>
-      <p data-testid="api-base-url">API base URL: {apiBaseUrl}</p>
-      <LandingDashboard />
-      <section aria-label="Enrollment workspace" className="enrollment-workspace">
-        <WorkQueue />
-        <ActionPanel familyId="fam-a" />
-        <FundingTracker familyId="fam-a" />
-        <SeamView />
-      </section>
-      <section aria-label="Marketing workspace" className="marketing-workspace">
-        <ContentWorkspace />
-        <GeoBoard />
-        <MarketingBreadth />
-      </section>
-      <section aria-label="Leadership" className="leadership-workspace">
-        <EvalGate />
-        <Scoreboard />
-      </section>
-    </main>
+
+      <main
+        style={{
+          maxWidth: 1200,
+          margin: '0 auto',
+          padding: '20px 20px 64px',
+        }}
+      >
+        {workspace === 'enrollment' && <EnrollmentWorkspace />}
+        {workspace === 'marketing' && <MarketingWorkspace />}
+        {workspace === 'leadership' && <LeadershipWorkspace />}
+      </main>
+    </div>
   );
 }
