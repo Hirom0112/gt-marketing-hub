@@ -25,7 +25,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 from pathlib import Path
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 from fastapi.testclient import TestClient
 
@@ -94,8 +94,11 @@ def test_read_endpoints_contract() -> None:
     """The three S1-round-2 read endpoints meet their §6 contract on fixed-seed data."""
     params = _params()
 
-    # --- GET /work-queue: ranked by recoverable_now desc (S12 W1). ---
-    wq_resp = client.get("/work-queue")
+    # --- GET /work-queue?scope=all: ranked by recoverable_now desc (S12 W1). ---
+    # The full-cohort assertions use the back-compat `scope=all` slice (the default
+    # is now `active`, the small live recovery queue); DEFAULT_FAMILY_COUNT (24)
+    # sits well under the scope's `limit` cap, so `all` returns the whole cohort.
+    wq_resp = client.get("/work-queue", params={"scope": "all"})
     assert wq_resp.status_code == 200
     items = wq_resp.json()
     assert isinstance(items, list)
@@ -105,12 +108,13 @@ def test_read_endpoints_contract() -> None:
     recoverables = [item["recoverable_now"] for item in items]
     assert recoverables == sorted(recoverables, reverse=True)
 
-    # Each item carries identity + score + recoverability + value (deal card).
+    # Each item carries identity + score + recoverability + value + stall_date.
     for item in items:
         assert "family_id" in item
         assert "score" in item
         assert "recoverability" in item
         assert "value" in item
+        assert "stall_date" in item
         assert "recoverable_now" in item
         assert "freshness" in item
         assert "recovery_state" in item
@@ -235,6 +239,141 @@ def test_family_detail_surfaces_recency_and_dropoff() -> None:
         # An approved outbound ⇒ followed_up (green), not fresh/overdue.
         assert dv["contact_status"] == ContactStatus.FOLLOWED_UP.value
     finally:
+        deps.reset_observability_log()
+
+
+def test_work_queue_scope_active_excludes_history() -> None:
+    """`?scope=active` (the default) returns ONLY {stalled, working} — no history.
+
+    The active scope is the LIVE recovery queue (FR-2.5): recovered/dismissed
+    families do NOT belong in it. Over the fixed-seed cohort the default response
+    and the explicit `?scope=active` response are identical, and every row's
+    derived recovery_state is active ({stalled, working}); not one recovered or
+    dismissed family leaks through. Each row also carries a `stall_date` equal to
+    the api-layer `_stall_date` derivation (the calendar's grouping key).
+    """
+    from app.api.families import _stall_date
+    from app.core.recovery_state import RecoveryState, is_active
+
+    deps.reset_observability_log()
+    try:
+        # Default == explicit active (the default scope IS active).
+        default_resp = client.get("/work-queue")
+        active_resp = client.get("/work-queue", params={"scope": "active"})
+        assert default_resp.status_code == 200
+        assert active_resp.status_code == 200
+        default_items = default_resp.json()
+        active_items = active_resp.json()
+        assert [it["family_id"] for it in default_items] == [it["family_id"] for it in active_items]
+
+        # Every active row is {stalled, working}; NO recovered/dismissed leak in.
+        active_states = {RecoveryState.STALLED.value, RecoveryState.WORKING.value}
+        for it in active_items:
+            assert it["recovery_state"] in active_states
+            assert it["recovery_state"] not in {
+                RecoveryState.RECOVERED.value,
+                RecoveryState.DISMISSED.value,
+            }
+
+        # stall_date is present and matches the api-layer `_stall_date` derivation.
+        params = _params()
+        repo = _seeded()
+        log = deps.get_observability_log()
+        now = datetime.now(UTC)
+        for it in active_items:
+            joined = repo.get_family(UUID(it["family_id"]))
+            assert joined is not None
+            expected = _stall_date(joined, log=log, now=now, params=params)
+            assert it["stall_date"][:10] == expected.isoformat()[:10]
+
+        # The active scope is a STRICT subset of the full cohort (the recovered/
+        # dismissed long tail is excluded — the perf + correctness contract).
+        all_items = client.get("/work-queue", params={"scope": "all"}).json()
+        assert len(active_items) < len(all_items)
+        # And the active scope == the active-derived families that were EVER
+        # stalled (the perf pre-filter: `stalled_since is not None` candidates,
+        # then kept iff {stalled, working}). This mirrors the route's contract.
+        ever_stalled_ids = {
+            str(f.family_id) for f in repo.list_families() if f.stalled_since is not None
+        }
+        full_active = {
+            it["family_id"]
+            for it in all_items
+            if is_active(RecoveryState(it["recovery_state"]))
+            and it["family_id"] in ever_stalled_ids
+        }
+        assert {it["family_id"] for it in active_items} == full_active
+    finally:
+        deps.reset_observability_log()
+
+
+def test_work_queue_scope_history_only_recovered_dismissed_and_limit() -> None:
+    """`?scope=history` returns only {recovered, dismissed} and respects `limit`.
+
+    History is the closed-out tail; it must never include an active family, and
+    its `limit` cap bounds the response so the long tail is never streamed.
+    """
+    from app.core.recovery_state import RecoveryState
+
+    deps.reset_observability_log()
+    try:
+        hist = client.get("/work-queue", params={"scope": "history"})
+        assert hist.status_code == 200
+        hist_items = hist.json()
+        history_states = {RecoveryState.RECOVERED.value, RecoveryState.DISMISSED.value}
+        for it in hist_items:
+            assert it["recovery_state"] in history_states
+
+        # `limit` caps the row count (never stream the long tail).
+        capped = client.get("/work-queue", params={"scope": "history", "limit": 1})
+        assert capped.status_code == 200
+        assert len(capped.json()) <= 1
+
+        # limit out of range is rejected (1..500).
+        assert client.get("/work-queue", params={"scope": "history", "limit": 0}).status_code == 422
+        assert (
+            client.get("/work-queue", params={"scope": "history", "limit": 9999}).status_code == 422
+        )
+
+        # active and history are DISJOINT (a family is active xor closed-out), and
+        # both are subsets of the full cohort. They need not exhaust it: the active
+        # scope's perf pre-filter (`stalled_since is not None`) intentionally drops
+        # never-stalled families that would otherwise derive `stalled`.
+        active_ids = {it["family_id"] for it in client.get("/work-queue").json()}
+        hist_ids = {it["family_id"] for it in hist_items}
+        all_ids = {
+            it["family_id"] for it in client.get("/work-queue", params={"scope": "all"}).json()
+        }
+        assert active_ids.isdisjoint(hist_ids)
+        assert active_ids <= all_ids
+        assert hist_ids <= all_ids
+    finally:
+        deps.reset_observability_log()
+
+
+def test_work_queue_active_scope_is_small_on_recovered_heavy_cohort() -> None:
+    """Perf shape: on a large cohort the active scope is ≪ the full cohort.
+
+    The active scope pre-filters to the cheap `stalled_since is not None`
+    candidates BEFORE the per-family derive, so on a recovered-heavy cohort (the
+    realistic 5,146-family scenario where ~5,006 are recovered) it returns only a
+    small slice — the fix that takes the default `/work-queue` from 1.6 MB to
+    tens of KB. Here a 400-family cohort stands in for that shape.
+    """
+    big = InMemoryFamilyRepository.seeded(n=400, seed=7)
+    deps.reset_observability_log()
+    app.dependency_overrides[deps.get_repository] = lambda: big
+    try:
+        active = client.get("/work-queue").json()
+        full = client.get("/work-queue", params={"scope": "all", "limit": 500}).json()
+        # The active queue is a small fraction of the full cohort.
+        assert len(active) < len(full)
+        # It can never exceed the ever-stalled candidate set (the perf pre-filter).
+        ever_stalled = sum(1 for f in big.list_families() if f.stalled_since is not None)
+        assert len(active) <= ever_stalled
+        assert ever_stalled < len(big.list_families())
+    finally:
+        app.dependency_overrides.clear()
         deps.reset_observability_log()
 
 

@@ -1,7 +1,8 @@
 // DrillRow (S12 W3) — one dense tabular row in the ranked drill / show-all list.
-// Six columns on a fixed grid: a teal-when-on checkbox, a zero-padded rank, the
-// family name + stuck-step subline, the mono recovery value (right-aligned), the
-// recency Chip (REUSED primitive, tone from recencyTone), and the mono score.
+// Seven columns on a fixed grid: a teal-when-on checkbox, a zero-padded rank, the
+// family name + stuck-step subline, a mono stall-date column (always present so
+// the date is never lost in a flat sort), the mono recovery value (right-aligned),
+// the recency Chip (REUSED primitive, tone from recencyTone), and the mono score.
 // Selected rows wash teal (--flow-wash); hover lifts to --surface-2. The grid
 // template is shared with the header via DRILL_GRID so the two stay aligned.
 
@@ -9,8 +10,8 @@ import type { CSSProperties } from 'react';
 import { Chip } from '../ui';
 import { isContactStatus, recencyLabel, recencyTone } from './recency';
 
-// The shared 6-col grid template — header + every row read from this one place.
-export const DRILL_GRID = '26px 22px 1fr 96px 64px 52px';
+// The shared 7-col grid template — header + every row read from this one place.
+export const DRILL_GRID = '26px 22px 1fr 78px 96px 64px 52px';
 
 interface DrillRowProps {
   // Stable id (used by selection callbacks + testids).
@@ -21,6 +22,9 @@ interface DrillRowProps {
   name: string;
   // The stuck step, human-readable (e.g. "enrollment agreement").
   stuckStep: string;
+  // Pre-formatted mono stall-date (e.g. "Jun 13") — caller owns date formatting.
+  // Always rendered so a flat (non-date) sort still shows each family's date.
+  stallDate: string;
   // Pre-formatted mono value (e.g. "$10,474") — caller owns money formatting.
   value: string;
   // Pre-formatted mono score (e.g. "0.91").
@@ -56,6 +60,7 @@ export function DrillRowHead(): JSX.Element {
       <span style={cell}>sel</span>
       <span style={cell}>#</span>
       <span style={cell}>family · stuck on</span>
+      <span style={cell}>stalled</span>
       <span style={{ ...cell, textAlign: 'right' }}>value</span>
       <span style={{ ...cell, textAlign: 'center' }}>recency</span>
       <span style={{ ...cell, textAlign: 'right' }}>score</span>
@@ -68,6 +73,7 @@ export default function DrillRow({
   rank,
   name,
   stuckStep,
+  stallDate,
   value,
   score,
   contactStatus,
@@ -169,6 +175,13 @@ export default function DrillRow({
         >
           {stuckStep}
         </small>
+      </span>
+      <span
+        className="mono"
+        data-testid={`drill-row-date-${familyId}`}
+        style={{ fontSize: 11, color: 'var(--muted)', whiteSpace: 'nowrap' }}
+      >
+        {stallDate}
       </span>
       <span
         className="mono"

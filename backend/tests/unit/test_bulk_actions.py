@@ -291,8 +291,9 @@ def test_bulk_dismiss_derives_dismissed_state() -> None:
     assert data["counts"]["dismissed"] == 2
     assert set(data["dismissed"]) == {str(i) for i in ids}
 
-    # The dismissed families derive recovery_state=dismissed on the work queue.
-    queue = client.get("/work-queue").json()
+    # The dismissed families derive recovery_state=dismissed — now in the HISTORY
+    # scope (they have left the active recovery queue, which the default returns).
+    queue = client.get("/work-queue", params={"scope": "history"}).json()
     by_id = {row["family_id"]: row for row in queue}
     for fid in ids:
         assert by_id[str(fid)]["recovery_state"] == RecoveryState.DISMISSED.value

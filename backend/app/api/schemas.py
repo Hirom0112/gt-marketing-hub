@@ -85,6 +85,12 @@ class WorkQueueItem(BaseModel):
     score: float
     recoverability: float
     value: float
+    # The family's stall-anchor instant (the same derivation the calendar groups
+    # on — :func:`app.api.families._stall_date`), composed at the API layer (it
+    # needs ``now`` + the audit log, INV-2). Lets the Show-all list group rows
+    # under day headers and always show a stall-date column. Never None — the
+    # ``_stall_date`` precedence chain always resolves (tier 4 = ``created_at``).
+    stall_date: datetime
     # S12 W1 — the recoverable-now ranking key (``value × variance × score ×
     # freshness``) the queue is now ordered by, plus its ``freshness`` factor so
     # the UI can show the time-decay component. Both from the pure work-queue

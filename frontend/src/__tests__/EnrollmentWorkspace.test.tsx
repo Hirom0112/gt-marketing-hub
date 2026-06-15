@@ -35,6 +35,7 @@ const WORK_QUEUE_PAYLOAD = [
     score: 0.91,
     recoverability: 0.95,
     value: 10474,
+    stall_date: '2026-06-10T09:00:00Z',
     recoverable_now: 9000,
     freshness: 0.9,
     contact_status: 'overdue',
@@ -48,6 +49,7 @@ const WORK_QUEUE_PAYLOAD = [
     score: 0.74,
     recoverability: 0.6,
     value: 30000,
+    stall_date: '2026-06-18T09:00:00Z',
     recoverable_now: 20000,
     freshness: 0.95,
     contact_status: 'fresh',
@@ -157,8 +159,10 @@ function routedFetchMock(): ReturnType<typeof vi.fn> {
       payload = familyResponse();
     } else if (/\/families$/.test(u)) {
       payload = FAMILIES_PAYLOAD;
-    } else if (/\/work-queue$/.test(u)) {
-      payload = WORK_QUEUE_PAYLOAD;
+    } else if (/\/work-queue(\?|$)/.test(u)) {
+      // Active scope (the default + the show-all active pull) returns the two
+      // stalled rows; history returns an empty closed-out tail.
+      payload = /scope=history/.test(u) ? [] : WORK_QUEUE_PAYLOAD;
     } else if (/\/pipeline$/.test(u)) {
       payload = PIPELINE_PAYLOAD;
     } else if (/\/seam$/.test(u)) {

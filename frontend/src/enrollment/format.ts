@@ -12,6 +12,42 @@ export function fmtUSD(value: number): string {
   });
 }
 
+// Short UTC day label: "2026-06-13T..." → "Jun 13" (drill stall-date column).
+// Empty / unparseable input → "—" so a missing stall date renders cleanly.
+export function fmtDay(iso: string): string {
+  if (!iso) return '—';
+  const ms = Date.parse(iso);
+  if (Number.isNaN(ms)) return '—';
+  return new Date(ms).toLocaleDateString('en-US', {
+    month: 'short',
+    day: 'numeric',
+    timeZone: 'UTC',
+  });
+}
+
+// Full UTC day-group header label: "2026-06-13T..." → "Thu Jun 13" (show-all
+// sticky day headers). Empty / unparseable input → "Undated".
+export function fmtDayHeader(iso: string): string {
+  if (!iso) return 'Undated';
+  const ms = Date.parse(iso);
+  if (Number.isNaN(ms)) return 'Undated';
+  return new Date(ms).toLocaleDateString('en-US', {
+    weekday: 'short',
+    month: 'short',
+    day: 'numeric',
+    timeZone: 'UTC',
+  });
+}
+
+// The UTC calendar-day key ("2026-06-13") used to bucket rows into day groups.
+// Empty / unparseable input → "" (the "undated" bucket).
+export function dayKey(iso: string): string {
+  if (!iso) return '';
+  const ms = Date.parse(iso);
+  if (Number.isNaN(ms)) return '';
+  return new Date(ms).toISOString().slice(0, 10);
+}
+
 // Compact: 10474 → "$10k", 2618.5 → "$2.6k", 900 → "$900" (chips, heat at-risk).
 export function shortDollars(value: number): string {
   if (!Number.isFinite(value) || value <= 0) return '$0';

@@ -8,7 +8,7 @@ store is swappable to Supabase with zero changes here (NFR-8).
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
-from typing import Annotated
+from typing import Annotated, Literal
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -318,26 +318,86 @@ def get_family(
     )
 
 
+# The work-queue scope (the Show-all surface's first axis). ``active`` is the
+# DEFAULT — the live recovery queue (recovery_state ∈ {stalled, working}); the
+# 5,006-strong recovered/dismissed cohort does NOT belong in it (FR-2.5). The
+# other scopes are bounded by ``limit`` so the route never streams the long tail.
+WorkQueueScope = Literal["active", "history", "all"]
+
+# Bounds for the history/all ``limit`` cap — never stream the recovered long tail.
+_DEFAULT_QUEUE_LIMIT = 200
+_MAX_QUEUE_LIMIT = 500
+
+# recovery_states that constitute the ACTIVE recovery queue and the HISTORY tail.
+_ACTIVE_STATES = (RecoveryState.STALLED, RecoveryState.WORKING)
+_HISTORY_STATES = (RecoveryState.RECOVERED, RecoveryState.DISMISSED)
+
+
 @router.get("/work-queue", response_model=list[WorkQueueItem])
 def get_work_queue(
-    repository: RepositoryDep, params: ParamsDep, log: LogDep
+    repository: RepositoryDep,
+    params: ParamsDep,
+    log: LogDep,
+    scope: Annotated[
+        WorkQueueScope,
+        Query(
+            description=(
+                "Which slice of the recovery queue to return. **active** (default) — "
+                "the live recovery queue, recovery_state ∈ {stalled, working}; "
+                "pre-filtered to the cheap `stalled_since is not None` candidates "
+                "BEFORE the per-family derive so the default response stays small/fast. "
+                "**history** — only {recovered, dismissed}, `limit`-capped (never the "
+                "5,006-strong tail). **all** — the back-compat full cohort, `limit`-capped."
+            ),
+        ),
+    ] = "active",
+    limit: Annotated[
+        int,
+        Query(
+            ge=1,
+            le=_MAX_QUEUE_LIMIT,
+            description=(
+                "Row cap for the history/all scopes (default 200, max 500). Ignored "
+                "for the active scope (already small after the candidate pre-filter)."
+            ),
+        ),
+    ] = _DEFAULT_QUEUE_LIMIT,
 ) -> list[WorkQueueItem]:
-    """Ranked work queue, highest recoverable_now first (FR-2.5; S12 W1; §6).
+    """Ranked work queue, highest recoverable_now first, scoped (FR-2.5; S12 W1; §6).
 
-    Reads the cohort joined (for the aggregate responsiveness signal — A-5),
-    projects each family to the scorer's pure input, and orders by the S12
-    ``recoverable_now`` key (``value × variance × score × freshness``) descending,
-    ties broken by ascending ``family_id`` so the order is total and stable. Each
-    row carries that key plus its ``freshness`` factor and the existing ``score`` /
-    ``recoverability`` / ``value`` components so the UI can show why a family ranks
-    where it does, the api-composed recency pair (``contact_status`` +
-    ``last_contact_at``, S9 W3), and the derived ``recovery_state`` (A-19). The
-    recency + recovery facts are composed HERE against a single ``now`` read once
-    per request — never in the pure scorer (INV-2). No AI (INV-2).
+    Three scopes off the derived ``recovery_state`` (A-19):
+
+    - **active** (default): the live recovery queue — ``{stalled, working}``. To
+      keep this fast on a recovered-heavy cohort (5,146 families, ~5,006 of them
+      recovered) it PRE-FILTERS to the cheap ``family.stalled_since is not None``
+      candidates BEFORE the expensive per-family derive/score: a family that was
+      never stalled cannot be active recovery work. Only the ~140 candidates are
+      derived, then kept iff ``{stalled, working}``.
+    - **history**: ``{recovered, dismissed}`` only, ordered by ``recoverable_now``
+      desc and capped to ``limit`` — never streams the long tail.
+    - **all**: the back-compat full cohort, also ``limit``-capped.
+
+    Within every scope rows order by the S12 ``recoverable_now`` key descending,
+    ties broken by ascending ``family_id`` (total, stable). Each row carries that
+    key plus ``freshness`` / ``score`` / ``recoverability`` / ``value``, the
+    derived ``stall_date`` (the calendar's grouping key — :func:`_stall_date`),
+    the api-composed recency pair (``contact_status`` + ``last_contact_at``,
+    S9 W3), and the derived ``recovery_state`` (A-19). Recency, stall_date, and
+    recovery facts are composed HERE against a single ``now`` read once per
+    request — never in the pure scorer (INV-2). No AI (INV-2).
     """
     now = datetime.now(UTC)
+
+    # The candidate cohort. For the ACTIVE default, pre-filter to families that
+    # were ever stalled (the only ones that can be {stalled, working}) BEFORE the
+    # per-family derive — so the default response is computed over ~140 rows, not
+    # 5,146. history/all keep the full cohort (then cap by `limit` after ranking).
+    candidates = repository.list_joined()
+    if scope == "active":
+        candidates = [j for j in candidates if j.family.stalled_since is not None]
+
     joined_by_id: dict[UUID, JoinedFamily] = {
-        joined.family.family_id: joined for joined in repository.list_joined()
+        joined.family.family_id: joined for joined in candidates
     }
     queue_families = [_work_queue_family(joined, params) for joined in joined_by_id.values()]
     # Order by recoverable_now desc; ascending family_id breaks ties stably (S12).
@@ -345,9 +405,16 @@ def get_work_queue(
         queue_families,
         key=lambda f: (-recoverable_now(f, params, now=now), f.family_id),
     )
+
     rows: list[WorkQueueItem] = []
     for family in ranked:
         joined = joined_by_id[family.family_id]
+        state = _recovery_state_for(joined, log=log, now=now, params=params)
+        # Scope gate: drop rows whose derived state is outside the requested slice.
+        if scope == "active" and state not in _ACTIVE_STATES:
+            continue
+        if scope == "history" and state not in _HISTORY_STATES:
+            continue
         contact_status, contacted_at = _recency_for(joined, log=log, now=now, params=params)
         rows.append(
             WorkQueueItem(
@@ -357,13 +424,17 @@ def get_work_queue(
                 score=score_family(family, params, now=now),
                 recoverability=recoverability(family, params, now=now),
                 value=value(family, params),
+                stall_date=_stall_date(joined, log=log, now=now, params=params),
                 recoverable_now=recoverable_now(family, params, now=now),
                 freshness=freshness(family, params, now=now),
                 contact_status=contact_status,
                 last_contact_at=contacted_at,
-                recovery_state=_recovery_state_for(joined, log=log, now=now, params=params),
+                recovery_state=state,
             )
         )
+        # history/all are bounded — never stream the recovered/dismissed tail.
+        if scope != "active" and len(rows) >= limit:
+            break
     return rows
 
 

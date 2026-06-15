@@ -400,7 +400,9 @@ def test_calendar_composes_contact_status_from_log() -> None:
 
 def test_work_queue_rows_carry_recency() -> None:
     """`GET /work-queue` rows now include a valid contact_status + last_contact_at."""
-    resp = client.get("/work-queue")
+    # The full-cohort shape assertions use the back-compat `scope=all` slice (the
+    # default is now the small `active` recovery queue).
+    resp = client.get("/work-queue", params={"scope": "all"})
     assert resp.status_code == 200
     items = resp.json()
     assert len(items) == DEFAULT_FAMILY_COUNT
@@ -495,7 +497,9 @@ def test_work_queue_recency_reflects_approved_contact() -> None:
     )
     log.log_decision(proposal_id=proposal_id, human="operator", action=DecisionAction.APPROVE)
     try:
-        resp = client.get("/work-queue")
+        # Query `scope=all` so the assertion holds regardless of whether the
+        # sampled family was ever stalled (the active scope pre-filters on that).
+        resp = client.get("/work-queue", params={"scope": "all"})
         assert resp.status_code == 200
         row = next(r for r in resp.json() if r["family_id"] == str(sample.family_id))
         assert row["contact_status"] == ContactStatus.FOLLOWED_UP.value

@@ -6,7 +6,7 @@ import CalendarChip from './CalendarChip';
 import HeatCell from './HeatCell';
 import DrillRow, { DrillRowHead } from './DrillRow';
 import BulkBar, { type SendPartition } from './BulkBar';
-import { fmtUSD, shortDollars } from './format';
+import { fmtDay, fmtUSD, shortDollars } from './format';
 
 // Enrollment recovery calendar (S12 W4) — the LEFT "find" surface. The mock's
 // loop: families land on the day they STALLED (stall_date); a day with ≤4
@@ -480,6 +480,7 @@ function DayDrill({
               rank={i + 1}
               name={e.display_name}
               stuckStep={e.current_stage}
+              stallDate={fmtDay(e.stall_date)}
               value={fmtUSD(e.value)}
               score={e.score.toFixed(2)}
               contactStatus={e.contact_status}

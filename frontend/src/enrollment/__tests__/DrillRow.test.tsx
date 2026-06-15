@@ -17,6 +17,7 @@ function row(props = {}) {
       rank={3}
       name="The Alvarez Family"
       stuckStep="enrollment agreement"
+      stallDate="Jun 13"
       value="$10,474"
       score="0.91"
       contactStatus="overdue"
@@ -26,7 +27,7 @@ function row(props = {}) {
 }
 
 describe('DrillRow', () => {
-  it('renders rank zero-padded, name, stuck step, value, score', () => {
+  it('renders rank zero-padded, name, stuck step, stall date, value, score', () => {
     render(row());
     const r = screen.getByTestId(`drill-row-${FID}`);
     expect(r).toHaveTextContent('03');
@@ -34,6 +35,8 @@ describe('DrillRow', () => {
     expect(r).toHaveTextContent('enrollment agreement');
     expect(r).toHaveTextContent('$10,474');
     expect(r).toHaveTextContent('0.91');
+    // The always-present stall-date column.
+    expect(screen.getByTestId(`drill-row-date-${FID}`)).toHaveTextContent('Jun 13');
   });
 
   it('renders the recency label via the reused Chip', () => {
