@@ -36,6 +36,7 @@ from pydantic import ValidationError
 
 from app.ai.client import LLMClient
 from app.ai.conditioning import ConditioningBlock, assemble_conditioning
+from app.ai.json_parse import strip_code_fence
 from app.ai.schemas.content import Channel, ContentCandidate
 from app.core.eval_gate import BrandJudge, BrandRuleLike, ValidationResult, evaluate_message
 
@@ -124,8 +125,11 @@ def _parse_batch(text: str, block: ConditioningBlock) -> list[ContentCandidate]:
     set to the conditioning block's refs so the audit trail records exactly what
     shaped it (NFR-6).
     """
+    # The batch is a JSON array, often wrapped in a Markdown ```json fence — unwrap
+    # it first (strip_code_fence is a no-op on raw JSON). A non-array / malformed
+    # payload is DROPPED, never coerced (INV-2).
     try:
-        raw = json.loads(text)
+        raw = json.loads(strip_code_fence(text))
     except (json.JSONDecodeError, ValueError):
         return []
     if not isinstance(raw, list):

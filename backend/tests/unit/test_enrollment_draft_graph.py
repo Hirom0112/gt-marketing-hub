@@ -178,6 +178,42 @@ def test_clean_draft_surfaces_on_pass() -> None:
 
 
 # --------------------------------------------------------------------------- #
+# 1b. A fence-WRAPPED valid draft surfaces — the live model wraps JSON in a
+#     ```json fence (the `v1_schema` gate failure); the parse boundary now
+#     unwraps it (strip_code_fence) before validation, so it is NOT rejected.
+# --------------------------------------------------------------------------- #
+def test_fenced_json_draft_surfaces() -> None:
+    """A ```json-fenced (but otherwise valid) payload PARSES and surfaces.
+
+    Reproduces the live failure: real models return their JSON inside a Markdown
+    code fence, which `model_validate_json` cannot parse. The graph now strips
+    the fence at the parse boundary, so the same proposal that the unit tests
+    feed raw also succeeds when fence-wrapped — no regression to INV-2 (genuine
+    garbage, tested separately, still rejects).
+    """
+    params = _params()
+    settings = _settings(key="sk-test")
+    body = "Hello, just a note on your enrollment and your funding next steps."
+    fenced = f"```json\n{_valid_proposal_json(body=body)}\n```"
+    client = AnthropicLLMClient(settings=settings, transport=_fake_transport(fenced))
+
+    outcome = draft_enrollment_message(
+        _family(with_app_form=False),
+        DraftAction.EMAIL,
+        client=client,
+        budget=_budget(params, settings),
+        settings=settings,
+        params=params,
+        brand_judge=_on_brand_judge(),
+    )
+
+    assert outcome.degraded is False
+    assert outcome.surfaced is True
+    assert isinstance(outcome.proposal, EnrollmentDraftProposal)
+    assert outcome.proposal.body == body
+
+
+# --------------------------------------------------------------------------- #
 # 2. Banned-claim draft is BLOCKED, not softened (INV-4, fail-closed).
 # --------------------------------------------------------------------------- #
 def test_banned_claim_draft_blocked() -> None:

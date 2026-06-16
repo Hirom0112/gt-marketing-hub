@@ -34,6 +34,7 @@ from typing import TYPE_CHECKING
 
 from pydantic import ValidationError
 
+from app.ai.json_parse import strip_code_fence
 from app.ai.prompts.close_tips import (
     build_context_pack,
     build_prompt,
@@ -121,11 +122,12 @@ def generate_close_tips(
         # model over the extracted fields, so a degraded edge surfaces nothing.
         return CloseTipsOutcome(proposal=None, validation=None, degraded=True)
 
-    # Parse boundary (INV-2): the live edge returns JSON conforming to the schema.
-    # A malformed/unparseable payload is REJECTED — never coerced — so no proposal
-    # is surfaced.
+    # Parse boundary (INV-2): the live edge returns JSON conforming to the schema,
+    # often wrapped in a Markdown ```json fence — unwrap it first (strip_code_fence
+    # is a no-op on raw JSON). A malformed/unparseable payload is REJECTED — never
+    # coerced — so no proposal is surfaced.
     try:
-        proposal = CloseTipsProposal.model_validate_json(result.text)
+        proposal = CloseTipsProposal.model_validate_json(strip_code_fence(result.text))
     except ValidationError:
         return CloseTipsOutcome(proposal=None, validation=None, degraded=False)
 

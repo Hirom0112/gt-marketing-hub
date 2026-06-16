@@ -35,6 +35,7 @@ from uuid import UUID
 from pydantic import ValidationError
 
 from app.ai.client import LLMClient, deterministic_fallback
+from app.ai.json_parse import strip_code_fence
 from app.ai.prompts.enrollment_draft import build_context_pack, build_prompt
 from app.ai.schemas.enrollment_draft import DraftAction, EnrollmentDraftProposal
 from app.core.eval_gate import BrandJudge, ValidationResult, evaluate_message
@@ -139,10 +140,11 @@ def draft_enrollment_message(
         )
     else:
         # Parse boundary (INV-2): the live edge returns JSON conforming to the
-        # schema. A malformed/unparseable payload is REJECTED — never coerced —
-        # so no proposal is surfaced.
+        # schema, often wrapped in a Markdown ```json fence — unwrap it first
+        # (strip_code_fence is a no-op on raw JSON). A malformed/unparseable
+        # payload is REJECTED — never coerced — so no proposal is surfaced.
         try:
-            proposal = EnrollmentDraftProposal.model_validate_json(result.text)
+            proposal = EnrollmentDraftProposal.model_validate_json(strip_code_fence(result.text))
         except ValidationError:
             return DraftOutcome(proposal=None, validation=None, degraded=False)
 
