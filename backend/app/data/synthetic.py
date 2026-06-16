@@ -632,6 +632,30 @@ def _build_students_for_family(
     return students, app_forms, enrollment_forms
 
 
+def _populate_students(ds: SyntheticDataset, *, seed: int) -> None:
+    """Append one Student per child for every family already in ``ds`` (A-24).
+
+    A second, ISOLATED pass shared by every cohort builder (default / realistic /
+    back-to-school): draws from ``random.Random(seed ^ _STUDENT_SEED_SALT)`` so it
+    leaves the family/lead/app/enrollment/profile stream the builder produced
+    byte-identical (the determinism + one-row-per-family guards hold), and writes
+    the per-child rows into the dataset's separate ``students`` /
+    ``student_app_forms`` / ``student_enrollment_forms`` lists. Mutates ``ds``.
+    """
+    student_rng = random.Random(seed ^ _STUDENT_SEED_SALT)
+    leads_by_family = {lead.family_id: lead for lead in ds.leads}
+    for family in ds.families:
+        lead = leads_by_family.get(family.family_id)
+        if lead is None:
+            continue
+        students, app_forms, enrollment_forms = _build_students_for_family(
+            student_rng, family=family, lead=lead
+        )
+        ds.students.extend(students)
+        ds.student_app_forms.extend(app_forms)
+        ds.student_enrollment_forms.extend(enrollment_forms)
+
+
 def generate(n: int, seed: int = 0) -> SyntheticDataset:
     """Generate ``n`` synthetic families joined to their four source rows.
 
@@ -661,17 +685,7 @@ def generate(n: int, seed: int = 0) -> SyntheticDataset:
         ds.enrollment_forms.append(enrollment)
         ds.community_profiles.append(profile)
 
-    # A-24 — second, ISOLATED pass: one Student per child (own funnel + own app/
-    # enrollment). Salting the seed keeps the family stream above byte-identical.
-    student_rng = random.Random(seed ^ _STUDENT_SEED_SALT)
-    leads_by_family = {lead.family_id: lead for lead in ds.leads}
-    for family in ds.families:
-        students, app_forms, enrollment_forms = _build_students_for_family(
-            student_rng, family=family, lead=leads_by_family[family.family_id]
-        )
-        ds.students.extend(students)
-        ds.student_app_forms.extend(app_forms)
-        ds.student_enrollment_forms.extend(enrollment_forms)
+    _populate_students(ds, seed=seed)
     return ds
 
 
@@ -864,6 +878,7 @@ def generate_back_to_school(
         ds.app_forms.append(app_form)
         ds.enrollment_forms.append(enrollment)
         ds.community_profiles.append(profile)
+    _populate_students(ds, seed=seed)  # A-24 — per-child rows for the volume cohort.
     return ds
 
 
@@ -1187,6 +1202,7 @@ def generate_realistic(*, params: Realistic) -> RealisticCohort:
         ds.enrollment_forms.append(enrollment)
         ds.community_profiles.append(profile)
 
+    _populate_students(ds, seed=params.seed)  # A-24 — per-child rows for the demo cohort.
     return RealisticCohort(dataset=ds, dismissed_family_ids=dismissed_family_ids)
 
 
