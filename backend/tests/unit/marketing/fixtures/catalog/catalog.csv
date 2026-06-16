@@ -1,0 +1,8 @@
+platform,date,type,caption,likes,views_plays,comments,url,media_file
+Instagram,2026-01-10 09:30:00,post,Synthetic caption alpha from @fake_handle.example.invalid,100,1000,5,https://example.invalid/p/alpha,social/instagram_fake/instagram/fake/alpha.jpg
+Instagram,2026-02-15 12:00:00,post,Synthetic caption beta — fully fake words,10,50,1,https://example.invalid/p/beta,social/instagram_fake/instagram/fake/beta.mp4
+Facebook,2025-12-01 08:00:00,post,Synthetic caption gamma no engagement,,,,https://example.invalid/p/gamma,social/facebook_fake/facebook/fake/gamma.png
+X,2026-03-20 17:45:00,post,Synthetic caption delta on twitter,40,200,8,https://example.invalid/p/delta,social/x_fake/x/fake/delta.jpg
+Twitter,2026-03-21 18:00:00,post,Synthetic caption epsilon legacy twitter label,5,5,0,https://example.invalid/p/epsilon,social/x_fake/x/fake/epsilon.mov
+YouTube,2026-01-05 10:00:00,post,Synthetic caption zeta video,3,9000,2,https://example.invalid/p/zeta,social/youtube_fake/youtube/fake/zeta.mp4
+TikTok,2026-02-02 14:30:00,post,Synthetic caption eta short,7,500,3,https://example.invalid/p/eta,social/tiktok_fake/tiktok/fake/eta.webm
