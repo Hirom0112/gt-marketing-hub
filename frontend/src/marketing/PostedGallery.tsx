@@ -3,9 +3,12 @@ import {
   ArrowLeft,
   AtSign,
   Clock,
+  ExternalLink,
   Globe,
   Hash,
+  Heart,
   Image as ImageIcon,
+  MessageCircle,
   Play,
   Share2,
   Star,
@@ -20,12 +23,16 @@ import { Card, Chip } from '../ui';
 // platform they came FROM (GET /content/gallery). The flow is:
 //   platform tiles (with per-platform counts)
 //     → click a tile → GET /content/gallery?platform=<p> → a grid of post cards
-//        (image placeholder + caption + posted date + value badge)
+//        (real media + caption + engagement badge + posted date + value badge +
+//         a "View original" link)
 //     → a Most valuable / Most recent sort toggle (re-fetches with ?sort=)
 //     → a back-to-all affordance returns to the tiles.
 //
-// The image is a PLACEHOLDER ref in v1 (media-gen isn't wired yet); value +
-// posted_at are deterministic synthetic placeholders (no real engagement feed).
+// When the backend has GT_POSTED_CATALOG_ROOT configured the cards render the REAL
+// posted media (served at /posted-media, resolved against apiBaseUrl), real captions,
+// real engagement, and engagement-based ranking (the scoped INV-1 exception). With no
+// catalog the backend falls back to the synthetic library gallery (image_ref is a
+// placeholder ref, no engagement) and the card degrades gracefully.
 // Read-only (the deterministic core owns all writes, INV-2); native fetch only.
 
 // One platform tile: the platform + how many posts it holds.
@@ -34,7 +41,9 @@ interface PlatformGroup {
   count: number;
 }
 
-// One post card: the picture (placeholder), the words, where + when + value.
+// One post card: the picture/video, the words, where + when + engagement + value.
+// The engagement fields + url are present on the REAL-catalog path; on the library
+// fallback they are absent (the badge omits them gracefully).
 interface PostItem {
   id: string;
   platform: string;
@@ -43,6 +52,10 @@ interface PostItem {
   image_ref: string;
   posted_at: string;
   value: number;
+  likes?: number | null;
+  views?: number | null;
+  comments?: number | null;
+  url?: string | null;
 }
 
 // GET /content/gallery response — tiles when no platform, posts when drilled in.
@@ -335,10 +348,48 @@ function PlatformPosts({
   );
 }
 
-// One post card: the picture (placeholder), the caption (the words), the posted
-// date, and the value badge.
+// Resolve a served media_ref ("/posted-media/...") against the API base so the
+// browser fetches it from the backend that mounted the scrape root. A non-served
+// ref (e.g. a library "placeholder://" fallback) passes through unchanged.
+function mediaSrc(ref: string): string {
+  return ref.startsWith('/') ? `${apiBaseUrl}${ref}` : ref;
+}
+
+// The engagement badge — ❤ likes · ▶ views · 💬 comments. Each metric is omitted
+// when its count is zero/absent, so the badge degrades gracefully (and the library
+// fallback, which carries no counts, shows nothing).
+function EngagementBadge({ post }: { post: PostItem }): JSX.Element | null {
+  const metrics: [LucideIcon, number][] = [];
+  if (post.likes) metrics.push([Heart, post.likes]);
+  if (post.views) metrics.push([Play, post.views]);
+  if (post.comments) metrics.push([MessageCircle, post.comments]);
+  return (
+    <span
+      data-testid={`gallery-post-engagement-${post.id}`}
+      className="lab"
+      style={{ display: 'inline-flex', alignItems: 'center', gap: 'var(--s-2)', color: 'var(--muted)' }}
+    >
+      {metrics.length === 0 ? (
+        <span style={{ opacity: 0.6 }}>No engagement yet</span>
+      ) : (
+        metrics.map(([Icon, count], i) => (
+          <span
+            key={i}
+            style={{ display: 'inline-flex', alignItems: 'center', gap: 2 }}
+          >
+            <Icon size={12} aria-hidden /> {count.toLocaleString()}
+          </span>
+        ))
+      )}
+    </span>
+  );
+}
+
+// One post card: the REAL media (img or video), the caption (the words), the posted
+// date, the engagement badge, a "View original" link, and the value badge.
 function PostCard({ post }: { post: PostItem }): JSX.Element {
   const isVideo = post.asset_type === 'video';
+  const src = mediaSrc(post.image_ref);
   return (
     <li
       data-testid={`gallery-post-${post.id}`}
@@ -351,23 +402,37 @@ function PostCard({ post }: { post: PostItem }): JSX.Element {
         flexDirection: 'column',
       }}
     >
-      {/* The image placeholder (media-gen not wired yet — OUT-1). */}
-      <div
-        data-testid={`gallery-post-image-${post.id}`}
-        aria-label={`${platformLabel(post.platform)} post image (placeholder)`}
-        title={post.image_ref}
-        style={{
-          aspectRatio: '16 / 10',
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-          background: 'var(--surface-3)',
-          borderBottom: '1px solid var(--line)',
-          color: 'var(--muted)',
-        }}
-      >
-        {isVideo ? <Video size={28} aria-hidden /> : <ImageIcon size={28} aria-hidden />}
-      </div>
+      {/* The real posted media — a <video controls> for video, else an <img>. */}
+      {isVideo ? (
+        <video
+          data-testid={`gallery-post-media-${post.id}`}
+          src={src}
+          controls
+          preload="metadata"
+          aria-label={`${platformLabel(post.platform)} post video`}
+          style={{
+            width: '100%',
+            aspectRatio: '16 / 10',
+            objectFit: 'cover',
+            background: 'var(--surface-3)',
+            borderBottom: '1px solid var(--line)',
+          }}
+        />
+      ) : (
+        <img
+          data-testid={`gallery-post-media-${post.id}`}
+          src={src}
+          alt={`${platformLabel(post.platform)} post`}
+          loading="lazy"
+          style={{
+            width: '100%',
+            aspectRatio: '16 / 10',
+            objectFit: 'cover',
+            background: 'var(--surface-3)',
+            borderBottom: '1px solid var(--line)',
+          }}
+        />
+      )}
 
       <div style={{ padding: 'var(--s-2)', display: 'grid', gap: 'var(--s-2)' }}>
         <p
@@ -383,6 +448,9 @@ function PostCard({ post }: { post: PostItem }): JSX.Element {
         >
           {post.caption}
         </p>
+
+        <EngagementBadge post={post} />
+
         <div
           style={{
             display: 'flex',
@@ -410,6 +478,25 @@ function PostCard({ post }: { post: PostItem }): JSX.Element {
             </Chip>
           </span>
         </div>
+
+        {post.url ? (
+          <a
+            data-testid={`gallery-post-link-${post.id}`}
+            href={post.url}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="lab"
+            style={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: 'var(--s-1)',
+              color: 'var(--flow-ink)',
+              textDecoration: 'none',
+            }}
+          >
+            <ExternalLink size={12} aria-hidden /> View original
+          </a>
+        ) : null}
       </div>
     </li>
   );

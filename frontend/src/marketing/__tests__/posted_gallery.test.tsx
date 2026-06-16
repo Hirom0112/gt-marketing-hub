@@ -19,26 +19,36 @@ const GROUPS_VIEW = {
 };
 
 // The drilled payload: Facebook's posts (GET /content/gallery?platform=facebook).
+// Real-shaped fields: a served media_ref, engagement counts, and the original-post url.
+// fb1 is an image; fb2 is a video — both render their respective media element.
 const FACEBOOK_MOST_RECENT = {
   groups: [] as unknown[],
   posts: [
     {
       id: 'fb1',
       platform: 'facebook',
-      asset_type: 'copy',
+      asset_type: 'image',
       caption: 'Gifted kids deserve their pace.',
-      image_ref: 'placeholder://posted-gallery/fb1',
+      image_ref: '/posted-media/social/facebook_fake/facebook/fake/fb1.jpg',
       posted_at: '2026-02-01',
-      value: 88.5,
+      value: 215.0,
+      likes: 100,
+      views: 1000,
+      comments: 5,
+      url: 'https://example.invalid/p/fb1',
     },
     {
       id: 'fb2',
       platform: 'facebook',
-      asset_type: 'copy',
+      asset_type: 'video',
       caption: 'Mastery over busywork.',
-      image_ref: 'placeholder://posted-gallery/fb2',
+      image_ref: '/posted-media/social/facebook_fake/facebook/fake/fb2.mp4',
       posted_at: '2025-09-10',
       value: 42.0,
+      likes: 10,
+      views: 0,
+      comments: 1,
+      url: 'https://example.invalid/p/fb2',
     },
   ],
 };
@@ -87,12 +97,57 @@ describe('PostedGallery', () => {
     render(<PostedGallery />);
     fireEvent.click(await screen.findByTestId('gallery-tile-facebook'));
 
-    // The grid shows Facebook's post cards: image placeholder + caption + value badge.
+    // The grid shows Facebook's post cards: real media + caption + value badge.
     const card = await screen.findByTestId('gallery-post-fb1');
     expect(within(card).getByText('Gifted kids deserve their pace.')).toBeInTheDocument();
-    expect(within(card).getByTestId('gallery-post-image-fb1')).toBeInTheDocument();
+    expect(within(card).getByTestId('gallery-post-media-fb1')).toBeInTheDocument();
     expect(within(card).getByTestId('gallery-post-value-fb1')).toBeInTheDocument();
     expect(screen.getByTestId('gallery-post-fb2')).toBeInTheDocument();
+  });
+
+  it('test_image_post_renders_an_img_against_the_api_base', async () => {
+    render(<PostedGallery />);
+    fireEvent.click(await screen.findByTestId('gallery-tile-facebook'));
+
+    // fb1 is an image: an <img> whose src resolves the served media_ref against the API base.
+    const media = await screen.findByTestId('gallery-post-media-fb1');
+    expect(media.tagName).toBe('IMG');
+    expect(media).toHaveAttribute(
+      'src',
+      'http://localhost:8000/posted-media/social/facebook_fake/facebook/fake/fb1.jpg',
+    );
+  });
+
+  it('test_video_post_renders_a_video_element', async () => {
+    render(<PostedGallery />);
+    fireEvent.click(await screen.findByTestId('gallery-tile-facebook'));
+
+    // fb2 is a video: a <video controls> element (not an <img>).
+    const media = await screen.findByTestId('gallery-post-media-fb2');
+    expect(media.tagName).toBe('VIDEO');
+  });
+
+  it('test_engagement_badge_and_view_original_render', async () => {
+    render(<PostedGallery />);
+    fireEvent.click(await screen.findByTestId('gallery-tile-facebook'));
+
+    const card = await screen.findByTestId('gallery-post-fb1');
+    // Engagement badge surfaces likes/views/comments.
+    const badge = within(card).getByTestId('gallery-post-engagement-fb1');
+    expect(badge).toHaveTextContent('100');
+    expect(badge).toHaveTextContent('1,000'); // views formatted with a thousands separator
+    expect(badge).toHaveTextContent('5');
+    // "View original" links to the original post url in a new tab.
+    const link = within(card).getByTestId('gallery-post-link-fb1');
+    expect(link).toHaveAttribute('href', 'https://example.invalid/p/fb1');
+    expect(link).toHaveAttribute('target', '_blank');
+
+    // fb2 has views=0 → the zero view metric is omitted gracefully.
+    const badge2 = within(screen.getByTestId('gallery-post-fb2')).getByTestId(
+      'gallery-post-engagement-fb2',
+    );
+    expect(badge2).toHaveTextContent('10');
+    expect(badge2).not.toHaveTextContent('▶');
   });
 
   it('test_toggling_sort_reorders_the_grid', async () => {
