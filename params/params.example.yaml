@@ -90,6 +90,18 @@ cost_caps:                  # NFR-5 — hard per-run cap; exceeding ⇒ determin
   anthropic_per_run_usd: 5.00       # detailed cost model in TECH_STACK.md §Cost
   media_gen_per_run_usd: 0.00       # OUT-1 placeholder in v1
 
+anthropic_pricing:          # TECH_STACK.md §6.1 — canonical per-MTok rates; usd = (in*in_rate + out*out_rate)/1e6
+  models:                           # keyed by model id (matches ANTHROPIC_MODEL_* in §5.3)
+    claude-opus-4-8:                # Primary (Opus)
+      input_per_mtok: 5.00
+      output_per_mtok: 25.00
+    claude-sonnet-4-6:              # Fast (Sonnet)
+      input_per_mtok: 3.00
+      output_per_mtok: 15.00
+    claude-haiku-4-5-20251001:      # Cheap (Haiku)
+      input_per_mtok: 1.00
+      output_per_mtok: 5.00
+
 latency_budget_ms:          # NFR-9
   ai_proposal: 8000
 

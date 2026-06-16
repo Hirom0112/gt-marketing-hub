@@ -376,11 +376,14 @@ def reset_eval_state() -> None:
 def get_llm_client() -> LLMClient:
     """FastAPI dependency yielding the gated Anthropic edge client (the AI seam).
 
-    Built over the cached settings. With no key (or kill switch) the client
-    degrades to the deterministic template WITHOUT a live call (INV-8, NFR-5);
-    tests override this with a fake-transport client so no live call ever runs.
+    Built over the cached settings + params. The params carry the §6.1 pricing
+    rates the client uses to charge each live call its real USD (INV-8, INV-11);
+    they are passed explicitly (the fallback-resolved singleton) so the client
+    never relies on `params/params.yaml` being on the cwd. With no key (or kill
+    switch) the client degrades to the deterministic template WITHOUT a live call
+    (NFR-5); tests override this with a fake-transport client so no live call runs.
     """
-    return AnthropicLLMClient(settings=_settings)
+    return AnthropicLLMClient(settings=_settings, params=_params)
 
 
 def get_brand_judge() -> BrandJudge | None:

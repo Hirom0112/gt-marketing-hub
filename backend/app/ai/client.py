@@ -19,13 +19,18 @@ runs under test.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
 from typing import TYPE_CHECKING, Protocol, runtime_checkable
 
 from app.ai.cost import CostCapExceeded, RunBudget
+from app.ai.pricing import usd_for
+from app.core.params import load_params
 from app.core.settings import Settings, get_settings
 
 if TYPE_CHECKING:
     from collections.abc import Callable
+
+    from app.core.params import Params
 
 
 @dataclass(frozen=True)
@@ -101,6 +106,9 @@ class AnthropicLLMClient:
             fresh :func:`~app.core.settings.get_settings` read.
         transport: the call mechanism. Defaults to the real (lazy-importing)
             Anthropic SDK transport; tests inject a fake to avoid any live call.
+        params: the loaded params carrying the `anthropic_pricing` rates used to
+            price each live call's tokens into USD (INV-11); defaults to a fresh
+            :func:`~app.core.params.load_params` read.
     """
 
     def __init__(
@@ -108,9 +116,32 @@ class AnthropicLLMClient:
         *,
         settings: Settings | None = None,
         transport: Callable[..., tuple[str, int, int]] | None = None,
+        params: Params | None = None,
     ) -> None:
         self._settings = settings if settings is not None else get_settings()
         self._transport = transport if transport is not None else _default_transport(self._settings)
+        # Loaded lazily on the first live charge (see `_pricing_params`): the
+        # degraded path never needs rates, so construction stays cheap and does
+        # not depend on the params file being resolvable.
+        self._params = params
+
+    def _pricing_params(self) -> Params:
+        """The params carrying pricing rates, loaded once on first live use (INV-11).
+
+        Production passes `params` explicitly (the composition root's
+        fallback-resolved singleton). When a client is built without it (a direct
+        unit construction), we load the canonical `params/params.yaml`, falling
+        back to the committed `params/params.example.yaml` when it is absent — the
+        SAME fallback the API composition uses (`deps._load_params_with_fallback`)
+        so pricing resolves identically whether or not a local params.yaml exists.
+        """
+        if self._params is None:
+            try:
+                self._params = load_params()
+            except FileNotFoundError:
+                example = Path(__file__).resolve().parents[3] / "params" / "params.example.yaml"
+                self._params = load_params(example)
+        return self._params
 
     def complete(self, prompt: str, *, max_tokens: int, budget: RunBudget) -> LLMResult:
         """Complete `prompt`, or degrade to the template when blocked.
@@ -124,8 +155,17 @@ class AnthropicLLMClient:
             return LLMResult(text=deterministic_fallback(prompt), degraded=True)
 
         text, input_tokens, output_tokens = self._transport(prompt, max_tokens=max_tokens)
+        # Price the tokens for the model this client actually calls — the default
+        # transport always uses ``settings.anthropic_model_primary`` (§5.3). An
+        # unpriced model raises in `usd_for` (config gap, never a silent $0).
+        usd = usd_for(
+            model=self._settings.anthropic_model_primary,
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            params=self._pricing_params(),
+        )
         try:
-            budget.charge(tokens=input_tokens + output_tokens, usd=0.0)
+            budget.charge(tokens=input_tokens + output_tokens, usd=usd)
         except CostCapExceeded:
             return LLMResult(text=deterministic_fallback(prompt), degraded=True)
         return LLMResult(

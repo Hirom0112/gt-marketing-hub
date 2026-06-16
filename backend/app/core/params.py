@@ -311,6 +311,32 @@ class CostCaps(_StrictModel):
     media_gen_per_run_usd: float
 
 
+class ModelPricing(_StrictModel):
+    """Per-model token rates, $/MTok (TECH_STACK §6.1).
+
+    Pure data — the canonical per-million-token input/output prices. The actual
+    token→USD computation lives in the AI layer (`app/ai/pricing.py`), NOT here:
+    `core/` stays pure (no logic/IO), it just owns the rates so they have exactly
+    one home (INV-11).
+    """
+
+    input_per_mtok: float
+    output_per_mtok: float
+
+
+class AnthropicPricing(_StrictModel):
+    """TECH_STACK §6.1 token pricing — per-model $/MTok rates keyed by model id.
+
+    The single canonical home for the live cost model (INV-11): the AI layer's
+    pricing helper reads these to convert reported tokens into the real USD the
+    per-run/daily caps charge, never a code literal. Keys are the model ids that
+    match ``ANTHROPIC_MODEL_*`` (§5.3); an id absent here is a config gap and the
+    helper fails loud rather than charging $0.
+    """
+
+    models: dict[str, ModelPricing]
+
+
 class LatencyBudgetMs(_StrictModel):
     """NFR-9 latency budgets, milliseconds."""
 
@@ -584,6 +610,7 @@ class Params(_StrictModel):
     funding: Funding
     eval_thresholds: EvalThresholds
     cost_caps: CostCaps
+    anthropic_pricing: AnthropicPricing
     latency_budget_ms: LatencyBudgetMs
     geo: Geo
     brand_memory: BrandMemory
