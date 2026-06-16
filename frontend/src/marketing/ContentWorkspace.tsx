@@ -15,6 +15,7 @@ import {
 } from 'lucide-react';
 import { apiBaseUrl } from '../config';
 import { Button, Card, Chip, PlaceholderBadge } from '../ui';
+import PostedGallery from './PostedGallery';
 
 // Content workspace (FR-3.1/3.4/3.5, FR-4.5 / INV-3 / INV-4 fail-closed).
 //
@@ -395,6 +396,11 @@ export default function ContentWorkspace(): JSX.Element {
       )}
 
       <ImageBatchPlaceholder />
+
+      {/* The posted-content gallery: every post we made, by platform, ranked
+          (FR-3.4). The headline view of the library; the searchable archive
+          (LibraryPanel) sits below it. */}
+      <PostedGallery />
 
       <LibraryPanel
         state={library}
