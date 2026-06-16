@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { AlertTriangle, CalendarDays, List } from 'lucide-react';
+import { AlertTriangle, CalendarDays, History, ListOrdered } from 'lucide-react';
 import ActionPanel from '../ActionPanel';
 import DealView from '../DealView';
 import FundingTracker from '../FundingTracker';
@@ -8,7 +8,8 @@ import EnrollmentCalendar, {
   type DrillBulk,
   type SortKey,
 } from '../enrollment/EnrollmentCalendar';
-import ShowAllList from '../enrollment/ShowAllList';
+import TriageList, { type TriageScope } from '../enrollment/TriageList';
+import HistoryList from '../enrollment/HistoryList';
 import NotesTimeline, {
   type NotesTimelineHandle,
 } from '../enrollment/NotesTimeline';
@@ -19,24 +20,31 @@ import { apiBaseUrl } from '../config';
 import { Card, WorkspaceToggle } from '../ui';
 import type { SendPartition } from '../enrollment/BulkBar';
 
-// The operator page (S12 W4; A-17/A-19/A-20). CATCH-AND-FORWARD, not a system of
-// record. TWO surfaces: a LEFT find (calendar that degrades to a heat map at
-// volume → drill → ranked list; or the "Show all" working set) and a RIGHT
-// family work-panel (act). Under a thin SITUATION STRIP ("money on the table").
+// The operator page (S13 W1; A-17/A-19/A-20/A-22). CATCH-AND-FORWARD, not a
+// system of record. The LEFT "find" surface has three views behind one toggle:
+//   · Calendar (primary find) — families by stall date; busy days collapse to
+//     heat. Tapping a cell/chip OPENS the triage list at Day scope for that day;
+//     "This week" → Week scope; "Show all" → All scope.
+//   · Triage (the OVERFLOW CONSOLE, A-22) — ONE scoped list (Day/Week/All over
+//     the active set), recoverable-now ranked everywhere, bulk always attached.
+//     The unscoped end of the calendar's drill, not a second surface.
+//   · History — recovered/dismissed, EVICTED to its own clearly-separate view
+//     (read-only audit/lookback, NO bulk).
+// The RIGHT surface is the family work-panel (act). Under a thin SITUATION STRIP.
 //
-// The recovery LOOP this container wires: see a stall on the calendar → drill a
-// busy day or open Show-all → single OR bulk eval-gated action → the forward is
-// recorded SERVER-SIDE (every action POSTs a real route; INV-2 no client write)
-// → the moved families re-pull and reflect their new recovery_state. The bulk
-// routes, the shared selection Set, and the toasts all live HERE (one owner),
-// passed down to the calendar drill + show-all list.
+// The recovery LOOP: see a stall on the calendar → open the triage list at a
+// scope → single OR bulk eval-gated action → recorded SERVER-SIDE (every action
+// POSTs a real route; INV-2 no client write) → moved families re-pull and reflect
+// their new recovery_state (and drop into History). The bulk routes, the shared
+// selection Set, and the toasts all live HERE (one owner), passed down.
 
 interface FamilySummary {
   family_id: string;
   display_name: string;
 }
 
-type LeftView = 'calendar' | 'all';
+// The left "find" views. Triage carries a scope dial; History is its own view.
+type LeftView = 'calendar' | 'triage' | 'history';
 
 type FamiliesState =
   | { status: 'loading' }
@@ -77,6 +85,9 @@ export default function EnrollmentWorkspace(): JSX.Element {
   });
   const [selectedFamilyId, setSelectedFamilyId] = useState<string | null>(null);
   const [leftView, setLeftView] = useState<LeftView>('calendar');
+  // The triage list's scope dial (Day/Week/All) + the day it's windowed around.
+  const [triageScope, setTriageScope] = useState<TriageScope>('all');
+  const [triageAnchor, setTriageAnchor] = useState<string | undefined>(undefined);
   const [recoveryRows, setRecoveryRows] = useState<RecoverableRow[] | null>(
     null,
   );
@@ -357,7 +368,8 @@ export default function EnrollmentWorkspace(): JSX.Element {
 
   const viewOptions = [
     { key: 'calendar' as const, label: 'Calendar', icon: CalendarDays },
-    { key: 'all' as const, label: 'Show all', icon: List },
+    { key: 'triage' as const, label: 'Triage', icon: ListOrdered },
+    { key: 'history' as const, label: 'History', icon: History },
   ];
 
   // Selecting a family from any surface drops any open bulk picker focus but
@@ -366,6 +378,35 @@ export default function EnrollmentWorkspace(): JSX.Element {
     setSelectedFamilyId(id);
   }, []);
 
+  // The calendar opens the triage list at a scope (Day from a cell/chip, Week
+  // from "This week", All from "Show all"). It switches the left view to triage
+  // and seeds the scope dial; the dial then widens it without leaving.
+  const openTriageScope = useCallback(
+    (scope: TriageScope, anchorDate?: string): void => {
+      setTriageScope(scope);
+      setTriageAnchor(anchorDate);
+      setLeftView('triage');
+      clearSel();
+    },
+    [clearSel],
+  );
+
+  // The triage list's own scope dial — update the scope/anchor in place.
+  const changeTriageScope = useCallback(
+    (scope: TriageScope, anchorDate?: string): void => {
+      setTriageScope(scope);
+      setTriageAnchor(anchorDate);
+    },
+    [],
+  );
+
+  const findHeadTitle =
+    leftView === 'calendar'
+      ? 'Recovery calendar — the find surface, by stall date'
+      : leftView === 'triage'
+        ? 'Triage — recover in priority order, the order to attack the wave'
+        : 'History — recovered & dismissed (read-only audit)';
+
   return (
     <section aria-label="Enrollment workspace" className="enrollment-workspace">
       {recoveryRows !== null && <SituationBar rows={recoveryRows} />}
@@ -373,11 +414,7 @@ export default function EnrollmentWorkspace(): JSX.Element {
       <div className="operator-grid">
         <div className="operator-find">
           <div className="find-head">
-            <span className="lab find-head-title">
-              {leftView === 'calendar'
-                ? 'Recovery calendar — by the day they stalled'
-                : 'Show all — the ranked working set'}
-            </span>
+            <span className="lab find-head-title">{findHeadTitle}</span>
             <div data-testid="enrollment-view-toggle">
               <WorkspaceToggle
                 options={viewOptions}
@@ -391,21 +428,30 @@ export default function EnrollmentWorkspace(): JSX.Element {
             </div>
           </div>
 
-          {leftView === 'calendar' ? (
+          {leftView === 'calendar' && (
             <EnrollmentCalendar
               selectedFamilyId={selectedFamilyId ?? undefined}
               onSelectFamily={selectFamily}
-              bulk={bulk}
-              sort={sort}
-              onSort={setSort}
+              onOpenScope={openTriageScope}
             />
-          ) : (
-            <ShowAllList
+          )}
+          {leftView === 'triage' && (
+            <TriageList
+              scope={triageScope}
+              anchorDate={triageAnchor}
+              onScopeChange={changeTriageScope}
               selectedFamilyId={selectedFamilyId ?? undefined}
               onSelectFamily={selectFamily}
               bulk={bulk}
               sort={sort}
               onSort={setSort}
+              refreshKey={queueRefresh}
+            />
+          )}
+          {leftView === 'history' && (
+            <HistoryList
+              selectedFamilyId={selectedFamilyId ?? undefined}
+              onSelectFamily={selectFamily}
               refreshKey={queueRefresh}
             />
           )}

@@ -1,29 +1,37 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { CalendarClock, ChevronLeft, ChevronRight } from 'lucide-react';
+import {
+  CalendarClock,
+  CalendarRange,
+  ChevronLeft,
+  ChevronRight,
+  List,
+} from 'lucide-react';
 import { apiBaseUrl } from '../config';
 import { Button, Card } from '../ui';
 import CalendarChip from './CalendarChip';
 import HeatCell from './HeatCell';
-import DrillRow, { DrillRowHead } from './DrillRow';
-import BulkBar, { type SendPartition } from './BulkBar';
-import { fmtDay, fmtUSD, shortDollars } from './format';
+import type { SendPartition } from './BulkBar';
+import { shortDollars } from './format';
 
-// Enrollment recovery calendar (S12 W4) — the LEFT "find" surface. The mock's
-// loop: families land on the day they STALLED (stall_date); a day with ≤4
-// families lays them out as CalendarChips, a busier day COLLAPSES to a HeatCell
-// tinted by volume × $ at risk. Tapping a heat cell DRILLS into that day — a
-// fetch of `?day=N` returns the day's families, rendered as a ranked DrillRow
-// list with a BulkBar. The calendar is the index into a ranked list.
+// Enrollment recovery calendar (S13 W1) — the PRIMARY "find" surface. Families
+// land on the day they STALLED (stall_date); a day with ≤4 families lays them out
+// as CalendarChips, a busier day COLLAPSES to a HeatCell tinted by volume × $ at
+// risk. The calendar OWNS organizing "by date".
 //
-// Read-only GETs (INV-2); bulk WRITES are delegated up to the workspace (the
-// single owner of the bulk routes + toasts + the shared selection Set), so this
-// surface stays a pure find/drill view with no client-side writes.
+// The calendar is the INDEX into the triage list, not a driller itself (A-22):
+// tapping a heat cell or chip opens the TriageList at DAY scope for that day; a
+// "This week" affordance opens WEEK scope; "Show all" opens ALL scope. The
+// scope dial (Day/Week/All) then lives on the triage list so the operator can
+// widen a drill from one day → week → everything WITHOUT leaving. This surface
+// makes NO writes and owns no drill list anymore.
+//
+// Read-only GETs (INV-2).
 
 const HEAT_THRESHOLD = 4; // >4 families on a day collapse to a heat cell.
 const HEAT_DIVISOR = 120; // intensity = min(1, count / 120) (mock parity).
-const ROW_CAP = 80; // drill list cap (shared with the show-all list).
+const ROW_CAP = 80; // list cap (shared with the triage + history lists).
 
-// One family on the calendar / in a day drill (backend CalendarEntry, A-16/W1).
+// One family on the calendar (backend CalendarEntry, A-16/W1).
 export interface CalendarEntry {
   family_id: string;
   display_name: string;
@@ -42,14 +50,9 @@ interface CalendarResponse {
   entries: CalendarEntry[];
 }
 
-interface DayResponse {
-  // The drill endpoint returns the same envelope, narrowed to one day's entries.
-  month: string;
-  entries: CalendarEntry[];
-}
-
-// The bulk wiring the drill list shares with the workspace (one selection Set,
-// one set of bulk handlers). Passing it down keeps the bulk routes in one place.
+// The bulk wiring the triage list shares with the workspace (one selection Set,
+// one set of bulk handlers). Kept here as the shared contract both the calendar's
+// consumers and the triage list import from one place.
 export interface DrillBulk {
   selected: ReadonlySet<string>;
   onToggle: (familyId: string) => void;
@@ -71,11 +74,9 @@ interface EnrollmentCalendarProps {
   initialMonth?: string;
   selectedFamilyId?: string;
   onSelectFamily?: (familyId: string) => void;
-  // The shared bulk wiring for the day-drill list.
-  bulk: DrillBulk;
-  // The drill sort (shared with show-all so the operator's sort carries over).
-  sort?: SortKey;
-  onSort?: (sort: SortKey) => void;
+  // Open the triage list at a scope. A heat cell / chip → ('day', dayISO);
+  // "This week" → ('week', monthAnchorISO); "Show all" → ('all').
+  onOpenScope: (scope: 'day' | 'week' | 'all', anchorDate?: string) => void;
 }
 
 export type SortKey = 'recoverable' | 'value' | 'score' | 'date' | 'recency';
@@ -104,6 +105,15 @@ function dayOf(iso: string): number {
   return new Date(ms).getUTCDate();
 }
 
+// The ISO instant for a given day-of-month within the shown month (midnight UTC),
+// used as the anchor the triage list windows its Day/Week scope around.
+function dayAnchorIso(month: string, day: number): string {
+  const [yStr, mStr] = month.split('-');
+  const y = Number(yStr);
+  const m = Number(mStr);
+  return new Date(Date.UTC(y, m - 1, day)).toISOString();
+}
+
 function monthLabel(month: string): string {
   const [yStr, mStr] = month.split('-');
   const y = Number(yStr);
@@ -130,7 +140,9 @@ const RECENCY_ORDER: Record<string, number> = {
   closed: 3,
 };
 
-// Sort a list of entries by the chosen key (shared with the show-all list).
+// Sort a list of entries by the chosen key (shared with the triage + history
+// lists). 'date' is retained in the union for back-compat but is no longer
+// offered as a sort option in the list toolbar (A-22 — the calendar owns date).
 // eslint-disable-next-line react-refresh/only-export-components
 export function sortEntries<T extends CalendarEntry>(
   arr: readonly T[],
@@ -162,16 +174,11 @@ export default function EnrollmentCalendar({
   initialMonth,
   selectedFamilyId,
   onSelectFamily,
-  bulk,
-  sort = 'recoverable',
-  onSort,
+  onOpenScope,
 }: EnrollmentCalendarProps): JSX.Element {
   const [month, setMonth] = useState<string | null>(initialMonth ?? null);
   const [state, setState] = useState<LoadState>({ status: 'loading' });
   const loadedMonth = useRef<string | null>(null);
-  // The drilled day (a day-of-month within the shown month), or null for grid.
-  const [drillDay, setDrillDay] = useState<number | null>(null);
-  const [dayState, setDayState] = useState<LoadState | null>(null);
 
   useEffect(() => {
     if (month !== null && loadedMonth.current === month) return;
@@ -206,48 +213,18 @@ export default function EnrollmentCalendar({
   const shownMonth =
     month ?? (state.status === 'ready' ? state.data.month : null);
 
-  // Open a day's drill — fetch that day's families (the ranked sub-list).
-  const openDrill = useCallback(
+  // Open the triage list at Day scope for a calendar day (a heat cell / chip).
+  const openDay = useCallback(
     (day: number): void => {
       if (shownMonth === null) return;
-      bulk.onClear();
-      setDrillDay(day);
-      setDayState({ status: 'loading' });
-      fetch(`${apiBaseUrl}/enrollment/calendar?month=${shownMonth}&day=${day}`)
-        .then((res) => {
-          if (!res.ok) throw new Error(`drill request failed: ${res.status}`);
-          return res.json() as Promise<DayResponse>;
-        })
-        .then((data) =>
-          setDayState({
-            status: 'ready',
-            data: { month: data.month, entries: data.entries },
-          }),
-        )
-        .catch((err: unknown) => {
-          const message = err instanceof Error ? err.message : 'unknown error';
-          setDayState({ status: 'error', message });
-        });
+      onOpenScope('day', dayAnchorIso(shownMonth, day));
     },
-    [shownMonth, bulk],
+    [shownMonth, onOpenScope],
   );
 
-  const closeDrill = useCallback((): void => {
-    setDrillDay(null);
-    setDayState(null);
-    bulk.onClear();
-  }, [bulk]);
-
-  // Leaving the month (paging) closes any open drill.
-  const goMonth = useCallback(
-    (delta: number): void => {
-      setDrillDay(null);
-      setDayState(null);
-      bulk.onClear();
-      setMonth((mo) => (mo === null ? mo : shiftMonth(mo, delta)));
-    },
-    [bulk],
-  );
+  const goMonth = useCallback((delta: number): void => {
+    setMonth((mo) => (mo === null ? mo : shiftMonth(mo, delta)));
+  }, []);
 
   const byDay = useMemo<Map<number, CalendarEntry[]>>(() => {
     const map = new Map<number, CalendarEntry[]>();
@@ -274,23 +251,6 @@ export default function EnrollmentCalendar({
     for (let d = 1; d <= daysInMonth; d += 1) out.push(d);
     return out;
   }, [shownMonth]);
-
-  // The drill view replaces the month grid (the mock's "drill into a busy day").
-  if (drillDay !== null) {
-    return (
-      <DayDrill
-        day={drillDay}
-        monthLabelText={shownMonth === null ? '' : monthLabel(shownMonth)}
-        state={dayState ?? { status: 'loading' }}
-        selectedFamilyId={selectedFamilyId}
-        onSelectFamily={onSelectFamily}
-        onBack={closeDrill}
-        bulk={bulk}
-        sort={sort}
-        onSort={onSort}
-      />
-    );
-  }
 
   return (
     <section aria-label="Enrollment calendar" data-testid="enrollment-calendar">
@@ -369,7 +329,7 @@ export default function EnrollmentCalendar({
                         entries.reduce((a, e) => a + e.value, 0),
                       )}
                       intensity={Math.min(1, entries.length / HEAT_DIVISOR)}
-                      onClick={() => openDrill(day)}
+                      onClick={() => openDay(day)}
                     />
                   ) : (
                     entries.map((entry) => (
@@ -381,7 +341,11 @@ export default function EnrollmentCalendar({
                         score={entry.score}
                         contactStatus={entry.contact_status}
                         active={entry.family_id === selectedFamilyId}
-                        onSelect={onSelectFamily}
+                        onSelect={(id) => {
+                          onSelectFamily?.(id);
+                          // A chip is a single-day drill into the triage list.
+                          openDay(dayOf(entry.stall_date));
+                        }}
                       />
                     ))
                   )}
@@ -389,136 +353,48 @@ export default function EnrollmentCalendar({
               );
             })}
           </div>
-        </Card>
-      )}
-    </section>
-  );
-}
 
-// The day-drill view — a back header + the day's ranked DrillRow list + a
-// BulkBar. Replaces the month grid when a heat cell is tapped.
-function DayDrill({
-  day,
-  monthLabelText,
-  state,
-  selectedFamilyId,
-  onSelectFamily,
-  onBack,
-  bulk,
-  sort,
-  onSort,
-}: {
-  day: number;
-  monthLabelText: string;
-  state: LoadState;
-  selectedFamilyId?: string;
-  onSelectFamily?: (familyId: string) => void;
-  onBack: () => void;
-  bulk: DrillBulk;
-  sort: SortKey;
-  onSort?: (sort: SortKey) => void;
-}): JSX.Element {
-  const entries =
-    state.status === 'ready' ? sortEntries(state.data.entries, sort) : [];
-  const shown = entries.slice(0, ROW_CAP);
-  const atRisk = entries.reduce((a, e) => a + e.value, 0);
-
-  return (
-    <section aria-label="Day drill" data-testid="calendar-drill">
-      <div className="drill-head">
-        <button
-          type="button"
-          data-testid="drill-back"
-          onClick={onBack}
-          className="lab"
-          style={{
-            border: 0,
-            background: 'none',
-            color: 'var(--flow-ink)',
-            cursor: 'pointer',
-            display: 'inline-flex',
-            alignItems: 'center',
-            gap: 'var(--s-1)',
-          }}
-        >
-          <ChevronLeft size={12} aria-hidden /> back to calendar
-        </button>
-        <span className="mono drill-title" data-testid="drill-title">
-          {monthLabelText.replace(/ \d{4}$/, '')} {day} · {entries.length} stalls
-          · {fmtUSD(atRisk)} at risk
-        </span>
-      </div>
-
-      {state.status === 'loading' && (
-        <p data-testid="drill-loading" className="lab">
-          Loading day…
-        </p>
-      )}
-      {state.status === 'error' && (
-        <p
-          data-testid="drill-error"
-          role="alert"
-          style={{ color: 'var(--signal-ink)', fontSize: 'var(--fs-sm)' }}
-        >
-          Could not load day: {state.message}
-        </p>
-      )}
-
-      {state.status === 'ready' && (
-        <Card pad={false}>
-          <DrillToolbar
-            count={shown.length}
-            sort={sort}
-            onSort={onSort}
-            onSelectAll={() => bulk.onSelectAll(shown.map((e) => e.family_id))}
-          />
-          <DrillRowHead />
-          {shown.map((e, i) => (
-            <DrillRow
-              key={e.family_id}
-              familyId={e.family_id}
-              rank={i + 1}
-              name={e.display_name}
-              stuckStep={e.current_stage}
-              stallDate={fmtDay(e.stall_date)}
-              value={fmtUSD(e.value)}
-              score={e.score.toFixed(2)}
-              contactStatus={e.contact_status}
-              selected={bulk.selected.has(e.family_id)}
-              active={e.family_id === selectedFamilyId}
-              onToggle={bulk.onToggle}
-              onSelect={onSelectFamily}
-            />
-          ))}
-          {entries.length > ROW_CAP && (
-            <div
-              className="lab"
-              data-testid="drill-cap-footer"
-              style={{ padding: 'var(--s-3) var(--s-4)', color: 'var(--muted)' }}
+          {/* Widen affordances — the scope dial proper lives on the triage list. */}
+          <div
+            className="calendar-scope-cta"
+            data-testid="calendar-scope-cta"
+            style={{
+              display: 'flex',
+              gap: 'var(--s-2)',
+              padding: 'var(--s-3) var(--s-1) var(--s-1)',
+              borderTop: '1px solid var(--line-2)',
+              marginTop: 'var(--s-2)',
+            }}
+          >
+            <Button
+              icon={CalendarRange}
+              data-testid="open-week"
+              onClick={() =>
+                onOpenScope(
+                  'week',
+                  shownMonth === null ? undefined : dayAnchorIso(shownMonth, 15),
+                )
+              }
             >
-              Showing top {ROW_CAP} of {entries.length} by this sort.
-            </div>
-          )}
-          <BulkBar
-            count={bulk.selected.size}
-            partition={bulk.partition}
-            onNudge={bulk.onNudge}
-            onCapture={bulk.onCapture}
-            onClear={bulk.onClear}
-            onDismissStart={bulk.onDismissStart}
-            pendingDismiss={bulk.pendingDismiss}
-            reasons={bulk.reasons}
-            onDismiss={bulk.onDismiss}
-            onCancelDismiss={bulk.onCancelDismiss}
-          />
+              This week
+            </Button>
+            <Button
+              icon={List}
+              data-testid="open-all"
+              onClick={() => onOpenScope('all')}
+            >
+              Show all
+            </Button>
+          </div>
         </Card>
       )}
     </section>
   );
 }
 
-// The drill / list toolbar: a select-all (capped) + the sort selector. Reused by
-// the show-all list (exported) so the two surfaces share the same control row.
+// The triage / list toolbar: a select-all (capped) + the sort selector. Reused by
+// the triage list (exported) so the calendar's consumers and the list share the
+// same control row. The 'date' sort is GONE (A-22 — the calendar owns "by date").
 export function DrillToolbar({
   count,
   sort,
@@ -591,7 +467,6 @@ export function DrillToolbar({
           <option value="recoverable">recoverable now</option>
           <option value="value">value</option>
           <option value="score">score</option>
-          <option value="date">stall date</option>
           <option value="recency">recency</option>
         </select>
       </label>
@@ -599,6 +474,6 @@ export function DrillToolbar({
   );
 }
 
-// The shared row cap (the show-all list reuses it so both surfaces agree).
+// The shared row cap (the triage + history lists reuse it so all surfaces agree).
 // eslint-disable-next-line react-refresh/only-export-components
 export { ROW_CAP };

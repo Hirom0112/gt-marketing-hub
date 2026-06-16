@@ -260,13 +260,14 @@ describe('EnrollmentWorkspace', () => {
     expect(urlsCalled().some((u) => u.includes('fam-a'))).toBe(false);
   });
 
-  it('switches the focused family from the show-all ranked list', async () => {
+  it('switches the focused family from the triage list', async () => {
     vi.stubGlobal('fetch', routedFetchMock());
     render(<EnrollmentWorkspace />);
 
-    // Reveal the ranked working set, then click the second family's row.
+    // Open the triage list (All scope by default), then click the second
+    // family's row.
     const toggle = await screen.findByTestId('enrollment-view-toggle');
-    fireEvent.click(within(toggle).getByRole('tab', { name: /show all/i }));
+    fireEvent.click(within(toggle).getByRole('tab', { name: /triage/i }));
 
     const secondRow = await screen.findByTestId(`drill-row-${FAM_TWO}`);
     fireEvent.click(secondRow);
@@ -276,6 +277,42 @@ describe('EnrollmentWorkspace', () => {
       expect(urls.some((u) => u.includes(`/families/${FAM_TWO}`))).toBe(true);
     });
     expect(urlsCalled().some((u) => u.includes('fam-a'))).toBe(false);
+  });
+
+  it('the calendar opens the triage list at DAY scope for a clicked chip', async () => {
+    vi.stubGlobal('fetch', routedFetchMock());
+    render(<EnrollmentWorkspace />);
+
+    // Click FAM_ONE's chip (stalled Jun 10) — the calendar opens the triage list
+    // at Day scope for Jun 10, which contains only FAM_ONE (FAM_TWO is Jun 18).
+    const chip = await screen.findByTestId(`calendar-chip-${FAM_ONE}`);
+    fireEvent.click(chip);
+
+    // The triage list is now showing, scoped to the day → only FAM_ONE.
+    expect(await screen.findByTestId('triage-list')).toBeInTheDocument();
+    expect(await screen.findByTestId(`drill-row-${FAM_ONE}`)).toBeInTheDocument();
+    expect(screen.queryByTestId(`drill-row-${FAM_TWO}`)).not.toBeInTheDocument();
+    // The Day scope pill is active.
+    expect(screen.getByTestId('scope-day')).toHaveAttribute(
+      'aria-pressed',
+      'true',
+    );
+  });
+
+  it('History is its own separate view (recovered/dismissed, read-only)', async () => {
+    vi.stubGlobal('fetch', routedFetchMock());
+    render(<EnrollmentWorkspace />);
+
+    const toggle = await screen.findByTestId('enrollment-view-toggle');
+    fireEvent.click(within(toggle).getByRole('tab', { name: /history/i }));
+
+    // History pulls its own scope and is read-only (no bulk dock / select-all).
+    expect(await screen.findByTestId('history-list')).toBeInTheDocument();
+    await waitFor(() => {
+      expect(urlsCalled().some((u) => /scope=history/.test(u))).toBe(true);
+    });
+    expect(screen.queryByTestId('triage-list')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('select-all')).not.toBeInTheDocument();
   });
 
   it('renders the notes timeline in the deal panel', async () => {
@@ -305,35 +342,35 @@ describe('EnrollmentWorkspace', () => {
     );
   });
 
-  it('defaults to the calendar and toggles to the show-all ranked list', async () => {
+  it('defaults to the calendar and toggles to the triage list', async () => {
     vi.stubGlobal('fetch', routedFetchMock());
     render(<EnrollmentWorkspace />);
 
-    // Calendar is the default primary "find": it's visible, the ranked list is
+    // Calendar is the default primary "find": it's visible, the triage list is
     // out of view.
     expect(await screen.findByTestId('enrollment-calendar')).toBeInTheDocument();
-    expect(screen.queryByTestId('show-all-list')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('triage-list')).not.toBeInTheDocument();
 
-    // One click on "Show all" swaps to the ranked working set.
+    // One click on "Triage" swaps to the scoped triage list.
     const toggle = screen.getByTestId('enrollment-view-toggle');
-    fireEvent.click(within(toggle).getByRole('tab', { name: /show all/i }));
+    fireEvent.click(within(toggle).getByRole('tab', { name: /triage/i }));
 
-    expect(await screen.findByTestId('show-all-list')).toBeInTheDocument();
+    expect(await screen.findByTestId('triage-list')).toBeInTheDocument();
     expect(screen.queryByTestId('enrollment-calendar')).not.toBeInTheDocument();
 
     // ...and back to the calendar (still one action).
     fireEvent.click(within(toggle).getByRole('tab', { name: /calendar/i }));
     expect(await screen.findByTestId('enrollment-calendar')).toBeInTheDocument();
-    expect(screen.queryByTestId('show-all-list')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('triage-list')).not.toBeInTheDocument();
   });
 
-  it('bulk-nudges a selection from show-all and renders the gate partition toast', async () => {
+  it('bulk-nudges a selection from the triage list and renders the gate partition toast', async () => {
     vi.stubGlobal('fetch', routedFetchMock());
     render(<EnrollmentWorkspace />);
 
-    // Open the show-all list, select a row, then bulk-nudge.
+    // Open the triage list, select a row, then bulk-nudge.
     const toggle = await screen.findByTestId('enrollment-view-toggle');
-    fireEvent.click(within(toggle).getByRole('tab', { name: /show all/i }));
+    fireEvent.click(within(toggle).getByRole('tab', { name: /triage/i }));
 
     const check = await screen.findByTestId(`drill-row-check-${FAM_ONE}`);
     fireEvent.click(check);
