@@ -13,7 +13,13 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 
-from app.api.deps import get_observability_log, get_params, get_repository
+from app.adapters.hubspot.crm_adapter import CRMAdapter, StudentSyncResult
+from app.api.deps import (
+    get_crm_adapter_dep,
+    get_observability_log,
+    get_params,
+    get_repository,
+)
 from app.api.schemas import (
     CalendarEntry,
     CalendarResponse,
@@ -63,6 +69,9 @@ ParamsDep = Annotated[Params, Depends(get_params)]
 # The NFR-6 audit spine — the recency source (A-14): last_contact_at is derived
 # from the logged approve decisions, never a stored column.
 LogDep = Annotated[ObservabilityLog, Depends(get_observability_log)]
+# The CRM boundary (INV-9) — simulated by default, live behind CRM_MODE=live; the
+# per-child transfer route pushes through this seam, never a direct HubSpot call.
+CRMAdapterDep = Annotated[CRMAdapter, Depends(get_crm_adapter_dep)]
 
 
 def _work_queue_family(joined: JoinedFamily, params: Params) -> WorkQueueFamily:
@@ -674,6 +683,29 @@ def get_students(
         total_students=len(ranked),
         total_value_at_risk=sum(g.value_at_risk for g in households),
     )
+
+
+@router.post("/students/{student_id}/seam", response_model=StudentSyncResult)
+def transfer_student_to_crm(
+    student_id: UUID,
+    repository: RepositoryDep,
+    crm: CRMAdapterDep,
+) -> StudentSyncResult:
+    """Transfer ONE child to its own CRM object via the adapter (A-24; INV-9).
+
+    One application per child ⇒ one per-child CRM object. The push goes through
+    the :class:`CRMAdapter` seam — **simulated by default** (records, never sends),
+    or a live per-child upsert behind the synthetic-write guard + INV-8 budget when
+    ``CRM_MODE=live``. Returns the :class:`StudentSyncResult` (``object_id`` set on
+    the live path). 404 if the student is unknown.
+    """
+    joined = next(
+        (js for js in repository.list_students() if js.student.student_id == student_id),
+        None,
+    )
+    if joined is None:
+        raise HTTPException(status_code=404, detail="student not found")
+    return crm.push_student(joined.student)
 
 
 # YYYY-MM with month 01..12 — anchors the calendar query param's 422 validation.

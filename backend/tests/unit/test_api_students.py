@@ -14,6 +14,9 @@ from pathlib import Path
 
 from fastapi.testclient import TestClient
 
+from app.adapters.hubspot.crm_adapter import SimulatedCRMAdapter
+from app.api import deps
+from app.api.deps import get_crm_adapter_dep
 from app.core.params import load_params
 from app.data.repository import DEFAULT_FAMILY_COUNT, DEFAULT_SEED, InMemoryFamilyRepository
 from app.main import app
@@ -90,3 +93,37 @@ def test_students_ranked_by_recoverable_now_desc() -> None:
     valid = {"stalled", "working", "recovered", "dismissed"}
     flat = [row for h in body["households"] for row in h["students"]]
     assert all(row["recovery_state"] in valid for row in flat)
+
+
+def test_transfer_student_to_crm_simulated_records_push() -> None:
+    """POST /students/{id}/seam pushes one child through the simulated CRM seam (INV-9)."""
+    fake = SimulatedCRMAdapter()
+    app.dependency_overrides[get_crm_adapter_dep] = lambda: fake
+    try:
+        # A real student id from the same fixed-seed store the app serves.
+        student = deps.get_repository().list_students()[0].student  # type: ignore[attr-defined]
+        resp = client.post(f"/students/{student.student_id}/seam")
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        assert body["simulated"] is True
+        assert body["student_id"] == str(student.student_id)
+        assert body["family_id"] == str(student.family_id)
+        # Recorded, never sent — the per-child audit log holds exactly this push.
+        assert len(fake.pushed_student_log) == 1
+        assert fake.pushed_student_log[0].student_id == student.student_id
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_transfer_unknown_student_404() -> None:
+    """An unknown student id is a clean 404, not a 500."""
+    from uuid import uuid4
+
+    fake = SimulatedCRMAdapter()
+    app.dependency_overrides[get_crm_adapter_dep] = lambda: fake
+    try:
+        resp = client.post(f"/students/{uuid4()}/seam")
+        assert resp.status_code == 404
+        assert not fake.pushed_student_log
+    finally:
+        app.dependency_overrides.clear()

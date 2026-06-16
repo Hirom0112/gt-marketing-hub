@@ -32,7 +32,7 @@ from uuid import UUID, uuid4
 from pydantic import BaseModel, ConfigDict
 
 from app.core.seam import MirrorState
-from app.data.models import FamilyRecord, Stage
+from app.data.models import FamilyRecord, Stage, Student
 
 
 class SyncResult(BaseModel):
@@ -60,6 +60,25 @@ class SyncResult(BaseModel):
     # recorder (which has no contact object), and optional so adding it is
     # non-breaking for existing SyncResult construction.
     contact_id: str | None = None
+
+
+class StudentSyncResult(BaseModel):
+    """Outcome of a ``push_student`` write — one child to its own CRM object (A-24).
+
+    The per-child analog of :class:`SyncResult`: one application per child maps to
+    one per-child CRM object. ``simulated`` is the v1 lock (INV-9); ``object_id``
+    is the live per-child HubSpot object id under ``CRM_MODE=live`` (None for the
+    simulated recorder). ``stage`` is the child's own funnel stage written to CRM.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    simulated: bool
+    recorded_id: str
+    student_id: UUID
+    family_id: UUID
+    stage: Stage
+    object_id: str | None = None
 
 
 class SendResult(BaseModel):
@@ -90,6 +109,15 @@ class CRMAdapter(ABC):
         """Push a family record to the CRM. Write-shaped (§7.1)."""
 
     @abstractmethod
+    def push_student(self, student: Student) -> StudentSyncResult:
+        """Push ONE child to its own per-child CRM object (A-24). Write-shaped.
+
+        One application per child ⇒ one per-child object. The sim records the
+        push (INV-9); a live impl upserts a per-child object behind the
+        synthetic-write guard + INV-8 budget.
+        """
+
+    @abstractmethod
     def read_mirror(self, family_id: UUID) -> MirrorState:
         """Read the CRM mirror for one family, for §4.7 seam derivation."""
 
@@ -112,6 +140,7 @@ class SimulatedCRMAdapter(CRMAdapter):
     def __init__(self) -> None:
         # Append-only audit logs (the "recorder"). No network client.
         self.pushed_log: list[SyncResult] = []
+        self.pushed_student_log: list[StudentSyncResult] = []  # A-24 per-child pushes.
         self.sent_log: list[SendResult] = []
         # The simulated HubSpot mirror, keyed by family — rebuilt from pushes.
         self._mirror: dict[UUID, tuple[Stage, datetime | None]] = {}
@@ -129,6 +158,18 @@ class SimulatedCRMAdapter(CRMAdapter):
             family_record.current_stage,
             family_record.updated_at,
         )
+        return result
+
+    def push_student(self, student: Student) -> StudentSyncResult:
+        """Record a per-child push (never sends) — the v1 simulated path (A-24)."""
+        result = StudentSyncResult(
+            simulated=True,
+            recorded_id=uuid4().hex,
+            student_id=student.student_id,
+            family_id=student.family_id,
+            stage=student.current_stage,
+        )
+        self.pushed_student_log.append(result)
         return result
 
     def read_mirror(self, family_id: UUID) -> MirrorState:
