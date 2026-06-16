@@ -11,7 +11,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Annotated, Literal
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 
 from app.adapters.hubspot.crm_adapter import CRMAdapter, StudentSyncResult
 from app.api.deps import (
@@ -23,6 +23,9 @@ from app.api.deps import (
 from app.api.schemas import (
     CalendarEntry,
     CalendarResponse,
+    DropOffBucketResponse,
+    DropOffHeatmapResponse,
+    DropOffResponse,
     FamilyDetailResponse,
     HouseholdGroup,
     PipelineResponse,
@@ -460,6 +463,64 @@ def get_family(
         enrollment_forms=joined.enrollment_forms,
         community_profile=joined.community_profile,
         deal_view=deal_view,
+    )
+
+
+@router.get(
+    "/families/{family_id}/drop-off",
+    response_model=DropOffResponse,
+    responses={204: {"description": "no apply_events telemetry for this family"}},
+)
+def get_family_drop_off(family_id: UUID, repository: RepositoryDep) -> Response | DropOffResponse:
+    """One family's last apply-flow position before exit (A-24; `apply_events`).
+
+    Surfaces the step → form → field telemetry the apply SPA writes ("stopped at
+    Enroll · Data Collection Consent · signature line"). Read-only, metadata only
+    — never a typed value/content or child key (INV-1/INV-6).
+
+    Degrades cleanly off the store seam: the drop-off telemetry lives only on the
+    live :class:`SupabaseFamilyRepository`; the in-memory v1 fallback (A-3) has no
+    ``drop_off_for_family``, so the route returns **204 No Content** rather than
+    500. A 204 is also returned when a telemetry-capable store has no events for
+    the family — so the response body is never nullable.
+    """
+    resolver = getattr(repository, "drop_off_for_family", None)
+    point = resolver(family_id) if callable(resolver) else None
+    if point is None:
+        return Response(status_code=status.HTTP_204_NO_CONTENT)
+    return DropOffResponse(
+        family_id=point.family_id,
+        step=point.step,
+        form_key=point.form_key,
+        field_key=point.field_key,
+        event_type=point.event_type,
+        occurred_at=point.occurred_at,
+    )
+
+
+@router.get("/drop-off/heatmap", response_model=DropOffHeatmapResponse)
+def get_drop_off_heatmap(repository: RepositoryDep) -> DropOffHeatmapResponse:
+    """The aggregate cohort drop-off heatmap (A-24; `apply_events`).
+
+    Exit counts per (step, form_key, field_key) cell — *where* the cohort freezes,
+    aggregate only, no family/child identity (INV-6). Read-only.
+
+    Degrades cleanly off the store seam (the same posture as
+    :func:`get_family_drop_off`): an in-memory store with no ``drop_off_heatmap``
+    yields ``buckets: []`` rather than a 500.
+    """
+    resolver = getattr(repository, "drop_off_heatmap", None)
+    buckets = resolver() if callable(resolver) else []
+    return DropOffHeatmapResponse(
+        buckets=[
+            DropOffBucketResponse(
+                step=b.step,
+                form_key=b.form_key,
+                field_key=b.field_key,
+                count=b.count,
+            )
+            for b in buckets
+        ]
     )
 
 

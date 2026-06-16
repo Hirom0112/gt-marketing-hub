@@ -73,6 +73,51 @@ class FamilyDetailResponse(BaseModel):
     deal_view: DealView
 
 
+class DropOffResponse(BaseModel):
+    """One family's last apply-flow position before exit (A-24; `GET …/drop-off`).
+
+    Step → form → field granularity from ``apply_events``: ``step`` ∈
+    {interest, apply, enroll, tuition}, ``form_key`` the sub-form id (e.g.
+    ``data_collection_consent``; ``None`` for step-level events), ``field_key``
+    the field within it. Metadata only — ``form_key`` is a STRUCTURAL form id,
+    never a typed value/content and never a child key (INV-1/INV-6/COPPA). The
+    route returns a 204 (no content) when the family emitted no events (or the
+    active store does not carry telemetry), so this body never has to be nullable.
+    """
+
+    family_id: UUID
+    step: str
+    form_key: str | None = None
+    field_key: str | None = None
+    event_type: str
+    occurred_at: str | None = None
+
+
+class DropOffBucketResponse(BaseModel):
+    """One cohort drop-off heatmap cell (A-24) — an exit count at a step/form/field.
+
+    Aggregate only: ``count`` families froze at this (``step``, ``form_key``,
+    ``field_key``) cell. No family/child identity — *where* the cohort freezes,
+    not *who*. ``form_key`` is a structural sub-form id (INV-1/INV-6).
+    """
+
+    step: str
+    form_key: str | None = None
+    field_key: str | None = None
+    count: int
+
+
+class DropOffHeatmapResponse(BaseModel):
+    """The cohort drop-off heatmap (A-24; `GET /drop-off/heatmap`).
+
+    A list of exit-count cells, ordered count-desc then step/form/field. Empty
+    (``buckets: []``) — never a 500 — when the active store carries no telemetry
+    (the in-memory v1 fallback).
+    """
+
+    buckets: list[DropOffBucketResponse]
+
+
 class WorkQueueItem(BaseModel):
     """One ranked work-queue row (FR-2.5; §6 `GET /work-queue`).
 

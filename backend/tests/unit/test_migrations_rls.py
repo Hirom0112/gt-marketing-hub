@@ -131,6 +131,6 @@ def test_0006_does_not_alter_rls_or_policies() -> None:
     assert not _CREATE_POLICY.search(sql), "0006 must not add a policy (inherits 0003's)"
     assert not _ENABLE_RLS.search(sql), "0006 must not re-toggle RLS (already enabled in 0003)"
     assert not re.search(r"\bDROP\s+POLICY\b", sql, re.IGNORECASE), "0006 must not drop a policy"
-    assert not re.search(
-        r"\bDISABLE\s+ROW\s+LEVEL\s+SECURITY\b", sql, re.IGNORECASE
-    ), "0006 must not disable RLS"
+    assert not re.search(r"\bDISABLE\s+ROW\s+LEVEL\s+SECURITY\b", sql, re.IGNORECASE), (
+        "0006 must not disable RLS"
+    )
