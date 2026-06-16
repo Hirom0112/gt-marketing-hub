@@ -139,6 +139,14 @@ posted_gallery:             # FR-3.4 — posted-content gallery: per-post value 
   # a stable hash backdates each post into the [1, posted_within_days] window before the import epoch,
   # giving the "most recent" sort a believable spread without a real publish-time feed.
   posted_within_days: 365           # widest backdate from the import epoch for the synthetic posted_at
+  # REAL-catalog path (the scoped INV-1 exception, ASSUMPTIONS): when GT_POSTED_CATALOG_ROOT is set,
+  # a post's value is a REAL engagement composite — like_weight*likes + view_weight*views +
+  # comment_weight*comments. A comment is a far stronger signal than a passive view, so the
+  # weights are asymmetric. Params-homed so the ranking formula is never a code literal (INV-11).
+  engagement:
+    like_weight: 1.0                # weight on likes (the baseline engagement unit)
+    view_weight: 0.1               # weight on views/plays (cheap, passive — discounted)
+    comment_weight: 3.0            # weight on comments (the strongest signal)
 
 creator_scoring:            # FR-3.8 / CONTENT_SPEC §8.1 — creator-discovery fit + authenticity
   fit:                      # sub-weights over [0,1] sub-factors; MUST sum to 1.0

@@ -412,21 +412,56 @@ class LibraryIngest(_StrictModel):
         return self
 
 
-class PostedGallery(_StrictModel):
-    """FR-3.4 posted-content gallery — synthetic per-post value + posted_at (INV-11).
+class PostedGalleryEngagement(_StrictModel):
+    """FR-3.4 posted-gallery — REAL-catalog engagement composite weights (INV-11).
 
-    No per-post engagement feed is tracked yet (a real feed is a future wire-up), so the
-    gallery's "most valuable" sort key is a DETERMINISTIC SYNTHETIC value: a stable hash of
-    the asset id mapped into ``[value_min, value_max]`` (the same placeholder posture as the
-    work-queue value spread — never a real metric). ``posted_within_days`` bounds the
-    matching deterministic synthetic ``posted_at`` (the import provenance ts is fixed, so a
-    stable hash backdates each post into the window before the import epoch for the "most
-    recent" sort). Every value is params-homed so none is a code literal.
+    When the gallery sources from the REAL posted catalog (the scoped INV-1 exception,
+    ASSUMPTIONS), a post's ``value`` is a REAL engagement composite:
+    ``like_weight·likes + view_weight·views + comment_weight·comments``. The three
+    weights live here so the formula is never a code literal — a drifted weight moves
+    the ranking and the test fails. Comments outweigh views (a comment is a far stronger
+    signal than a passive view), hence the asymmetric defaults.
+
+    This is DISTINCT from the synthetic ``value_min``/``value_max``/``posted_within_days``
+    band on :class:`PostedGallery`, which the LIBRARY-FALLBACK path keeps using when no
+    real catalog is configured.
+    """
+
+    like_weight: float
+    view_weight: float
+    comment_weight: float
+
+    @model_validator(mode="after")
+    def _weights_non_negative(self) -> PostedGalleryEngagement:
+        for name in ("like_weight", "view_weight", "comment_weight"):
+            value = getattr(self, name)
+            if value < 0:
+                raise ValueError(f"posted_gallery.engagement.{name} must be >= 0, got {value!r}")
+        return self
+
+
+class PostedGallery(_StrictModel):
+    """FR-3.4 posted-content gallery — value + posted_at tunables (INV-11).
+
+    Two value paths, both params-homed here:
+
+    * REAL-catalog path — ``value`` is a real engagement composite weighted by
+      :class:`PostedGalleryEngagement` (``engagement``). This is the live gallery when
+      ``GT_POSTED_CATALOG_ROOT`` is configured (the scoped INV-1 exception, ASSUMPTIONS).
+    * LIBRARY-FALLBACK path — no real catalog ⇒ the gallery falls back to the kept
+      library, whose "most valuable" sort key is a DETERMINISTIC SYNTHETIC value: a
+      stable hash of the asset id mapped into ``[value_min, value_max]`` (the same
+      placeholder posture as the work-queue value spread). ``posted_within_days`` bounds
+      the matching synthetic ``posted_at`` (a stable hash backdates each post into the
+      window before the fixed import epoch for the "most recent" sort).
+
+    Every value is params-homed so none is a code literal.
     """
 
     value_min: float
     value_max: float
     posted_within_days: int
+    engagement: PostedGalleryEngagement
 
     @model_validator(mode="after")
     def _band_and_window_valid(self) -> PostedGallery:

@@ -23,6 +23,7 @@ from app.core.params import (
     CreatorScoringFit,
     MessageSafetyGrounding,
     PostedGallery,
+    PostedGalleryEngagement,
     load_params,
 )
 
@@ -293,6 +294,28 @@ def test_params_loads_posted_gallery_block() -> None:
     assert params.posted_gallery.value_min == 1.0
     assert params.posted_gallery.value_max == 100.0
     assert params.posted_gallery.posted_within_days == 365
+
+
+def test_params_loads_posted_gallery_engagement_weights() -> None:
+    """The `posted_gallery.engagement` weights parse from the committed example (INV-11).
+
+    The REAL-catalog gallery path ranks posts by a real engagement composite
+    (likes/views/comments), so the three weights live here — the single home for the
+    catalog `value` formula, never a code literal. (Distinct from the synthetic
+    `value_min`/`value_max`/`posted_within_days` band above, which the library-fallback
+    path keeps using.)
+    """
+    params = load_params(EXAMPLE_PARAMS)
+
+    assert params.posted_gallery.engagement.like_weight == 1.0
+    assert params.posted_gallery.engagement.view_weight == 0.1
+    assert params.posted_gallery.engagement.comment_weight == 3.0
+
+
+def test_posted_gallery_engagement_weights_must_be_non_negative() -> None:
+    """A negative engagement weight fails to load (drift fails the build, INV-11)."""
+    with pytest.raises(ValidationError):
+        PostedGalleryEngagement(like_weight=-1.0, view_weight=0.1, comment_weight=3.0)
 
 
 def test_posted_gallery_band_must_be_ordered() -> None:
