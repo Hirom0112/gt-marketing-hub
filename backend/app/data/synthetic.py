@@ -74,6 +74,7 @@ from app.data.models import (
     SeamStatus,
     Stage,
     StallReason,
+    Student,
 )
 from app.marketing.geo import GIFTED_SCHOOL_COMPETITOR_SET
 from app.marketing.schemas.artifacts import (
@@ -286,6 +287,15 @@ class SyntheticDataset:
     app_forms: list[AppForm] = field(default_factory=list)
     enrollment_forms: list[EnrollmentForms] = field(default_factory=list)
     community_profiles: list[CommunityProfile] = field(default_factory=list)
+
+    # A-24 — per-child STUDENT rows: one Student (own funnel) per child, plus its
+    # own application + enrollment packet (one application per child). These live
+    # in SEPARATE lists so the four source tables above stay one-row-per-family
+    # (the determinism + count guards hold); the student pass draws from an
+    # ISOLATED RNG so the family stream stays byte-identical.
+    students: list[Student] = field(default_factory=list)
+    student_app_forms: list[AppForm] = field(default_factory=list)
+    student_enrollment_forms: list[EnrollmentForms] = field(default_factory=list)
 
 
 # --------------------------------------------------------------------------- #
@@ -544,6 +554,146 @@ def _build_profile(
     )
 
 
+# A-24 — salt that isolates the per-child Student pass from the family RNG stream,
+# so adding students leaves the family/lead/app/enrollment/profile output
+# byte-identical (same isolation discipline as the A-21 back-to-school cohort).
+_STUDENT_SEED_SALT = 0x5354_5544  # "STUD"
+
+# A-24 (reshape) — a child's funnel tracks its HOUSEHOLD's recovery situation
+# rather than being drawn independently. Drawing each child's stall at a flat
+# ~38% (regardless of the family) swamped the realistic cohort's ~140-active
+# shaping: it produced ~7,400 "active" children against ~118 active families, so
+# the per-child board read as 50x busier than the family board. Correlating the
+# child to its household restores believable proportions while keeping each
+# child's own funnel (A-24): a SETTLED household (no active stall — its
+# ``stalled_since`` is None) enrolled together, so its children all read
+# RECOVERED; an ACTIVE household's children are mostly still stalled, bar the
+# occasional sibling who already moved ahead.
+_SIBLING_AHEAD_PROB = 0.15  # an active household's child who has already recovered
+
+
+def _child_funnel(
+    rng: random.Random, *, recovered: bool
+) -> tuple[Stage, StallReason | None, datetime | None, FundingState]:
+    """Per-child (stage, stall_reason, stalled_since, funding_state) for a disposition.
+
+    ``recovered`` ⇒ a settled child: tuition stage, funded, no stall — the recovery
+    deriver reads RECOVERED via the §5.4 funding gate. Otherwise an ACTIVE stall: a
+    pre-tuition stage with a stall_reason whose stall-stage EQUALS the stage (via
+    :data:`_BTS_STALL_BY_STAGE`, so it never reads "advanced"), funding below the
+    first-installment floor, and a recent ``stalled_since`` — so the deriver reads
+    STALLED. All draws come from the supplied isolated ``rng`` (determinism holds).
+    """
+    if recovered:
+        return (Stage.TUITION, None, None, FundingState.FUNDED)
+    stage = rng.choice((Stage.INTEREST, Stage.APPLY, Stage.ENROLL))
+    stall_reason = rng.choice(_BTS_STALL_BY_STAGE[stage])
+    stalled_since = _timestamp(rng, max_days_ago=45)
+    funding_state = rng.choice(
+        (FundingState.NONE, FundingState.APPLIED, FundingState.AWARDED_SELFREPORT)
+    )
+    return (stage, stall_reason, stalled_since, funding_state)
+
+
+def _build_students_for_family(
+    rng: random.Random,
+    *,
+    family: FamilyRecord,
+    lead: LeadsNew,
+) -> tuple[list[Student], list[AppForm], list[EnrollmentForms]]:
+    """Build one Student per child for a household (A-24) — each its own funnel.
+
+    The user's flow starts **a new application per child**, so each of the lead's
+    ``num_children`` children gets its own Student with an independently-drawn
+    ``current_stage``/stall/``funding_state`` and its own application + enrollment
+    packet (keyed by ``student_id``). The household funding TIER is shared
+    (``family.funding_type`` — voucher vs self-pay is a household attribute); the
+    per-child funding STATE progresses per application. Child given names are
+    sampled WITHOUT replacement so each label
+    (``"{surname} household — {child} · Grade {g}"``) is distinct within the
+    household — which also disambiguates the many same-surname households on the
+    board. All draws come from the supplied (isolated) ``rng``.
+    """
+    students: list[Student] = []
+    app_forms: list[AppForm] = []
+    enrollment_forms: list[EnrollmentForms] = []
+
+    created = family.created_at or _EPOCH
+    surname = lead.synthetic_last_name
+    child_names = rng.sample(_GIVEN_NAMES, k=lead.num_children)
+    # The household's disposition: a family with no active stall (stalled_since is
+    # None) has settled (enrolled / moved on), so its children read recovered; an
+    # active stall's children are mostly still in the funnel (A-24 reshape).
+    household_settled = family.stalled_since is None
+
+    for child in child_names:
+        student_id = _uuid(rng)
+        app_form_id = _uuid(rng)
+        enrollment_form_id = _uuid(rng)
+
+        # Settled households recover every child together; an active household's
+        # child is stalled unless it is the occasional already-ahead sibling.
+        recovered = household_settled or rng.random() < _SIBLING_AHEAD_PROB
+        stage, stall_reason, stalled_since, funding_state = _child_funnel(rng, recovered=recovered)
+        grade = rng.choice(_GRADES)
+
+        students.append(
+            Student(
+                student_id=student_id,
+                family_id=family.family_id,
+                display_label=f"{surname} household — {child} · Grade {grade}",
+                synthetic_first_name=child,
+                grade=grade,
+                current_stage=stage,
+                stall_reason=stall_reason,
+                stalled_since=stalled_since,
+                funding_type=family.funding_type,
+                funding_state=funding_state,
+                app_form_id=app_form_id,
+                enrollment_form_id=enrollment_form_id,
+                crm_seam_status=_seam_status(rng),
+                work_queue_score=round(rng.uniform(0.0, 1.0), 4),
+                created_at=created,
+            )
+        )
+        app_forms.append(
+            _build_app_form(rng, app_form_id, family.family_id, stage, created).model_copy(
+                update={"student_id": student_id}
+            )
+        )
+        enrollment_forms.append(
+            _build_enrollment(rng, enrollment_form_id, family.family_id, stage, created).model_copy(
+                update={"student_id": student_id}
+            )
+        )
+
+    return students, app_forms, enrollment_forms
+
+
+def _populate_students(ds: SyntheticDataset, *, seed: int) -> None:
+    """Append one Student per child for every family already in ``ds`` (A-24).
+
+    A second, ISOLATED pass shared by every cohort builder (default / realistic /
+    back-to-school): draws from ``random.Random(seed ^ _STUDENT_SEED_SALT)`` so it
+    leaves the family/lead/app/enrollment/profile stream the builder produced
+    byte-identical (the determinism + one-row-per-family guards hold), and writes
+    the per-child rows into the dataset's separate ``students`` /
+    ``student_app_forms`` / ``student_enrollment_forms`` lists. Mutates ``ds``.
+    """
+    student_rng = random.Random(seed ^ _STUDENT_SEED_SALT)
+    leads_by_family = {lead.family_id: lead for lead in ds.leads}
+    for family in ds.families:
+        lead = leads_by_family.get(family.family_id)
+        if lead is None:
+            continue
+        students, app_forms, enrollment_forms = _build_students_for_family(
+            student_rng, family=family, lead=lead
+        )
+        ds.students.extend(students)
+        ds.student_app_forms.extend(app_forms)
+        ds.student_enrollment_forms.extend(enrollment_forms)
+
+
 def generate(n: int, seed: int = 0) -> SyntheticDataset:
     """Generate ``n`` synthetic families joined to their four source rows.
 
@@ -572,6 +722,8 @@ def generate(n: int, seed: int = 0) -> SyntheticDataset:
         ds.app_forms.append(app_form)
         ds.enrollment_forms.append(enrollment)
         ds.community_profiles.append(profile)
+
+    _populate_students(ds, seed=seed)
     return ds
 
 
@@ -764,6 +916,7 @@ def generate_back_to_school(
         ds.app_forms.append(app_form)
         ds.enrollment_forms.append(enrollment)
         ds.community_profiles.append(profile)
+    _populate_students(ds, seed=seed)  # A-24 — per-child rows for the volume cohort.
     return ds
 
 
@@ -1087,6 +1240,7 @@ def generate_realistic(*, params: Realistic) -> RealisticCohort:
         ds.enrollment_forms.append(enrollment)
         ds.community_profiles.append(profile)
 
+    _populate_students(ds, seed=params.seed)  # A-24 — per-child rows for the demo cohort.
     return RealisticCohort(dataset=ds, dismissed_family_ids=dismissed_family_ids)
 
 

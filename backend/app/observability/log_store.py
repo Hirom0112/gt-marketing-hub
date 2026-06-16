@@ -83,6 +83,9 @@ class ProposalRecord(BaseModel):
 
     proposal_id: UUID
     family_id: UUID | None = None
+    # The child this proposal targets, when the flow is per-student (A-24). None
+    # for family-level proposals; keeps per-child contact distinct from a sibling's.
+    student_id: UUID | None = None
     content_ref: UUID | None = None
     flow: str
     schema_version: str
@@ -138,6 +141,10 @@ class DismissRecord(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     family_id: UUID
+    # The child set aside, when the dismiss is per-student (A-24). None for a
+    # family-level dismiss; a per-child dismiss never leaks to a sibling or the
+    # family-level query (see :meth:`ObservabilityLog.is_dismissed`).
+    student_id: UUID | None = None
     human: str
     reason: str = Field(min_length=1)
     created_at: datetime
@@ -180,10 +187,15 @@ class ObservabilityLog(ABC):
         schema_version: str,
         payload: dict[str, object],
         family_id: UUID | None = None,
+        student_id: UUID | None = None,
         content_ref: UUID | None = None,
         created_at: datetime | None = None,
     ) -> ProposalRecord:
-        """Persist an AI proposal BEFORE it reaches a human (ARCH §10). Append-only."""
+        """Persist an AI proposal BEFORE it reaches a human (ARCH §10). Append-only.
+
+        ``student_id`` keys the proposal to one child for per-student flows (A-24);
+        omit it for family-level proposals.
+        """
         raise NotImplementedError
 
     @abstractmethod
@@ -239,13 +251,15 @@ class ObservabilityLog(ABC):
         self,
         *,
         family_id: UUID,
+        student_id: UUID | None = None,
         human: str,
         reason: str,
         created_at: datetime | None = None,
     ) -> DismissRecord:
-        """Append a recovery-dismiss event for a family (A-19). Append-only.
+        """Append a recovery-dismiss event (A-19/A-24). Append-only.
 
-        Raises ``ValueError`` if ``reason`` is blank — a dismiss must say why.
+        ``student_id`` sets aside ONE child (A-24); omit it for a family-level
+        dismiss. Raises ``ValueError`` if ``reason`` is blank — a dismiss must say why.
         """
         raise NotImplementedError
 
@@ -255,11 +269,21 @@ class ObservabilityLog(ABC):
         raise NotImplementedError
 
     @abstractmethod
-    def is_dismissed(self, family_id: UUID, *, restalled_after: datetime | None = None) -> bool:
-        """Whether the family's latest dismiss still holds (A-19).
+    def is_dismissed(
+        self,
+        family_id: UUID,
+        *,
+        student_id: UUID | None = None,
+        restalled_after: datetime | None = None,
+    ) -> bool:
+        """Whether the latest matching dismiss still holds (A-19/A-24).
 
-        True when a dismiss event exists for the family AND no later re-stall
-        supersedes it. ``restalled_after`` is the family's current ``stall_date``
+        Matches dismiss events on BOTH ``family_id`` and ``student_id`` — a
+        family-level query (``student_id=None``) matches only family-level
+        dismisses, and a per-child query matches only that child's, so a per-child
+        dismiss never leaks to a sibling or the family (A-24). True when such a
+        dismiss exists AND no later re-stall supersedes it. ``restalled_after`` is
+        the current ``stall_date``
         (the API layer's derived re-stall instant): if it is strictly later than
         the latest dismiss, the family has re-stalled and is active again ⇒ False.
         """
@@ -292,6 +316,7 @@ class InMemoryObservabilityLog(ObservabilityLog):
         schema_version: str,
         payload: dict[str, object],
         family_id: UUID | None = None,
+        student_id: UUID | None = None,
         content_ref: UUID | None = None,
         created_at: datetime | None = None,
     ) -> ProposalRecord:
@@ -302,6 +327,7 @@ class InMemoryObservabilityLog(ObservabilityLog):
         record = ProposalRecord(
             proposal_id=proposal_id,
             family_id=family_id,
+            student_id=student_id,
             content_ref=content_ref,
             flow=flow,
             schema_version=schema_version,
@@ -371,6 +397,7 @@ class InMemoryObservabilityLog(ObservabilityLog):
         self,
         *,
         family_id: UUID,
+        student_id: UUID | None = None,
         human: str,
         reason: str,
         created_at: datetime | None = None,
@@ -381,6 +408,7 @@ class InMemoryObservabilityLog(ObservabilityLog):
             raise ValueError("dismiss requires a non-blank reason (A-19)")
         record = DismissRecord(
             family_id=family_id,
+            student_id=student_id,
             human=human,
             reason=reason,
             created_at=created_at if created_at is not None else _now(),
@@ -391,10 +419,18 @@ class InMemoryObservabilityLog(ObservabilityLog):
     def list_dismissals(self) -> list[DismissRecord]:
         return list(self._dismissals)
 
-    def is_dismissed(self, family_id: UUID, *, restalled_after: datetime | None = None) -> bool:
+    def is_dismissed(
+        self,
+        family_id: UUID,
+        *,
+        student_id: UUID | None = None,
+        restalled_after: datetime | None = None,
+    ) -> bool:
         latest: datetime | None = None
         for record in self._dismissals:
-            if record.family_id != family_id:
+            # Match on BOTH keys so a per-child dismiss never leaks to a sibling
+            # or the family-level query, and vice-versa (A-24).
+            if record.family_id != family_id or record.student_id != student_id:
                 continue
             if latest is None or record.created_at > latest:
                 latest = record.created_at

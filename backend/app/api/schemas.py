@@ -10,7 +10,7 @@ from __future__ import annotations
 from datetime import datetime
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from app.ai.schemas.brand import LibraryAsset
 from app.ai.schemas.close_tips import CloseTipsProposal
@@ -25,10 +25,12 @@ from app.data.models import (
     CommunityProfile,
     EnrollmentForms,
     FamilyRecord,
+    FundingState,
     FundingType,
     LeadsNew,
     SeamStatus,
     Stage,
+    StallReason,
 )
 from app.observability.log_store import (
     DecisionAction,
@@ -126,6 +128,109 @@ class WorkQueueItem(BaseModel):
     dismiss_reason: str | None = None
     dismissed_by: str | None = None
     dismissed_at: datetime | None = None
+
+
+class StudentRow(BaseModel):
+    """One ranked per-child row on the board (A-24; `GET /students`).
+
+    Each child runs its own funnel (one application per child), so the board
+    ranks STUDENTS. The row carries the child's own funnel state + score and its
+    parent household identity (``family_id`` + ``household_name``) so the UI can
+    group rows by household. ``value`` is one per-child tuition; the household's
+    $-at-risk is the sum of its still-recoverable students. Computed by the pure
+    :mod:`app.core.work_queue` scorer + the recovery deriver — never an LLM (INV-2).
+    """
+
+    student_id: UUID
+    family_id: UUID  # the household, for grouping rows on the board.
+    household_name: str  # the parent FamilyRecord.display_name.
+    display_label: str  # the distinct per-student label ("Rivera household — Alex · Grade 3").
+    synthetic_first_name: str
+    grade: str
+
+    current_stage: Stage
+    funding_type: FundingType | None = None
+    funding_state: FundingState
+    stall_reason: StallReason | None = None
+
+    # Pure scorer outputs (INV-2). ``value`` is one per-child tuition (A-24 — no
+    # num_children multiplier); ``recoverable_now`` is the dollars-weighted key the
+    # board orders students by; both terms also surfaced so the row shows WHY.
+    score: float
+    recoverability: float
+    value: float
+    recoverable_now: float
+    freshness: float
+
+    # Per-child derived recovery state (A-24). {stalled, working, recovered,
+    # dismissed}: recovered (its own funnel moved), working (a per-child approved
+    # outbound exists), dismissed (a per-child dismiss holds — POST /students/{id}/
+    # dismiss), else stalled. Resolved per (family_id, student_id) so it never
+    # reflects a sibling's or a family-level event.
+    recovery_state: RecoveryState
+
+
+class HouseholdGroup(BaseModel):
+    """A household's students grouped together for the board (A-24; `GET /students`).
+
+    Groups a family's :class:`StudentRow`s under the household, with the
+    household's aggregate ``value_at_risk`` = the SUM of its students' ``value``
+    over the ones still active (``recovery_state ∈ {stalled, working}``) — the
+    per-child replacement for the old all-or-nothing family value (A-24).
+    """
+
+    family_id: UUID
+    household_name: str
+    value_at_risk: float
+    students: list[StudentRow]
+
+
+class StudentBoardResponse(BaseModel):
+    """The per-child board (A-24; `GET /students`) — households + roll-up totals.
+
+    ``households`` are ordered by their top student's rank (the most-recoverable
+    child surfaces its household first); ``students`` within a household are
+    ranked too. ``total_value_at_risk`` sums every household's ``value_at_risk``;
+    ``total_students`` is the row count — the situation bar reads these.
+    """
+
+    households: list[HouseholdGroup]
+    total_students: int
+    total_value_at_risk: float
+
+
+class StudentDismissRequest(BaseModel):
+    """`POST /students/{id}/dismiss` body (A-24) — the per-child dismiss reason.
+
+    A per-child dismiss is the only MANUAL recovery removal of one child (A-19:
+    recovered is DETECTED, never a button). ``reason`` is REQUIRED — a blank
+    reason is rejected 422 before any event is logged, so the audit always records
+    *why* a child was set aside (INV-2).
+    """
+
+    reason: str = Field(min_length=1)
+
+    @field_validator("reason")
+    @classmethod
+    def _reason_not_blank(cls, value: str) -> str:
+        """Reject a whitespace-only reason 422 (the audit needs a real why; A-19)."""
+        if not value.strip():
+            raise ValueError("dismiss reason must not be blank")
+        return value
+
+
+class StudentDismissResponse(BaseModel):
+    """`POST /students/{id}/dismiss` result (A-24) — the child's new recovery state.
+
+    Echoes the dismissed child's ids and its recomputed ``recovery_state`` (now
+    ``dismissed``, the highest-precedence state) so the UI can drop the row from
+    the active board without a re-fetch.
+    """
+
+    student_id: UUID
+    family_id: UUID
+    recovery_state: RecoveryState
+    reason: str
 
 
 class CalendarEntry(BaseModel):

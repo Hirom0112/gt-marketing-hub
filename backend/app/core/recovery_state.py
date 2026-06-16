@@ -35,7 +35,7 @@ from enum import StrEnum
 from typing import Literal
 
 from app.core.params import Params
-from app.data.models import FundingState, Stage
+from app.data.models import EnrollmentForms, FundingState, Stage
 from app.data.repository import JoinedFamily
 
 # §4.8 funnel order — index comparison decides "advanced past the stall stage".
@@ -172,6 +172,49 @@ def derive_recovery_state(
     # RECOVERED iff any §5.x signal fired; `recovered_outcome` is the single source
     # of truth for that OR (and exposes WHICH one for the history surface).
     if recovered_outcome(joined, stall_stage=stall_stage) is not None:
+        return RecoveryState.RECOVERED
+
+    if last_contact_at is not None:
+        return RecoveryState.WORKING
+
+    return RecoveryState.STALLED
+
+
+def derive_student_recovery_state(
+    *,
+    current_stage: Stage,
+    funding_state: FundingState,
+    enrollment_forms: EnrollmentForms | None,
+    stall_stage: Stage,
+    last_contact_at: datetime | None = None,
+    dismissed: bool = False,
+) -> RecoveryState:
+    """Per-CHILD recovery state (A-24) — same precedence as the family deriver.
+
+    Each child runs its own funnel, so recovery is detected on the STUDENT's own
+    signals: ``current_stage`` advanced past its stall stage, its six-form packet
+    cleared, or its ``funding_state`` reached the §5.4 first-installment gate.
+    Pure and total — reuses the same predicates as :func:`derive_recovery_state`.
+
+    ``last_contact_at`` and ``dismissed`` are the per-child audit facts the API
+    layer resolves keyed to (family_id, student_id) — a student-keyed approved
+    outbound (A-14) and a per-child dismiss event (A-24) — and passes IN, exactly
+    as the family deriver takes them. They default off so a caller with no log
+    facts still gets the funnel-only ``RECOVERED``/``STALLED`` split.
+    """
+    if dismissed:
+        return RecoveryState.DISMISSED
+
+    forms_cleared = (
+        enrollment_forms is not None
+        and enrollment_forms.forms_total > 0
+        and enrollment_forms.forms_signed >= enrollment_forms.forms_total
+    )
+    if (
+        _stage_advanced(current_stage, stall_stage)
+        or forms_cleared
+        or _funding_recovered(funding_state)
+    ):
         return RecoveryState.RECOVERED
 
     if last_contact_at is not None:

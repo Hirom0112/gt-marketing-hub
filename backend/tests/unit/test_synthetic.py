@@ -23,7 +23,10 @@ from app.data.models import (
     CommunityProfile,
     EnrollmentForms,
     FamilyRecord,
+    FundingState,
     LeadsNew,
+    Stage,
+    Student,
 )
 from app.data.synthetic import (
     RealisticCohort,
@@ -89,6 +92,92 @@ def test_generates_n_families_with_joined_source_rows() -> None:
     # A different seed ⇒ a different dataset (the seed actually drives generation).
     ds_other: SyntheticDataset = generate(n=50, seed=9999)
     assert [f.model_dump() for f in ds.families] != [f.model_dump() for f in ds_other.families]
+
+
+# ---------------------------------------------------------------------------
+# A-24 — per-child Student rows: one application per child, each its own funnel.
+# ---------------------------------------------------------------------------
+
+
+def test_generate_produces_per_child_students() -> None:
+    """Each family yields num_children Students, each its own funnel + distinct label."""
+    ds: SyntheticDataset = generate(n=40, seed=1234)
+    family_ids = {fam.family_id for fam in ds.families}
+    children_by_family = {lead.family_id: lead.num_children for lead in ds.leads}
+
+    assert ds.students, "expected per-child Student rows (A-24)"
+    assert all(isinstance(s, Student) for s in ds.students)
+
+    # Exactly num_children students per family — one application per child.
+    assert len(ds.students) == sum(children_by_family.values())
+    students_by_family: dict[object, list[Student]] = {}
+    for s in ds.students:
+        assert s.family_id in family_ids
+        students_by_family.setdefault(s.family_id, []).append(s)
+    for fid, kids in students_by_family.items():
+        assert len(kids) == children_by_family[fid]
+        # Distinct per-student labels within a household (also de-dupes the board).
+        assert len({k.display_label for k in kids}) == len(kids)
+
+    # Each student owns a full per-child funnel + its own application/enrollment.
+    for s in ds.students:
+        assert isinstance(s.current_stage, Stage)
+        assert s.app_form_id is not None
+        assert s.enrollment_form_id is not None
+
+    # One application + one enrollment packet PER STUDENT, keyed by student_id.
+    student_ids = {s.student_id for s in ds.students}
+    assert len(ds.student_app_forms) == len(ds.students)
+    assert len(ds.student_enrollment_forms) == len(ds.students)
+    assert {a.student_id for a in ds.student_app_forms} == student_ids
+    assert {e.student_id for e in ds.student_enrollment_forms} == student_ids
+
+
+def test_students_are_deterministic_and_do_not_perturb_family_stream() -> None:
+    """Students are reproducible AND leave the family stream byte-identical (A-24)."""
+    a = generate(n=24, seed=42)
+    b = generate(n=24, seed=42)
+    # Per-child pass is deterministic.
+    assert [s.model_dump() for s in a.students] == [s.model_dump() for s in b.students]
+    # The four source tables stay one-row-per-family (the existing guard holds).
+    assert len(a.app_forms) == 24
+    assert len(a.enrollment_forms) == 24
+
+
+def test_students_track_their_household_recovery_disposition() -> None:
+    """A child's funnel correlates with its household (A-24 reshape), not flat-random.
+
+    A settled household (no active stall — ``stalled_since is None``) enrolled
+    together, so EVERY one of its children is recovered-shaped (tuition stage,
+    funded, no stall). An active household's children are MOSTLY still stalled,
+    with only the occasional already-ahead sibling — which keeps the per-child
+    active board proportional to the active families (it was ~50x larger when each
+    child's stall was drawn independently).
+    """
+    ds = generate(n=200, seed=11)
+    family_by_id = {f.family_id: f for f in ds.families}
+    settled_kids: list[Student] = []
+    active_kids: list[Student] = []
+    for student in ds.students:
+        family = family_by_id[student.family_id]
+        (settled_kids if family.stalled_since is None else active_kids).append(student)
+
+    # Both dispositions are present in a 200-family draw.
+    assert settled_kids and active_kids
+
+    # Settled households recover every child: tuition stage, funded, no stall.
+    assert all(
+        s.current_stage is Stage.TUITION
+        and s.funding_state is FundingState.FUNDED
+        and s.stalled_since is None
+        for s in settled_kids
+    )
+
+    # Active households are mostly still stalled (a minority sibling may be ahead).
+    stalled = [s for s in active_kids if s.stalled_since is not None]
+    assert len(stalled) >= 0.6 * len(active_kids)
+    # Every still-stalled child sits in the pre-tuition funnel with a stall reason.
+    assert all(s.current_stage is not Stage.TUITION and s.stall_reason is not None for s in stalled)
 
 
 def test_no_pii_shaped_values_in_output() -> None:
@@ -293,7 +382,7 @@ from pathlib import Path  # noqa: E402
 
 from app.core.params import Realistic, load_params  # noqa: E402
 from app.core.recovery_state import RecoveryState, derive_recovery_state  # noqa: E402
-from app.data.models import FundingState, Stage, StallReason  # noqa: E402
+from app.data.models import StallReason  # noqa: E402
 from app.data.repository import InMemoryFamilyRepository  # noqa: E402
 
 _EXAMPLE_PARAMS = Path(__file__).resolve().parents[3] / "params" / "params.example.yaml"

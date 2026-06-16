@@ -135,6 +135,62 @@ class FamilyRecord(BaseModel):
 
 
 # ---------------------------------------------------------------------------
+# §4.1b student — one child's per-child funnel (A-24).
+# ---------------------------------------------------------------------------
+
+
+class Student(BaseModel):
+    """One CHILD's own full funnel within a household (A-24; user-directed).
+
+    The user's flow starts **a new application per child**, so each child runs
+    its own funnel (application → enrollment → tuition → funding) rather than the
+    family sharing one. A :class:`Student` therefore carries the per-child funnel
+    state that previously lived (collapsed) on :class:`FamilyRecord`:
+    ``current_stage``, ``stall_reason``/``stalled_since``, ``funding_type``/
+    ``funding_state``, its own ``app_form_id``/``enrollment_form_id``, seam
+    status, and the derived ``work_queue_score``. ``FamilyRecord`` remains the
+    **household** that groups students (attribution, contact, region, seam root).
+
+    ``display_label`` is a distinct, human label per student (e.g.
+    ``"Rivera household — Alex · Grade 3"``); it also disambiguates the many
+    same-surname households the generator produces. Child identity fields are
+    synthetic-named (NFR-1 / INV-1).
+
+    Derived fields (``funding_state``, ``crm_seam_status``, ``work_queue_score``)
+    are owned by the deterministic core (§5.1/§5.4/§4.7), never an LLM (§1.1);
+    they round-trip here, their derivation lives in the scorer / funding gate.
+    """
+
+    model_config = ConfigDict(use_enum_values=False)
+
+    student_id: UUID
+    family_id: UUID  # the household this child belongs to (FamilyRecord.family_id).
+
+    display_label: str
+    synthetic_first_name: str
+    grade: str
+
+    # Per-child funnel — each student its own position/stall (A-24).
+    current_stage: Stage
+    stall_reason: StallReason | None = None
+    stalled_since: datetime | None = None
+
+    funding_type: FundingType | None = None
+    funding_state: FundingState = FundingState.NONE  # DERIVED (§5.4).
+
+    # One application + one enrollment packet PER CHILD (A-24).
+    app_form_id: UUID | None = None
+    enrollment_form_id: UUID | None = None
+
+    crm_seam_status: SeamStatus = SeamStatus.UNSYNCED  # DERIVED (§4.7).
+    crm_synced_at: datetime | None = None
+    work_queue_score: float | None = None  # DERIVED by §5.1 scorer.
+
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
+
+
+# ---------------------------------------------------------------------------
 # §4.2 leads_new — top-of-funnel lead (synthetic, shaped like GT's real table).
 # ---------------------------------------------------------------------------
 
@@ -180,6 +236,9 @@ class AppForm(BaseModel):
 
     app_form_id: UUID
     family_id: UUID
+    # A-24: one application PER CHILD. `student_id` keys the app to its student;
+    # optional so pre-A-24 family-only fixtures/rows stay valid (non-breaking).
+    student_id: UUID | None = None
     submitted_at: datetime | None = None  # null = started, not submitted (a stall).
     completion_pct: float | None = None  # 0–100, deterministic.
     map_score: float | None = None  # academic signal surfaced in deal view (FR-2.2).
@@ -202,6 +261,8 @@ class EnrollmentForms(BaseModel):
 
     enrollment_form_id: UUID
     family_id: UUID
+    # A-24: one enrollment packet PER CHILD. Optional so pre-A-24 fixtures stay valid.
+    student_id: UUID | None = None
     forms_total: int = 6  # the six-form gauntlet (§4.4 default).
     forms_signed: int = 0  # 0–6; forms_signed < forms_total ⇒ enroll-stage stall.
     forms_status: list[dict[str, object]] = Field(default_factory=list)

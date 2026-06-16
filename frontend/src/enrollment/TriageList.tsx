@@ -3,12 +3,7 @@ import { apiBaseUrl } from '../config';
 import { Card, Button } from '../ui';
 import DrillRow, { DrillRowHead } from './DrillRow';
 import BulkBar from './BulkBar';
-import {
-  ROW_CAP,
-  type CalendarEntry,
-  type SortKey,
-  sortEntries,
-} from './EnrollmentCalendar';
+import { type CalendarEntry, type SortKey, sortEntries } from './EnrollmentCalendar';
 import { fmtAge, fmtDay, fmtKids, fmtPct, fmtUSD, fundingLabel } from './format';
 import type { DrillBulk } from './EnrollmentCalendar';
 
@@ -147,6 +142,22 @@ function fmtMs(ms: number): string {
   return fmtDay(new Date(ms).toISOString());
 }
 
+// Pagination (S13): the worklist pages at PAGE_SIZE rows rather than dumping the
+// whole ranked set (the 'all' scope can be 200+). A compact numeric pager sits
+// under the rows; small lists (Day/Week) fit one page and show no pager.
+const PAGE_SIZE = 15;
+
+// The windowed run of page indices to show around `current` (so a 16-page list
+// shows ~`span` buttons, not all 16). Always contiguous and within [0, total).
+function pageWindow(current: number, total: number, span = 5): number[] {
+  if (total <= span) return Array.from({ length: total }, (_, i) => i);
+  const half = Math.floor(span / 2);
+  let start = Math.max(0, current - half);
+  const end = Math.min(total, start + span);
+  start = Math.max(0, end - span);
+  return Array.from({ length: end - start }, (_, i) => start + i);
+}
+
 const RECENCY_FACETS: readonly { key: Recency; label: string }[] = [
   { key: 'all', label: 'all' },
   { key: 'overdue', label: 'overdue' },
@@ -167,6 +178,7 @@ export default function TriageList({
 }: TriageListProps): JSX.Element {
   const [state, setState] = useState<LoadState>({ status: 'loading' });
   const [recency, setRecency] = useState<Recency>('all');
+  const [page, setPage] = useState(0);
 
   useEffect(() => {
     let cancelled = false;
@@ -228,7 +240,19 @@ export default function TriageList({
     () => sortEntries(scoped.map(toEntry), effectiveSort),
     [scoped, effectiveSort],
   );
-  const shown = useMemo(() => ranked.slice(0, ROW_CAP), [ranked]);
+
+  // Pagination over the ranked set. Page resets to the first whenever the list
+  // it pages over changes (scope / recency / sort / a reload), so you never land
+  // on a stale out-of-range page. `clampedPage` guards a shrink mid-view.
+  const pageCount = Math.max(1, Math.ceil(ranked.length / PAGE_SIZE));
+  const clampedPage = Math.min(page, pageCount - 1);
+  useEffect(() => {
+    setPage(0);
+  }, [scope, recency, effectiveSort, allItems]);
+  const shown = useMemo(
+    () => ranked.slice(clampedPage * PAGE_SIZE, clampedPage * PAGE_SIZE + PAGE_SIZE),
+    [ranked, clampedPage],
+  );
 
   // Tier-1 readout (A-23): the aggregate $ AT RISK = Σ face value (children ×
   // per-child tuition) — the honest total exposure, not a discounted composite.
@@ -448,15 +472,62 @@ export default function TriageList({
                 onSelect={onSelectFamily}
               />
             ))}
-        {ranked.length > ROW_CAP && (
-          <div
+        {pageCount > 1 && (
+          <nav
             className="lab"
-            data-testid="triage-cap-footer"
-            style={{ padding: 'var(--s-3) var(--s-4)', color: 'var(--muted)' }}
+            data-testid="triage-pager"
+            aria-label="Worklist pages"
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              flexWrap: 'wrap',
+              gap: '4px',
+              padding: 'var(--s-2) var(--s-4)',
+              color: 'var(--muted)',
+              fontSize: 11,
+            }}
           >
-            Showing the top {ROW_CAP} of {ranked.length} by {effectiveSort} — batch
-            the top of the wave first.
-          </div>
+            <button
+              type="button"
+              className="pager-btn"
+              data-testid="triage-page-prev"
+              aria-label="Previous page"
+              disabled={clampedPage === 0}
+              onClick={() => setPage(clampedPage - 1)}
+            >
+              ‹
+            </button>
+            {pageWindow(clampedPage, pageCount).map((p) => (
+              <button
+                key={p}
+                type="button"
+                className="pager-btn"
+                data-testid={`triage-page-${p}`}
+                aria-current={p === clampedPage ? 'page' : undefined}
+                aria-label={`Page ${p + 1}`}
+                onClick={() => setPage(p)}
+              >
+                {p + 1}
+              </button>
+            ))}
+            <button
+              type="button"
+              className="pager-btn"
+              data-testid="triage-page-next"
+              aria-label="Next page"
+              disabled={clampedPage >= pageCount - 1}
+              onClick={() => setPage(clampedPage + 1)}
+            >
+              ›
+            </button>
+            <span
+              data-testid="triage-pager-count"
+              style={{ marginLeft: 'var(--s-2)' }}
+            >
+              {ranked.length} stalled · 15/page
+            </span>
+          </nav>
         )}
         <BulkBar
           count={bulk.selected.size}

@@ -18,7 +18,6 @@ from datetime import UTC, datetime
 from uuid import UUID
 
 from app.core.contact_log import last_contact_at
-
 from app.observability.log_store import DecisionAction, InMemoryObservabilityLog
 
 # Stable UUIDs so the aggregation is fully deterministic (no uuid4 in the path).
@@ -111,3 +110,37 @@ def test_absent_family_has_no_contact() -> None:
     """A family with no proposals at all ⇒ None (clean miss, not a raise)."""
     log = _seed_log()
     assert last_contact_at(log, FAMILY_ABSENT) is None
+
+
+# A per-child contact is keyed by (family_id, student_id) (A-24): each child runs
+# its own funnel, so an outbound approved for one child is that child's contact —
+# not its sibling's, and not a family-level contact.
+STUDENT_A = UUID("00000000-0000-0000-0000-0000000000a1")
+STUDENT_B = UUID("00000000-0000-0000-0000-0000000000a2")
+PID_SA = UUID("00000000-0000-0000-0000-0000000000b1")
+
+
+def test_last_contact_at_is_student_scoped_when_student_id_given() -> None:
+    """A student-keyed approved outbound is that child's contact, not the family's.
+
+    ``last_contact_at(log, family_id, student_id=that)`` returns the child's
+    approve instant; the family-level query (student_id=None) does NOT match a
+    student-keyed proposal, and a sibling child has no contact.
+    """
+    log = InMemoryObservabilityLog()
+    log.log_proposal(
+        proposal_id=PID_SA,
+        family_id=FAMILY_CONTACTED,
+        student_id=STUDENT_A,
+        flow=DRAFT_FLOW,
+        schema_version="1",
+        payload={},
+    )
+    log.log_decision(
+        proposal_id=PID_SA, human="director", action=DecisionAction.APPROVE, created_at=LATER
+    )
+
+    assert last_contact_at(log, FAMILY_CONTACTED, student_id=STUDENT_A) == LATER
+    assert last_contact_at(log, FAMILY_CONTACTED, student_id=STUDENT_B) is None
+    # The family-level query does not pick up a student-keyed contact.
+    assert last_contact_at(log, FAMILY_CONTACTED) is None

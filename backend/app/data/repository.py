@@ -34,6 +34,7 @@ from app.data.models import (
     LeadsNew,
     SeamStatus,
     Stage,
+    Student,
 )
 from app.data.synthetic import SyntheticDataset, generate
 
@@ -57,6 +58,25 @@ class JoinedFamily:
     keyed by ``family_id``. The full deal view (notes, funding installments) is S1.
     """
 
+    family: FamilyRecord
+    lead: LeadsNew | None
+    app_form: AppForm | None
+    enrollment_forms: EnrollmentForms | None
+    community_profile: CommunityProfile | None
+
+
+@dataclass(frozen=True)
+class JoinedStudent:
+    """One child's funnel joined to its OWN app/enrollment + parent household (A-24).
+
+    The per-child analog of :class:`JoinedFamily`: a :class:`Student` joined to
+    its own application + enrollment packet (keyed by ``student_id`` — one
+    application per child) plus its parent ``family`` and that household's lead +
+    community_profile (engagement is a household-level aggregate, shared across
+    its children). The board ranks/render these grouped by ``student.family_id``.
+    """
+
+    student: Student
     family: FamilyRecord
     lead: LeadsNew | None
     app_form: AppForm | None
@@ -99,6 +119,17 @@ class FamilyRepository(ABC):
         raise NotImplementedError
 
     @abstractmethod
+    def list_students(self) -> list[JoinedStudent]:
+        """Every child joined to its own app/enrollment + parent household (A-24).
+
+        The per-child work queue scores STUDENTS, so the board reads the cohort
+        through this seam. A SQL-backed impl maps it to a join of ``student`` onto
+        its ``app_form``/``enrollment_forms`` (by ``student_id``) and the parent
+        ``family_record`` (by ``family_id``).
+        """
+        raise NotImplementedError
+
+    @abstractmethod
     def pipeline_counts(self) -> dict[Stage, int]:
         """Per-stage tally over ``family_record.current_stage`` (FR-2.1)."""
         raise NotImplementedError
@@ -125,6 +156,17 @@ class InMemoryFamilyRepository(FamilyRepository):
         }
         self._community_profiles: dict[UUID, CommunityProfile] = {
             row.family_id: row for row in dataset.community_profiles
+        }
+        # A-24 — per-child rows: students + their own app/enrollment indexed by
+        # student_id (one application per child).
+        self._students: list[Student] = list(dataset.students)
+        self._student_app_forms: dict[UUID, AppForm] = {
+            row.student_id: row for row in dataset.student_app_forms if row.student_id is not None
+        }
+        self._student_enrollment_forms: dict[UUID, EnrollmentForms] = {
+            row.student_id: row
+            for row in dataset.student_enrollment_forms
+            if row.student_id is not None
         }
 
     @classmethod
@@ -173,6 +215,28 @@ class InMemoryFamilyRepository(FamilyRepository):
         # One JoinedFamily per spine row, in stored order. A single O(n) pass —
         # each spine row joined via the O(1) source indexes (no per-family scan).
         return [self._assemble(family) for family in self._families]
+
+    def list_students(self) -> list[JoinedStudent]:
+        # One JoinedStudent per child, joined via the O(1) indexes: its own app/
+        # enrollment (by student_id) + parent household (by family_id). Students
+        # whose parent family is absent are skipped (defensive; never happens for
+        # generator output, where every student references a real family).
+        joined: list[JoinedStudent] = []
+        for student in self._students:
+            family = self._family_index.get(student.family_id)
+            if family is None:
+                continue
+            joined.append(
+                JoinedStudent(
+                    student=student,
+                    family=family,
+                    lead=self._leads.get(student.family_id),
+                    app_form=self._student_app_forms.get(student.student_id),
+                    enrollment_forms=self._student_enrollment_forms.get(student.student_id),
+                    community_profile=self._community_profiles.get(student.family_id),
+                )
+            )
+        return joined
 
     def pipeline_counts(self) -> dict[Stage, int]:
         # Delegate to the pure core counter (FR-2.1): the counting contract lives

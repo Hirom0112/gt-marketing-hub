@@ -41,6 +41,7 @@ import httpx
 from app.adapters.hubspot.crm_adapter import (
     CRMAdapter,
     SendResult,
+    StudentSyncResult,
     SyncResult,
     is_mirrorable,
 )
@@ -52,7 +53,7 @@ from app.adapters.hubspot.stage_map import (
 from app.core.funding_gate import award_for_tier
 from app.core.params import AwardAmounts, Crm
 from app.core.seam import MirrorState
-from app.data.models import FamilyRecord
+from app.data.models import FamilyRecord, Student
 from app.marketing.schemas.publish import PlatformDispatch, PublishRequest
 
 logger = logging.getLogger(__name__)
@@ -267,6 +268,48 @@ class LiveHubSpotCRMAdapter(CRMAdapter):
             contact_id=contact_id,
             family_id=family_record.family_id,
             stage=family_record.current_stage,
+        )
+
+    def _student_deal_properties(self, student: Student) -> dict[str, Any]:
+        """One child's per-child Deal props, keyed by the STUDENT's gt id (A-24)."""
+        props: dict[str, Any] = {
+            _GT_SYNTHETIC_ID: str(student.student_id),
+            "dealstage": cockpit_stage_to_hubspot_id(student.current_stage, self._crm),
+            "dealname": student.display_label,
+        }
+        if student.funding_type is not None:
+            try:
+                props["amount"] = str(award_for_tier(student.funding_type, self._award_amounts))
+            except ValueError:
+                pass  # non-TEFA tier (e.g. self_pay) — no award to mirror.
+        declared = set(self._crm.gt_properties.deal)
+        if "gt_funding_state" in declared and student.funding_state is not None:
+            props["gt_funding_state"] = student.funding_state.value
+        if "gt_stall_reason" in declared and student.stall_reason is not None:
+            props["gt_stall_reason"] = student.stall_reason.value
+        if "gt_priority" in declared and student.work_queue_score is not None:
+            props["gt_priority"] = student.work_queue_score
+        return props
+
+    def push_student(self, student: Student) -> StudentSyncResult:
+        """Upsert one per-child Deal (by the student's gt id) + associate to the
+        household contact (A-24). One application per child ⇒ one per-child Deal,
+        idempotent on ``student_id``; associated to the existing household Contact
+        (by ``family_id``) when one is present. The INV-8 budget is charged by
+        ``_request`` exactly as for :meth:`push_family`.
+        """
+        student_gt_id = str(student.student_id)
+        deal_id = self._upsert(_DEALS, student_gt_id, self._student_deal_properties(student))
+        contact_id = self._resolve_id(_CONTACTS, str(student.family_id))
+        if contact_id is not None:
+            self._associate(_DEALS, deal_id, "contacts", contact_id)
+        return StudentSyncResult(
+            simulated=False,
+            recorded_id=deal_id,
+            student_id=student.student_id,
+            family_id=student.family_id,
+            stage=student.current_stage,
+            object_id=deal_id,
         )
 
     def read_mirror(self, family_id: UUID) -> MirrorState:

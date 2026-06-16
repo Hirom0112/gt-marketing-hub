@@ -13,12 +13,23 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 
-from app.api.deps import get_observability_log, get_params, get_repository
+from app.adapters.hubspot.crm_adapter import CRMAdapter, StudentSyncResult
+from app.api.deps import (
+    get_crm_adapter_dep,
+    get_observability_log,
+    get_params,
+    get_repository,
+)
 from app.api.schemas import (
     CalendarEntry,
     CalendarResponse,
     FamilyDetailResponse,
+    HouseholdGroup,
     PipelineResponse,
+    StudentBoardResponse,
+    StudentDismissRequest,
+    StudentDismissResponse,
+    StudentRow,
     WorkQueueItem,
 )
 from app.core.contact_log import last_contact_at
@@ -29,19 +40,25 @@ from app.core.recovery_state import (
     RecoveredOutcome,
     RecoveryState,
     derive_recovery_state,
+    derive_student_recovery_state,
+    is_active,
     recovered_outcome,
 )
 from app.core.work_queue import (
     WorkQueueFamily,
+    WorkQueueStudent,
     freshness,
     recoverability,
     recoverable_now,
+    recoverable_now_student,
     responsiveness_from_engagement,
     score_family,
+    score_student,
+    student_value,
     value,
 )
 from app.data.models import FamilyRecord, FundingState, SeamStatus, Stage, StallReason
-from app.data.repository import FamilyRepository, JoinedFamily
+from app.data.repository import FamilyRepository, JoinedFamily, JoinedStudent
 from app.observability.log_store import DismissRecord, ObservabilityLog
 
 router = APIRouter(tags=["families"])
@@ -54,6 +71,12 @@ ParamsDep = Annotated[Params, Depends(get_params)]
 # The NFR-6 audit spine — the recency source (A-14): last_contact_at is derived
 # from the logged approve decisions, never a stored column.
 LogDep = Annotated[ObservabilityLog, Depends(get_observability_log)]
+# The CRM boundary (INV-9) — simulated by default, live behind CRM_MODE=live; the
+# per-child transfer route pushes through this seam, never a direct HubSpot call.
+CRMAdapterDep = Annotated[CRMAdapter, Depends(get_crm_adapter_dep)]
+
+# The operator identity recorded on a manual write (mirrors seam/ai_actions).
+DEFAULT_HUMAN = "operator"
 
 
 def _work_queue_family(joined: JoinedFamily, params: Params) -> WorkQueueFamily:
@@ -76,6 +99,41 @@ def _work_queue_family(joined: JoinedFamily, params: Params) -> WorkQueueFamily:
         responsiveness=responsiveness_from_engagement(signals, params),
         num_children=num_children,
         funding_type=joined.family.funding_type,
+    )
+
+
+def _work_queue_student(joined: JoinedStudent, params: Params) -> WorkQueueStudent:
+    """Project a joined student down to the per-child scorer's pure input (A-24).
+
+    Responsiveness is the household's aggregate engagement (A-5) — shared across a
+    family's children — exactly as for :func:`_work_queue_family`. Everything else
+    reads off the child's OWN funnel (its ``current_stage``/``stalled_since``).
+    """
+    signals = joined.community_profile.engagement_signals if joined.community_profile else {}
+    student = joined.student
+    return WorkQueueStudent(
+        student_id=student.student_id,
+        family_id=student.family_id,
+        current_stage=student.current_stage,
+        stalled_since=student.stalled_since,
+        created_at=student.created_at,
+        responsiveness=responsiveness_from_engagement(signals, params),
+        funding_type=student.funding_type,
+    )
+
+
+def _student_stall_stage(joined: JoinedStudent) -> Stage:
+    """The funnel stage a CHILD was stuck at — its recovery "advanced past" baseline.
+
+    Maps the student's own ``stall_reason`` through the §5.1 table (the same one
+    families use); a child with no ``stall_reason`` falls back to its current stage
+    (so "advanced" reads False).
+    """
+    student = joined.student
+    return (
+        _STALL_REASON_STAGE[student.stall_reason]
+        if student.stall_reason is not None
+        else student.current_stage
     )
 
 
@@ -549,6 +607,214 @@ def get_work_queue(
         if scope != "active" and len(rows) >= limit:
             break
     return rows
+
+
+def _student_recovery_state(js: JoinedStudent, *, log: ObservabilityLog) -> RecoveryState:
+    """Derive a child's recovery state, resolving its per-child audit facts (A-24).
+
+    Mirrors the family composition root (:func:`_recovery_state_for`): the
+    log-derived contact (A-14) and dismiss (A-19) facts are resolved HERE, keyed
+    to (family_id, student_id) so a child's contact/dismiss never picks up a
+    sibling's or a family-level event, then passed INTO the pure deriver — which
+    never touches the log (INV-2 core purity). A re-stall after the dismiss
+    (``restalled_after=stalled_since``) supersedes it, exactly as for families.
+    """
+    student = js.student
+    contact = last_contact_at(log, student.family_id, student_id=student.student_id)
+    dismissed = log.is_dismissed(
+        student.family_id,
+        student_id=student.student_id,
+        restalled_after=student.stalled_since,
+    )
+    return derive_student_recovery_state(
+        current_stage=student.current_stage,
+        funding_state=student.funding_state,
+        enrollment_forms=js.enrollment_forms,
+        stall_stage=_student_stall_stage(js),
+        last_contact_at=contact,
+        dismissed=dismissed,
+    )
+
+
+# The per-child board scope (A-24), mirroring the work-queue's first axis.
+# ``active`` is the DEFAULT — only children still in play (recovery_state ∈
+# {stalled, working}); recovered/dismissed children belong to history, not the
+# live board (this is the fix for the recovered-child-leads-the-board oddity).
+StudentScope = Literal["active", "history", "all"]
+
+
+@router.get("/students", response_model=StudentBoardResponse)
+def get_students(
+    repository: RepositoryDep,
+    params: ParamsDep,
+    log: LogDep,
+    scope: Annotated[
+        StudentScope,
+        Query(
+            description=(
+                "Which slice of the per-child board to return, off the derived "
+                "recovery_state. **active** (default) — children still in play "
+                "({stalled, working}); a household whose children are all closed "
+                "out does not appear. **history** — {recovered, dismissed} only, "
+                "`limit`-capped. **all** — every child, `limit`-capped."
+            ),
+        ),
+    ] = "active",
+    limit: Annotated[
+        int,
+        Query(
+            ge=1,
+            le=_MAX_QUEUE_LIMIT,
+            description=(
+                "Row cap for the history/all scopes (default 200, max 500). "
+                "Ignored for the active scope."
+            ),
+        ),
+    ] = _DEFAULT_QUEUE_LIMIT,
+) -> StudentBoardResponse:
+    """The per-child board (A-24; `GET /students`) — students grouped by household.
+
+    Each child runs its own funnel (one application per child), so the board ranks
+    STUDENTS by ``recoverable_now_student`` (recoverability-driven; every child is
+    one tuition of value). Per-child recovery state is derived from the student's
+    OWN funnel signals (:func:`derive_student_recovery_state`). Rows are gated by
+    ``scope`` (default ``active`` — the live board hides closed-out children),
+    then grouped under their household; a household's ``value_at_risk`` sums one
+    per-child tuition over its students that are still active ({stalled, working}).
+    history/all are ``limit``-capped (after ranking) so the route never streams
+    the recovered long tail. Households are ordered by their most-recoverable
+    child, students within a household likewise. All numbers come from the pure
+    scorer (INV-2); ``now`` is read once.
+    """
+    now = datetime.now(UTC)
+    joined_students = repository.list_students()
+    joined_by_id = {js.student.student_id: js for js in joined_students}
+
+    units = [_work_queue_student(js, params) for js in joined_students]
+    ranked = sorted(
+        units,
+        key=lambda s: (-recoverable_now_student(s, params, now=now), s.student_id),
+    )
+
+    # Build ranked rows, gated by scope and grouped by household in first-seen
+    # (rank) order so the most-recoverable child surfaces its household first.
+    groups: dict[UUID, HouseholdGroup] = {}
+    surfaced = 0
+    for unit in ranked:
+        # history/all are bounded — stop once the requested cap is reached (active
+        # is uncapped: it is already the small in-play slice).
+        if scope != "active" and surfaced >= limit:
+            break
+        js = joined_by_id[unit.student_id]
+        student = js.student
+        state = _student_recovery_state(js, log=log)
+        # Scope gate: drop children whose derived state is outside the slice.
+        if scope == "active" and not is_active(state):
+            continue
+        if scope == "history" and is_active(state):
+            continue
+        surfaced += 1
+        row = StudentRow(
+            student_id=student.student_id,
+            family_id=student.family_id,
+            household_name=js.family.display_name,
+            display_label=student.display_label,
+            synthetic_first_name=student.synthetic_first_name,
+            grade=student.grade,
+            current_stage=student.current_stage,
+            funding_type=student.funding_type,
+            funding_state=student.funding_state,
+            stall_reason=student.stall_reason,
+            score=score_student(unit, params, now=now),
+            recoverability=recoverability(unit, params, now=now),
+            value=student_value(params),
+            recoverable_now=recoverable_now_student(unit, params, now=now),
+            freshness=freshness(unit, params, now=now),
+            recovery_state=state,
+        )
+        group = groups.get(student.family_id)
+        if group is None:
+            group = HouseholdGroup(
+                family_id=student.family_id,
+                household_name=js.family.display_name,
+                value_at_risk=0.0,
+                students=[],
+            )
+            groups[student.family_id] = group
+        group.students.append(row)
+        # Household $-at-risk: sum one per-child tuition over STILL-ACTIVE students
+        # (a recovered/dismissed child is no longer "at risk" — A-24 fixes the old
+        # all-or-nothing family value).
+        if is_active(state):
+            group.value_at_risk += row.value
+
+    households = list(groups.values())
+    return StudentBoardResponse(
+        households=households,
+        total_students=surfaced,
+        total_value_at_risk=sum(g.value_at_risk for g in households),
+    )
+
+
+@router.post("/students/{student_id}/dismiss", response_model=StudentDismissResponse)
+def dismiss_student(
+    student_id: UUID,
+    request: StudentDismissRequest,
+    repository: RepositoryDep,
+    log: LogDep,
+) -> StudentDismissResponse:
+    """Set ONE child aside — the per-child manual recovery removal (A-24; A-19).
+
+    Appends a per-student dismiss event (the one new audit write; ``reason``
+    required, a blank one rejected 422 by the request schema) keyed to
+    (family_id, student_id) so it never leaks to a sibling or the household. The
+    child then derives ``recovery_state=dismissed`` (highest precedence, until a
+    later re-stall supersedes it), drops out of the default active board, and
+    appears under history. The read store stays read-only (A-3); the audit log is
+    the only write spine (INV-2). 404 if the student is unknown.
+    """
+    js = next(
+        (j for j in repository.list_students() if j.student.student_id == student_id),
+        None,
+    )
+    if js is None:
+        raise HTTPException(status_code=404, detail=f"unknown student: {student_id}")
+
+    log.log_dismiss(
+        family_id=js.student.family_id,
+        student_id=student_id,
+        human=DEFAULT_HUMAN,
+        reason=request.reason,
+    )
+    return StudentDismissResponse(
+        student_id=student_id,
+        family_id=js.student.family_id,
+        recovery_state=_student_recovery_state(js, log=log),
+        reason=request.reason,
+    )
+
+
+@router.post("/students/{student_id}/seam", response_model=StudentSyncResult)
+def transfer_student_to_crm(
+    student_id: UUID,
+    repository: RepositoryDep,
+    crm: CRMAdapterDep,
+) -> StudentSyncResult:
+    """Transfer ONE child to its own CRM object via the adapter (A-24; INV-9).
+
+    One application per child ⇒ one per-child CRM object. The push goes through
+    the :class:`CRMAdapter` seam — **simulated by default** (records, never sends),
+    or a live per-child upsert behind the synthetic-write guard + INV-8 budget when
+    ``CRM_MODE=live``. Returns the :class:`StudentSyncResult` (``object_id`` set on
+    the live path). 404 if the student is unknown.
+    """
+    joined = next(
+        (js for js in repository.list_students() if js.student.student_id == student_id),
+        None,
+    )
+    if joined is None:
+        raise HTTPException(status_code=404, detail="student not found")
+    return crm.push_student(joined.student)
 
 
 # YYYY-MM with month 01..12 — anchors the calendar query param's 422 validation.

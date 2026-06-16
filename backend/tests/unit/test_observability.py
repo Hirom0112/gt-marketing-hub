@@ -256,6 +256,48 @@ def test_dismiss_event_recorded_and_queryable() -> None:
     assert family_id in {d.family_id for d in log.list_dismissals()}
 
 
+def test_dismiss_is_student_scoped_when_student_id_given() -> None:
+    """A per-CHILD dismiss is keyed by (family_id, student_id) and stays distinct (A-24).
+
+    Each child runs its own funnel, so a dismiss can target one child. A
+    student-keyed dismiss makes ``is_dismissed(family_id, student_id=that)`` True
+    but does NOT dismiss the family as a whole (``is_dismissed(family_id)`` — the
+    family-level query, student_id=None) nor a sibling child.
+    """
+    log = InMemoryObservabilityLog()
+    family_id = uuid4()
+    child_a = uuid4()
+    child_b = uuid4()
+
+    record = log.log_dismiss(
+        family_id=family_id,
+        student_id=child_a,
+        human="operator@example.invalid",
+        reason="enrolled elsewhere",
+        created_at=_T0,
+    )
+    assert record.student_id == child_a
+
+    # The dismissed child reads dismissed; the sibling and the family-level query
+    # (student_id=None) do not — per-child dismisses never leak across the keys.
+    assert log.is_dismissed(family_id, student_id=child_a) is True
+    assert log.is_dismissed(family_id, student_id=child_b) is False
+    assert log.is_dismissed(family_id) is False
+
+
+def test_family_dismiss_does_not_match_a_student_scoped_query() -> None:
+    """A family-level dismiss (student_id=None) is not a per-child dismiss (A-24)."""
+    log = InMemoryObservabilityLog()
+    family_id = uuid4()
+    child = uuid4()
+    log.log_dismiss(
+        family_id=family_id, human="op@example.invalid", reason="went cold", created_at=_T0
+    )
+    # Family-level dismiss holds for the family query, not for a child query.
+    assert log.is_dismissed(family_id) is True
+    assert log.is_dismissed(family_id, student_id=child) is False
+
+
 def test_dismiss_requires_a_reason() -> None:
     """A dismiss with an empty reason is rejected — the audit needs a why (A-19)."""
     log = InMemoryObservabilityLog()

@@ -780,6 +780,30 @@ figure {
   color: var(--on-ink);
 }
 
+/* ---- the worklist pager (Triage 'all' paging) ---------------------------- */
+.pager-btn {
+  appearance: none;
+  border: 1px solid var(--line);
+  background: var(--surface);
+  color: var(--ink-soft);
+  border-radius: var(--r-sm);
+  font-family: var(--mono);
+  font-size: 11px;
+  font-weight: 600;
+  min-width: 22px;
+  padding: 2px 6px;
+  cursor: pointer;
+}
+.pager-btn[aria-current='page'] {
+  background: var(--ink);
+  border-color: var(--ink);
+  color: var(--on-ink);
+}
+.pager-btn:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
 /* ---- a worklist row (Triage) --------------------------------------------- */
 .drill-row {
   display: grid;

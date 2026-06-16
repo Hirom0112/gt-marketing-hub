@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { CalendarDays, History, ListOrdered } from 'lucide-react';
+import { CalendarDays, History, ListOrdered, Users } from 'lucide-react';
 import ActionPanel from '../ActionPanel';
 import DealView from '../DealView';
 import FundingTracker from '../FundingTracker';
@@ -9,6 +9,7 @@ import EnrollmentCalendar, {
   type SortKey,
 } from '../enrollment/EnrollmentCalendar';
 import TriageList, { type TriageScope } from '../enrollment/TriageList';
+import StudentBoard from '../enrollment/StudentBoard';
 import HistoryList from '../enrollment/HistoryList';
 import NotesTimeline, {
   type NotesTimelineHandle,
@@ -44,7 +45,8 @@ interface FamilySummary {
 }
 
 // The left "find" views. Triage carries a scope dial; History is its own view.
-type LeftView = 'calendar' | 'triage' | 'history';
+// Students (A-24) is the per-child board — one row per child, grouped by household.
+type LeftView = 'calendar' | 'triage' | 'students' | 'history';
 
 type FamiliesState =
   | { status: 'loading' }
@@ -377,6 +379,7 @@ export default function EnrollmentWorkspace(): JSX.Element {
   const viewOptions = [
     { key: 'calendar' as const, label: 'Calendar', icon: CalendarDays },
     { key: 'triage' as const, label: 'Triage', icon: ListOrdered },
+    { key: 'students' as const, label: 'Students', icon: Users },
     { key: 'history' as const, label: 'History', icon: History },
   ];
 
@@ -413,7 +416,9 @@ export default function EnrollmentWorkspace(): JSX.Element {
       ? 'Recovery calendar — the find surface, by stall date'
       : leftView === 'triage'
         ? 'Triage — recover in priority order, the order to attack the wave'
-        : 'History — recovered & dismissed (read-only audit)';
+        : leftView === 'students'
+          ? 'Students — one application per child, grouped by household'
+          : 'History — recovered & dismissed (read-only audit)';
 
   return (
     <section aria-label="Enrollment workspace" className="enrollment-workspace">
@@ -462,6 +467,12 @@ export default function EnrollmentWorkspace(): JSX.Element {
               sort={sort}
               onSort={setSort}
               refreshKey={queueRefresh}
+            />
+          )}
+          {leftView === 'students' && (
+            <StudentBoard
+              selectedFamilyId={selectedFamilyId ?? undefined}
+              onSelectFamily={selectFamily}
             />
           )}
           {leftView === 'history' && (

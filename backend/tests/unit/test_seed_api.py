@@ -27,10 +27,16 @@ from uuid import UUID, uuid4
 import pytest
 from fastapi.testclient import TestClient
 
-from app.adapters.hubspot.crm_adapter import CRMAdapter, SendResult, SimulatedCRMAdapter, SyncResult
+from app.adapters.hubspot.crm_adapter import (
+    CRMAdapter,
+    SendResult,
+    SimulatedCRMAdapter,
+    StudentSyncResult,
+    SyncResult,
+)
 from app.api import deps
 from app.core.seam import MirrorState
-from app.data.models import FamilyRecord, SeamStatus, Stage
+from app.data.models import FamilyRecord, SeamStatus, Stage, Student
 from app.data.repository import InMemoryFamilyRepository
 from app.main import app
 
@@ -72,6 +78,18 @@ class _RecordingAdapter(CRMAdapter):
             contact_id="live-contact-11223344",
             family_id=family_record.family_id,
             stage=family_record.current_stage,
+        )
+
+    def push_student(self, student: Student) -> StudentSyncResult:
+        # A-24 — this double exercises the family-seed path only; a fixed live-
+        # shaped per-child result satisfies the extended interface.
+        return StudentSyncResult(
+            simulated=False,
+            recorded_id="live-deal-student-99887766",
+            student_id=student.student_id,
+            family_id=student.family_id,
+            stage=student.current_stage,
+            object_id="live-deal-student-99887766",
         )
 
     def read_mirror(self, family_id: UUID) -> MirrorState:

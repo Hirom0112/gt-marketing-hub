@@ -26,15 +26,23 @@ from uuid import UUID
 from app.observability.log_store import DecisionAction, ObservabilityLog
 
 
-def last_contact_at(log: ObservabilityLog, family_id: UUID) -> datetime | None:
-    """Latest approved-outbound timestamp for a family, from the audit log (A-14).
+def last_contact_at(
+    log: ObservabilityLog, family_id: UUID, *, student_id: UUID | None = None
+) -> datetime | None:
+    """Latest approved-outbound timestamp for a family/child, from the audit log (A-14).
 
     Pure aggregation over ``log`` (mirrors ``scoreboard._enrollment_summary``):
     scans every proposal belonging to ``family_id`` and returns the MAX
     ``created_at`` across their decisions whose action is
-    :attr:`DecisionAction.APPROVE` — the last time an approved outbound went to
-    the family. A family with no approved decision (only discards/edits, or no
-    decision at all, or no proposals) has never been contacted ⇒ ``None``.
+    :attr:`DecisionAction.APPROVE` — the last time an approved outbound went out.
+    A family/child with no approved decision (only discards/edits, or no decision
+    at all, or no proposals) has never been contacted ⇒ ``None``.
+
+    ``student_id`` scopes the aggregation to ONE child for per-student flows
+    (A-24): proposals are matched on BOTH ``family_id`` and ``student_id``, so a
+    family-level query (``student_id=None``) ignores per-child proposals and a
+    per-child query ignores a sibling's. Family-level proposals carry
+    ``student_id=None`` and so match only the family-level query.
 
     Deterministic: reads through the public query API only (no private state, no
     wall-clock). Same log ⇒ same answer.
@@ -42,14 +50,15 @@ def last_contact_at(log: ObservabilityLog, family_id: UUID) -> datetime | None:
     Args:
         log: The append-only NFR-6 audit spine to aggregate.
         family_id: The family whose latest contact is sought.
+        student_id: Restrict to one child's proposals (A-24); ``None`` = family-level.
 
     Returns:
-        The latest APPROVE-decision ``created_at`` for the family, or ``None`` if
-        the family has no approved decision.
+        The latest APPROVE-decision ``created_at`` for the family/child, or
+        ``None`` if there is no approved decision.
     """
     latest: datetime | None = None
     for proposal in log.list_proposals():
-        if proposal.family_id != family_id:
+        if proposal.family_id != family_id or proposal.student_id != student_id:
             continue
         audit = log.get_audit(proposal.proposal_id)
         if audit is None:

@@ -58,7 +58,7 @@ from app.data.models import (
     SeamStatus,
     Stage,
 )
-from app.data.repository import FamilyRepository, JoinedFamily
+from app.data.repository import FamilyRepository, JoinedFamily, JoinedStudent
 
 # PostgREST surface (the API's own fixed routes — INV-11 does not apply to a
 # third party's URLs, the same carve-out as the HubSpot adapter's object paths).
@@ -259,6 +259,14 @@ class SupabaseFamilyRepository(FamilyRepository):
         # Every family (with a lead) joined to its source rows — the work-queue's
         # input. A SQL store maps this to the same join the in-memory impl does.
         return self._fetch_joined()
+
+    def list_students(self) -> list[JoinedStudent]:
+        # The live apply DB (S14) is FAMILY-level — the mock apply SPA writes one
+        # application per household, not per-child Student rows (A-25 is a cockpit-
+        # side synthetic model). So the live repo has no students to surface; the
+        # per-child board is empty against the live DB. Returning [] keeps the
+        # FamilyRepository contract satisfied without fabricating per-child data.
+        return []
 
     def get_family(self, family_id: UUID) -> JoinedFamily | None:
         rows = self._get(

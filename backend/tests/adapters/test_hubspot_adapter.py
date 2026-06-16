@@ -121,3 +121,38 @@ def test_read_mirror_returns_seam_mirrorstate(monkeypatch: pytest.MonkeyPatch) -
     mirror = adapter.read_mirror(record.family_id)
     assert isinstance(mirror, MirrorState)
     assert mirror.stage == record.current_stage
+
+
+# A-24 — per-child push (one application per child ⇒ one per-child CRM object).
+
+
+def _student():
+    from app.data.models import Student
+
+    return Student(
+        student_id=uuid4(),
+        family_id=uuid4(),
+        display_label="Synthetic household — Alex · Grade 3",
+        synthetic_first_name="Alex",
+        grade="3",
+        current_stage=Stage.ENROLL,
+    )
+
+
+def test_simulated_push_student_records_never_sends() -> None:
+    """push_student records the per-child push and returns simulated=True (INV-9)."""
+    from app.adapters.hubspot.crm_adapter import StudentSyncResult
+
+    adapter = SimulatedCRMAdapter()
+    student = _student()
+
+    result = adapter.push_student(student)
+
+    assert isinstance(result, StudentSyncResult)
+    assert result.simulated is True
+    assert result.student_id == student.student_id
+    assert result.family_id == student.family_id
+    assert result.stage is Stage.ENROLL
+    assert result.object_id is None  # no live object on the simulated recorder
+    # Recorded in the per-child audit log (structural "records, never sends").
+    assert adapter.pushed_student_log == [result]
