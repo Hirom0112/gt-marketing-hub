@@ -1,9 +1,13 @@
-// A labelled <select> — the ONLY input primitive in this form. There is no text
-// input component anywhere in the app, so PII cannot be typed (INV-1 by shape).
-// Telemetry: fires field_focused on focus and field_left_empty on blur with no
-// selection. `field_key` is the field NAME, never the chosen value.
+// A labelled <select> — the ONLY value-bearing input primitive in this form.
+// There is no text input component anywhere in the app, so PII cannot be typed
+// (INV-1 by shape). Telemetry: field_focused on focus, field_left_empty on blur
+// with no selection, field_changed when a selection is set. `field_key` is the
+// field NAME, never the chosen value. The telemetry source may be a step-level
+// or a form-level emitter (both satisfy FormTelemetry), so the same Dropdown is
+// reused inside Apply sections and Enroll sub-forms — and the emitted event
+// carries the right form_key automatically.
 
-import type { StepTelemetry } from '../lib/telemetry';
+import type { FormTelemetry } from '../lib/telemetry';
 
 interface DropdownProps<T extends string> {
   label: string;
@@ -12,7 +16,7 @@ interface DropdownProps<T extends string> {
   options: readonly T[];
   labelFor?: (opt: T) => string;
   onChange: (v: T) => void;
-  telemetry: StepTelemetry;
+  telemetry: FormTelemetry;
   error?: boolean;
 }
 
@@ -38,7 +42,10 @@ export function Dropdown<T extends string>({
         onBlur={() => {
           if (value === '') telemetry.fieldLeftEmpty(fieldKey);
         }}
-        onChange={(e) => onChange(e.target.value as T)}
+        onChange={(e) => {
+          telemetry.fieldChanged(fieldKey);
+          onChange(e.target.value as T);
+        }}
       >
         <option value="" disabled>
           Select…

@@ -19,17 +19,23 @@ import {
 import { makeMockSupabase } from './mockSupabase';
 
 // The set of keys an apply_events row may ever carry. NO "value", no "content",
-// no child key. If a future change adds one, this test fails.
+// no child key. `form_key` (a sub-form ID, e.g. "data_collection_consent") and
+// `nav_seq` (a monotonic per-session counter) are metadata-only and allowed. If
+// a future change adds a value/content/child key, this test fails. (SHARED
+// CONTRACT — the backend consumes the identical allowed-key set.)
 const ALLOWED_EVENT_KEYS = new Set([
   'event_id',
   'family_id',
   'step',
+  'form_key',
   'field_key',
   'event_type',
   'time_on_step_ms',
+  'nav_seq',
 ]);
 
-// Keys that would indicate a leaked selected value or child identity.
+// Substrings that would indicate a leaked selected value or child identity.
+// NOTE: `form_key` is allowed metadata — "form" is deliberately NOT forbidden.
 const FORBIDDEN_SUBSTRINGS = ['value', 'content', 'child', 'student', 'dob'];
 
 describe('synthetic identity (INV-1)', () => {
@@ -69,9 +75,21 @@ async function walk(): Promise<ReturnType<typeof makeMockSupabase>> {
   await emitEvent(sb, {
     family_id: session.familyId,
     step: 'interest',
+    form_key: null,
     field_key: 'num_children',
     event_type: 'step_completed',
     time_on_step_ms: 4200,
+    nav_seq: 1,
+  });
+  // A sub-form event proving form_key + the new event types are metadata-only.
+  await emitEvent(sb, {
+    family_id: session.familyId,
+    step: 'enroll',
+    form_key: 'data_collection_consent',
+    field_key: 'signature',
+    event_type: 'field_changed',
+    time_on_step_ms: 1200,
+    nav_seq: 2,
   });
   return sb;
 }
@@ -142,16 +160,27 @@ describe('apply_events are metadata-only (INV-1/INV-6/COPPA)', () => {
   });
 
   it('the ApplyEvent type cannot carry a value (compile-time + runtime)', async () => {
-    // Constructing a well-typed event yields exactly the metadata fields.
+    // Constructing a well-typed event yields exactly the metadata fields —
+    // including the new form_key + nav_seq, and NOTHING value-bearing.
     const ev: ApplyEvent = {
       family_id: 'f',
-      step: 'interest',
-      field_key: 'region',
-      event_type: 'field_focused',
+      step: 'enroll',
+      form_key: 'tuition_agreement',
+      field_key: 'billing_cadence',
+      event_type: 'field_changed',
       time_on_step_ms: 10,
+      nav_seq: 3,
     };
     expect(Object.keys(ev).sort()).toEqual(
-      ['event_type', 'family_id', 'field_key', 'step', 'time_on_step_ms'].sort(),
+      [
+        'event_type',
+        'family_id',
+        'field_key',
+        'form_key',
+        'nav_seq',
+        'step',
+        'time_on_step_ms',
+      ].sort(),
     );
   });
 });
@@ -178,9 +207,11 @@ describe('failure handling', () => {
       emitEvent(sb, {
         family_id: 'f',
         step: 'interest',
+        form_key: null,
         field_key: null,
         event_type: 'step_viewed',
         time_on_step_ms: 0,
+        nav_seq: 0,
       }),
     ).resolves.toBeUndefined();
   });

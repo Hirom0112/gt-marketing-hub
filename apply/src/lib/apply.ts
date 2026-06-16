@@ -32,23 +32,39 @@ export type ApplyEventType =
   | 'field_focused'
   | 'field_left_empty'
   | 'validation_error_shown'
-  | 'last_step_before_exit';
+  | 'last_step_before_exit'
+  // ADDITIVE (step → form → field depth): entering/leaving a sub-form and
+  // setting a structural selection. Still metadata-only — see ApplyEvent.
+  | 'form_viewed'
+  | 'form_completed'
+  | 'field_changed';
 
 /**
  * A drop-off telemetry event. By construction it can carry only metadata:
- * which step, which field NAME, which interaction kind, and how long. There is
- * deliberately NO field for the selected value, no content, and no child key
- * (INV-1 / INV-6 / COPPA). The type makes a value-carrying event unrepresentable.
+ * which step, which sub-FORM, which field NAME, which interaction kind, how
+ * long, and a per-session navigation sequence number. There is deliberately NO
+ * field for the selected value, no content, and no child key (INV-1 / INV-6 /
+ * COPPA). The type makes a value-carrying event unrepresentable.
+ *
+ * SHARED CONTRACT (director-defined; the backend consumes the identical shape):
+ * an apply_events row may carry ONLY the keys below. NEVER a typed value/content
+ * field, NEVER a student/child key. `form_key` is a sub-form ID (e.g.
+ * "data_collection_consent") — metadata, not a child key. `nav_seq` is a
+ * monotonic per-session counter so navigation order is reconstructable.
  */
 export interface ApplyEvent {
   family_id: string;
-  /** Screen/step label, e.g. "interest", "enroll.form3". Not a value. */
+  /** Top step label ∈ {interest, apply, enroll, tuition}. Not a value. */
   step: string;
-  /** The field NAME (e.g. "num_children"), or null for step-level events. */
+  /** Sub-form ID (e.g. "data_collection_consent"), or null. Metadata, NOT a child key. */
+  form_key: string | null;
+  /** The field NAME (e.g. "num_children"), or null for step/form-level events. */
   field_key: string | null;
   event_type: ApplyEventType;
   /** Milliseconds on the step before this event; a duration, not user content. */
   time_on_step_ms: number | null;
+  /** Monotonic per-session counter, incremented on every emitted event. */
+  nav_seq: number;
 }
 
 // The minimal surface of the Supabase client we depend on — lets tests inject a
@@ -249,9 +265,11 @@ export async function emitEvent(
       event_id: uuid(),
       family_id: event.family_id,
       step: event.step,
+      form_key: event.form_key,
       field_key: event.field_key,
       event_type: event.event_type,
       time_on_step_ms: event.time_on_step_ms,
+      nav_seq: event.nav_seq,
     });
   } catch {
     // best-effort telemetry; never surface to the applicant.
