@@ -24,8 +24,7 @@ def test_brand_memory_store_seeded_with_import_exemplars() -> None:
     import_exemplars = [
         i
         for i in active
-        if i.kind is BrandMemoryKind.EXEMPLAR
-        and i.provenance.generated_by is GeneratedBy.IMPORT
+        if i.kind is BrandMemoryKind.EXEMPLAR and i.provenance.generated_by is GeneratedBy.IMPORT
     ]
     if seed_available():
         assert import_exemplars, "expected imported real exemplars in the store"

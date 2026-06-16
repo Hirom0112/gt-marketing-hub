@@ -27,6 +27,7 @@ from __future__ import annotations
 import hashlib
 import json
 from pathlib import Path
+from typing import Any
 from uuid import UUID
 
 from app.ai.schemas.brand import (
@@ -60,9 +61,7 @@ _IMPORT_TS = "2026-06-15T00:00:00+00:00"
 # The committed example params — the fallback when no local `params/params.yaml`
 # exists (gitignored), mirroring `app.api.deps._load_params_with_fallback`. Same
 # values either way (INV-11), so the loader has a usable default in every env.
-_EXAMPLE_PARAMS = (
-    Path(__file__).resolve().parents[3] / "params" / "params.example.yaml"
-)
+_EXAMPLE_PARAMS = Path(__file__).resolve().parents[3] / "params" / "params.example.yaml"
 
 
 def _default_params() -> Params:
@@ -98,7 +97,7 @@ _PLATFORM_CAP_ATTR: dict[str, str] = {
 }
 
 
-def _load_seed() -> dict[str, object] | None:
+def _load_seed() -> dict[str, Any] | None:
     """The committed seed payload, or ``None`` when the JSON is absent.
 
     A missing file is a first-class state: callers fall back to the synthetic
@@ -106,7 +105,8 @@ def _load_seed() -> dict[str, object] | None:
     """
     if not SEED_PATH.exists():
         return None
-    return json.loads(SEED_PATH.read_text(encoding="utf-8"))
+    data: dict[str, Any] = json.loads(SEED_PATH.read_text(encoding="utf-8"))
+    return data
 
 
 def seed_available() -> bool:
@@ -144,7 +144,7 @@ def _normalized_weight(platform: str, raw: int, params: Params) -> float:
     attr = _PLATFORM_CAP_ATTR.get(platform)
     if attr is None:
         return 0.0
-    cap = getattr(params.library_ingest.normalization, attr)
+    cap: float = getattr(params.library_ingest.normalization, attr)
     if cap <= 0:
         return 0.0
     return max(0.0, min(1.0, raw / cap))
@@ -175,7 +175,7 @@ def load_brand_memory_exemplars(params: Params | None = None) -> list[BrandMemor
     prov = _import_provenance()
     per_theme: dict[str, int] = {}
     items: list[BrandMemoryItem] = []
-    for rec in exemplars_raw:  # type: ignore[union-attr]
+    for rec in exemplars_raw:
         theme = str(rec["theme"])
         if per_theme.get(theme, 0) >= top_n:
             continue
@@ -379,7 +379,7 @@ def load_library_assets(
         )
 
     # Website pages → blog-post-style library assets (the durable owned copy).
-    for page in seed.get("website_pages", []):  # type: ignore[union-attr]
+    for page in seed.get("website_pages", []):
         body = str(page["body_summary"])
         if not body.strip():
             continue
@@ -399,7 +399,7 @@ def load_library_assets(
 
     # Top imported captions (one per theme, highest engagement) → copy assets.
     seen_theme: set[str] = set()
-    for rec in seed.get("exemplars", []):  # type: ignore[union-attr]
+    for rec in seed.get("exemplars", []):
         theme = str(rec["theme"])
         if theme in seen_theme:
             continue

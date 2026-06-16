@@ -106,9 +106,7 @@ def test_exemplars_are_deterministic() -> None:
     """Same JSON → byte-stable list (ids + order + weights identical)."""
     a = load_brand_memory_exemplars(_params())
     b = load_brand_memory_exemplars(_params())
-    assert [(i.id, i.weight, i.content) for i in a] == [
-        (i.id, i.weight, i.content) for i in b
-    ]
+    assert [(i.id, i.weight, i.content) for i in a] == [(i.id, i.weight, i.content) for i in b]
 
 
 def test_exemplars_capped_per_theme_by_params() -> None:

@@ -88,8 +88,8 @@ _STRUCTURE_BODIES: dict[GeoStructure, str] = {
         "school before enrolling."
     ),
     GeoStructure.QUOTATION_BLOCK: (
-        "\"GT School lets a gifted child move ahead the moment they are ready, "
-        "instead of waiting out a grade.\" The program pairs mastery-based, "
+        '"GT School lets a gifted child move ahead the moment they are ready, '
+        'instead of waiting out a grade." The program pairs mastery-based, '
         "self-paced learning with a community of intellectual peers for K-8 "
         "gifted and profoundly gifted families."
     ),

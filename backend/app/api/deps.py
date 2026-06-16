@@ -264,6 +264,7 @@ def _build_brand_memory_store() -> BrandMemoryStore:
 # list so `reset_brand_memory_store` can rebind for test isolation.
 _brand_memory_store: list[BrandMemoryStore] = [_build_brand_memory_store()]
 
+
 def _build_content_library() -> ContentLibrary:
     """Construct the seeded PERSISTENT content library (FR-3.4, D-8, A-11).
 

@@ -241,6 +241,9 @@ class BrandJudge:
 
     def _score_via_llm(self, record: GatedRecord, never_rules: list[str]) -> float | None:
         """Ask the injected client for a 0..1 score; ``None`` if degraded/unparseable."""
+        if self._client is None:
+            # No edge wired ⇒ no LLM score; the caller falls back to the heuristic.
+            return None
         prompt = _LLM_JUDGE_PROMPT.format(
             never_rules="; ".join(never_rules) or "(none)",
             copy=_record_text(record),
