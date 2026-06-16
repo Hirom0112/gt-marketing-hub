@@ -2,9 +2,13 @@ import { useEffect, useState } from 'react';
 import {
   Ban,
   Check,
+  ChevronDown,
+  ChevronRight,
+  ExternalLink,
   FileText,
   FolderOpen,
   Image as ImageIcon,
+  Search,
   Sparkles,
   Trash2,
 } from 'lucide-react';
@@ -50,10 +54,16 @@ interface GenerateResponse {
 }
 
 // One kept+validated asset in the content library (GET /content/library).
+// body/source_ref/tags power the expand-to-read + link-to-source affordance;
+// they are optional because a kept-from-generation asset may omit a source.
 interface LibraryAsset {
   id: string;
   title: string;
   asset_type: string;
+  channel?: string | null;
+  body?: string | null;
+  source_ref?: string | null;
+  tags?: string[];
   search_text: string;
 }
 
@@ -83,12 +93,15 @@ export default function ContentWorkspace(): JSX.Element {
   // proposal_id → recorded decision; keeps the kept/discarded affordance.
   const [decisions, setDecisions] = useState<Record<string, DecisionKind>>({});
   const [libraryNonce, setLibraryNonce] = useState(0);
+  // The library search query — re-runs the FR-3.4 search over the kept archive.
+  const [libraryQuery, setLibraryQuery] = useState('');
 
-  // Load (and refresh) the library of kept+validated assets.
+  // Load (and refresh) the library of kept+validated assets, filtered by the
+  // search query (the backend searches title/body/tags via ?q=).
   useEffect(() => {
     let cancelled = false;
     setLibrary({ status: 'loading' });
-    fetch(`${apiBaseUrl}/content/library?q=`)
+    fetch(`${apiBaseUrl}/content/library?q=${encodeURIComponent(libraryQuery)}`)
       .then((res) => {
         if (!res.ok) throw new Error(`library request failed: ${res.status}`);
         return res.json() as Promise<LibraryAsset[]>;
@@ -105,7 +118,7 @@ export default function ContentWorkspace(): JSX.Element {
     return () => {
       cancelled = true;
     };
-  }, [libraryNonce]);
+  }, [libraryNonce, libraryQuery]);
 
   function generate(): void {
     setDecisions({});
@@ -247,7 +260,11 @@ export default function ContentWorkspace(): JSX.Element {
 
       <ImageBatchPlaceholder />
 
-      <LibraryPanel state={library} />
+      <LibraryPanel
+        state={library}
+        query={libraryQuery}
+        onQueryChange={setLibraryQuery}
+      />
     </section>
   );
 }
@@ -519,25 +536,64 @@ function ImageBatchPlaceholder(): JSX.Element {
   );
 }
 
-function LibraryPanel({ state }: { state: LibraryState }): JSX.Element {
+function LibraryPanel({
+  state,
+  query,
+  onQueryChange,
+}: {
+  state: LibraryState;
+  query: string;
+  onQueryChange: (q: string) => void;
+}): JSX.Element {
+  // Which asset is expanded to show its full copy (one at a time).
+  const [expandedId, setExpandedId] = useState<string | null>(null);
   return (
     <Card
       className="content-library"
       data-testid="content-library"
       style={{ display: 'grid', gap: 'var(--s-3)' }}
     >
+      <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--s-2)' }}>
+        <FolderOpen size={15} aria-hidden style={{ color: 'var(--flow)' }} />
+        <h3 style={{ fontSize: 'var(--fs-md)', fontWeight: 600, margin: 0 }}>
+          Library
+        </h3>
+        <span className="lab" style={{ marginLeft: 'auto' }}>
+          GT's proven, on-brand copy — search and reuse
+        </span>
+      </div>
+
+      {/* Search the kept archive (FR-3.4 — ?q= over title/body/tags). */}
       <div
         style={{
           display: 'flex',
           alignItems: 'center',
           gap: 'var(--s-2)',
+          border: '1px solid var(--line)',
+          borderRadius: 'var(--r-md)',
+          background: 'var(--surface-2)',
+          padding: '6px 10px',
         }}
       >
-        <FolderOpen size={15} aria-hidden style={{ color: 'var(--flow)' }} />
-        <h3 style={{ fontSize: 'var(--fs-md)', fontWeight: 600, margin: 0 }}>
-          Library
-        </h3>
+        <Search size={14} aria-hidden style={{ color: 'var(--muted)', flexShrink: 0 }} />
+        <input
+          data-testid="library-search"
+          aria-label="Search the content library"
+          value={query}
+          onChange={(e) => onQueryChange(e.target.value)}
+          placeholder="Search proven copy — e.g. gifted, TEFA, socialization…"
+          style={{
+            flex: 1,
+            border: 'none',
+            outline: 'none',
+            background: 'transparent',
+            color: 'var(--ink)',
+            fontFamily: 'var(--sans)',
+            fontSize: 'var(--fs-sm)',
+          }}
+        />
       </div>
+
       {state.status === 'loading' && (
         <p data-testid="library-loading" className="lab">
           Loading library…
@@ -558,7 +614,7 @@ function LibraryPanel({ state }: { state: LibraryState }): JSX.Element {
             data-testid="library-empty"
             style={{ fontSize: 'var(--fs-sm)', color: 'var(--muted)', margin: 0 }}
           >
-            No kept assets yet.
+            {query ? `No assets match “${query}”.` : 'No kept assets yet.'}
           </p>
         ) : (
           <ul
@@ -568,41 +624,135 @@ function LibraryPanel({ state }: { state: LibraryState }): JSX.Element {
               margin: 0,
               padding: 0,
               display: 'grid',
-              gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))',
               gap: 'var(--s-2)',
             }}
           >
             {state.assets.map((asset) => (
-              <li
+              <LibraryRow
                 key={asset.id}
-                className="library-asset"
-                data-testid={`library-asset-${asset.id}`}
-                style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: 'var(--s-2)',
-                  padding: '8px 10px',
-                  borderRadius: 'var(--r-sm)',
-                  background: 'var(--surface-2)',
-                  border: '1px solid var(--line)',
-                }}
-              >
-                <FileText
-                  size={14}
-                  aria-hidden
-                  style={{ color: 'var(--muted)', flexShrink: 0 }}
-                />
-                <span
-                  className="library-asset-title"
-                  style={{ flex: 1, fontSize: 'var(--fs-sm)', fontWeight: 600 }}
-                >
-                  {asset.title}
-                </span>
-                <Chip tone="neutral">{asset.asset_type}</Chip>
-              </li>
+                asset={asset}
+                expanded={expandedId === asset.id}
+                onToggle={() =>
+                  setExpandedId((id) => (id === asset.id ? null : asset.id))
+                }
+              />
             ))}
           </ul>
         ))}
     </Card>
+  );
+}
+
+// One library row: a clickable header (title + channel + type) that expands to
+// reveal the full copy, its tags, and a link out to the original GT source —
+// turning the inventory into a reusable, traceable brand-asset shelf (FR-3.4).
+function LibraryRow({
+  asset,
+  expanded,
+  onToggle,
+}: {
+  asset: LibraryAsset;
+  expanded: boolean;
+  onToggle: () => void;
+}): JSX.Element {
+  return (
+    <li
+      className="library-asset"
+      data-testid={`library-asset-${asset.id}`}
+      style={{
+        borderRadius: 'var(--r-sm)',
+        background: 'var(--surface-2)',
+        border: '1px solid var(--line)',
+        overflow: 'hidden',
+      }}
+    >
+      <button
+        type="button"
+        data-testid={`library-asset-toggle-${asset.id}`}
+        aria-expanded={expanded}
+        onClick={onToggle}
+        style={{
+          width: '100%',
+          display: 'flex',
+          alignItems: 'center',
+          gap: 'var(--s-2)',
+          padding: '8px 10px',
+          background: 'transparent',
+          border: 'none',
+          cursor: 'pointer',
+          textAlign: 'left',
+          color: 'var(--ink)',
+        }}
+      >
+        {expanded ? (
+          <ChevronDown size={14} aria-hidden style={{ flexShrink: 0, color: 'var(--muted)' }} />
+        ) : (
+          <ChevronRight size={14} aria-hidden style={{ flexShrink: 0, color: 'var(--muted)' }} />
+        )}
+        <FileText size={14} aria-hidden style={{ color: 'var(--muted)', flexShrink: 0 }} />
+        <span
+          className="library-asset-title"
+          style={{ flex: 1, fontSize: 'var(--fs-sm)', fontWeight: 600 }}
+        >
+          {asset.title}
+        </span>
+        {asset.channel ? <Chip tone="flow">{asset.channel}</Chip> : null}
+        <Chip tone="neutral">{asset.asset_type}</Chip>
+      </button>
+      {expanded && (
+        <div
+          data-testid={`library-asset-detail-${asset.id}`}
+          style={{ padding: '0 10px 10px 10px', display: 'grid', gap: 'var(--s-2)' }}
+        >
+          {asset.body ? (
+            <p
+              className="library-asset-body"
+              style={{
+                fontSize: 'var(--fs-sm)',
+                color: 'var(--ink-soft)',
+                margin: 0,
+                whiteSpace: 'pre-wrap',
+                maxHeight: 220,
+                overflow: 'auto',
+                borderLeft: '2px solid var(--line-strong)',
+                paddingLeft: 'var(--s-3)',
+              }}
+            >
+              {asset.body}
+            </p>
+          ) : (
+            <p style={{ fontSize: 'var(--fs-sm)', color: 'var(--muted)', margin: 0 }}>
+              No stored copy for this asset.
+            </p>
+          )}
+          {asset.tags && asset.tags.length > 0 && (
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 'var(--s-1)' }}>
+              {asset.tags.map((tag) => (
+                <Chip key={tag} tone="neutral">
+                  {tag}
+                </Chip>
+              ))}
+            </div>
+          )}
+          {asset.source_ref && (
+            <a
+              data-testid={`library-asset-source-${asset.id}`}
+              href={asset.source_ref}
+              target="_blank"
+              rel="noreferrer"
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: 'var(--s-1)',
+                fontSize: 'var(--fs-sm)',
+                color: 'var(--flow-ink)',
+              }}
+            >
+              <ExternalLink size={13} aria-hidden /> View original GT source
+            </a>
+          )}
+        </div>
+      )}
+    </li>
   );
 }

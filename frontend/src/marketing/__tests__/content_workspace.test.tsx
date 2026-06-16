@@ -78,6 +78,10 @@ const LIBRARY_ASSETS = [
     id: 'asset-1',
     title: 'Welcome email',
     asset_type: 'email',
+    channel: 'email',
+    body: 'Welcome to GT School — here is the next step for your gifted child.',
+    source_ref: 'https://gt.school/welcome',
+    tags: ['email', 'proven'],
     search_text: 'welcome to gt school',
   },
   {
@@ -209,6 +213,40 @@ describe('ContentWorkspace', () => {
     expect(
       screen.getByTestId('library-asset-asset-2'),
     ).toHaveTextContent('Open house promo');
+  });
+
+  it('test_library_asset_expands_to_show_body_and_source', async () => {
+    mockFetchRouted({ library: LIBRARY_ASSETS });
+    render(<ContentWorkspace />);
+
+    // The body + source are hidden until the row is expanded.
+    const toggle = await screen.findByTestId('library-asset-toggle-asset-1');
+    expect(screen.queryByTestId('library-asset-detail-asset-1')).toBeNull();
+
+    fireEvent.click(toggle);
+
+    // Expanding reveals the full copy and a link out to the original GT source.
+    const detail = screen.getByTestId('library-asset-detail-asset-1');
+    expect(detail).toHaveTextContent(/next step for your gifted child/);
+    const source = screen.getByTestId('library-asset-source-asset-1');
+    expect(source).toHaveAttribute('href', 'https://gt.school/welcome');
+  });
+
+  it('test_library_search_requeries_the_api', async () => {
+    mockFetchRouted({ library: LIBRARY_ASSETS });
+    render(<ContentWorkspace />);
+
+    const search = await screen.findByTestId('library-search');
+    fireEvent.change(search, { target: { value: 'gifted' } });
+
+    // The library re-queries the FR-3.4 search endpoint with the typed q.
+    await waitFor(() => {
+      const fetchMock = fetch as unknown as ReturnType<typeof vi.fn>;
+      const searchCall = fetchMock.mock.calls.find((c) =>
+        String(c[0]).includes('/content/library?q=gifted'),
+      );
+      expect(searchCall).toBeTruthy();
+    });
   });
 
   it('requests the batch via POST /ai/content/generate', async () => {
