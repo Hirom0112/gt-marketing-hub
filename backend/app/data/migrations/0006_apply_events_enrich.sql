@@ -1,0 +1,71 @@
+-- 0006_apply_events_enrich.sql — apply_events drop-off telemetry enriched to
+-- step → form → field granularity (so the cockpit can say "stopped at Enroll ·
+-- Data Collection Consent · signature line").
+--
+-- Authoritative source: ASSUMPTIONS.md A-24 (apply_events instrumentation),
+-- CLAUDE.md §1 (INV-1/INV-5/INV-6), THREAT_MODEL.md §6 (D-RLS-1…7), §9 (minors).
+--
+-- ===========================================================================
+-- WHAT THIS MIGRATION ADDS (and why), all ADDITIVE and doctrine-preserving.
+-- ===========================================================================
+-- The real flow is deeper than 0003's `(step, field_key)` pair: `Apply` is one
+-- long multi-section form and `Enroll` is a 7-form sub-stepper, each form ending
+-- in a signature block. To reconstruct "which sub-form, which field, in what
+-- order" the SPA now emits a `form_key` (the structural sub-form id) and a
+-- `nav_seq` (a monotonic per-family interaction index), plus three additive
+-- interaction kinds. `step` ∈ {interest, apply, enroll, tuition} is unchanged;
+-- the sub-form lives in the new `form_key`.
+--
+--   1. `form_key text` (NULLable) — the sub-form id, e.g. `data_collection_consent`.
+--      Vocabulary (closed, documented here for the SPA contract):
+--        Apply : parent_guardian_1 | parent_guardian_2 | address |
+--                household_eligibility | child_information | consents | attribution
+--        Enroll: student_information | parent_guardian_information |
+--                data_collection_consent | academic_information |
+--                privacy_data_consent | tuition_agreement | media_authorization
+--      INV-1/INV-6/COPPA: this is a STRUCTURAL FORM ID, never PII and NEVER a
+--      child key. There is still NO typed-value/content column and NO student/
+--      child column — an event carries only (step, form_key, field_key,
+--      event_type, time_on_step_ms, nav_seq). `child_information` names the FORM,
+--      not a child.
+--   2. `nav_seq int` (NULLable) — a monotonic per-family interaction index that
+--      reconstructs navigation order (the cockpit breaks "last before exit" ties
+--      by nav_seq desc). Metadata only; not an identity.
+--   3. Three ADDITIVE `apply_event_type` enum values — `form_viewed`,
+--      `form_completed`, `field_changed`. The existing six (step_viewed,
+--      step_completed, field_focused, field_left_empty, validation_error_shown,
+--      last_step_before_exit) are KEPT (back-compat).
+--
+-- RLS + FORCE stay AS-IS: column and enum additions inherit apply_events'
+-- existing owner-scoped, null-guarded INSERT/SELECT policies from 0003 (D-RLS-2).
+-- This migration adds NO policy, does NOT re-toggle RLS, and weakens nothing.
+-- `service_role` (BYPASSRLS, server-only, D-RLS-4) remains the cockpit's read path.
+--
+-- ===========================================================================
+-- ORDERING REQUIREMENT (Postgres `ALTER TYPE ... ADD VALUE`).
+-- ===========================================================================
+-- In Postgres a newly-added enum value cannot be USED in the same transaction
+-- that adds it, and on older servers `ALTER TYPE ... ADD VALUE` cannot run
+-- inside a transaction block at all. This migration NEVER uses the new values
+-- (it only adds columns + enum labels — no data writes that reference them), so
+-- the statements are independent and safe to apply in order. If a migration tool
+-- wraps each file in one transaction, run the three `ALTER TYPE` statements
+-- WITHOUT an enclosing BEGIN/COMMIT (auto-commit / one statement per call), or on
+-- modern Postgres (12+) leave them in-file — ADD VALUE is transactional there as
+-- long as the value isn't referenced in the same transaction (it isn't here).
+-- Mirrors the idempotent house style of 0005_leads_new_num_children.sql.
+-- ===========================================================================
+
+-- ---------------------------------------------------------------------------
+-- (1) + (2) Additive, nullable columns (back-compat: existing rows get NULL).
+-- ---------------------------------------------------------------------------
+ALTER TABLE apply_events ADD COLUMN IF NOT EXISTS form_key text;
+ALTER TABLE apply_events ADD COLUMN IF NOT EXISTS nav_seq integer;
+
+-- ---------------------------------------------------------------------------
+-- (3) Additive enum values (the existing six are preserved). `IF NOT EXISTS`
+--     makes each idempotent — safe to re-apply to a DB that already has them.
+-- ---------------------------------------------------------------------------
+ALTER TYPE apply_event_type ADD VALUE IF NOT EXISTS 'form_viewed';
+ALTER TYPE apply_event_type ADD VALUE IF NOT EXISTS 'form_completed';
+ALTER TYPE apply_event_type ADD VALUE IF NOT EXISTS 'field_changed';
