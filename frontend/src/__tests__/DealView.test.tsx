@@ -16,12 +16,35 @@ const ENROLLED_PAYLOAD = {
     map_score: 0.82,
     attribution_source: 'Paid Search',
     crm_seam_status: 'synced',
-    completion_pct: 45.6,
+    // Application submitted (100%), now stalled 2/6 into the ENROLLMENT packet.
+    completion_pct: 100,
     forms_signed: 2,
     forms_total: 6,
-    next_unsigned_form: 'media_authorization',
+    next_unsigned_form: 'health_form',
     contact_status: 'followed_up',
     last_contact_at: '2026-06-12T10:00:00Z',
+  },
+  family: {},
+  lead: {},
+  app_form: {},
+};
+
+// An application-stage family: still IN the application (60%), no enrollment forms
+// started — must NOT show a misleading "stuck on form #1".
+const APPLICATION_PAYLOAD = {
+  deal_view: {
+    display_name: 'The Vance Family',
+    stall_reason: 'Application incomplete',
+    funding_type: 'self_pay',
+    map_score: null,
+    attribution_source: 'Referral',
+    crm_seam_status: 'unsynced',
+    completion_pct: 60,
+    forms_signed: 0,
+    forms_total: 6,
+    next_unsigned_form: 'enrollment_agreement',
+    contact_status: 'overdue',
+    last_contact_at: null,
   },
   family: {},
   lead: {},
@@ -97,16 +120,35 @@ describe('DealView', () => {
     const recency = await screen.findByTestId('deal-recency');
     expect(recency).toHaveClass('recency-followed_up');
 
-    // The drop-off block surfaces completion %, form progress, and the stuck form.
+    // The drop-off block reads the ENROLLMENT-packet stage they're actually stuck
+    // in (application already submitted) — not the always-100% application %.
     expect(screen.getByTestId('deal-completion')).toHaveTextContent(
-      '45.6% application complete',
+      'Application ✓ submitted',
     );
     expect(screen.getByTestId('deal-completion')).toHaveTextContent(
-      '2/6 forms signed',
+      'Enrollment 2 of 6 forms',
     );
+    // The stuck form name is humanized (underscores → spaces).
     expect(screen.getByTestId('deal-next-form')).toHaveTextContent(
-      'media_authorization',
+      'health form',
     );
+  });
+
+  it('tracks application % (not enrollment) while still in the application', async () => {
+    vi.unstubAllGlobals();
+    mockFetch(APPLICATION_PAYLOAD);
+    render(<DealView familyId="fam-app" />);
+
+    // Pre-submit: the line tracks the application %, NOT "Enrollment 0 of 6".
+    expect(await screen.findByTestId('deal-completion')).toHaveTextContent(
+      '60% application complete',
+    );
+    expect(screen.getByTestId('deal-completion')).not.toHaveTextContent(
+      'Enrollment',
+    );
+    // And it must NOT claim they're "stuck on" enrollment form #1 — they haven't
+    // reached the packet yet (the misleading-signal guard).
+    expect(screen.queryByTestId('deal-next-form')).toBeNull();
   });
 
   it('handles a null map_score and null stall_reason gracefully', async () => {
@@ -228,8 +270,9 @@ describe('DealView — S12 W4 work-panel', () => {
     expect(await screen.findByTestId('deal-recovery-state')).toHaveTextContent(
       'Stalled',
     );
-    // The completion ring (52px conic dial) shows the rounded application %.
-    expect(screen.getByTestId('completion-ring-label')).toHaveTextContent('46%');
+    // The completion ring (52px conic dial) shows the ENROLLMENT-packet progress
+    // for a submitted family (2 of 6 = 33%), not the always-100% application %.
+    expect(screen.getByTestId('completion-ring-label')).toHaveTextContent('33%');
     // The seam field carries a colour-coded SeamDot alongside the named status.
     expect(screen.getByTestId('seam-dot')).toHaveAttribute('data-seam', 'synced');
   });

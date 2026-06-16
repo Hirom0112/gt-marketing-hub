@@ -264,6 +264,28 @@ export default function DealView({
   const isTefa = deal.funding_type.toLowerCase().includes('tefa');
   const fundingDisplay = fundingLabel(deal.funding_type);
 
+  // "Where they left off" — show the stage they're ACTUALLY stuck in, not the
+  // always-100% application %. The APPLICATION (Interest form) and the 6-form
+  // ENROLLMENT packet are two distinct stages: once the application is submitted
+  // (completion ≥ 100) the family is in the packet, so the ring + line track FORM
+  // progress (e.g. "2 of 6") and "stuck on" names the next unsigned form.
+  // Otherwise they're still in the application: the ring + line track the app %.
+  const completion = deal.completion_pct;
+  const appSubmitted = completion != null && completion >= 100;
+  const inEnrollment = appSubmitted && deal.forms_total != null;
+  const enrollPct =
+    inEnrollment && deal.forms_total
+      ? Math.round(((deal.forms_signed ?? 0) / deal.forms_total) * 100)
+      : 0;
+  const dropoffRingPct = inEnrollment ? enrollPct : (completion ?? 0);
+  const showDropoffRing = completion != null || inEnrollment;
+  // The "stuck on <form>" signal only makes sense once they're IN the packet —
+  // a pre-submit family is stuck in the application, not on form #1.
+  const stuckForm =
+    inEnrollment && deal.next_unsigned_form != null
+      ? deal.next_unsigned_form.replace(/_/g, ' ')
+      : null;
+
   return (
     <section aria-label="Deal view" data-testid="deal-view">
       <div
@@ -345,23 +367,20 @@ export default function DealView({
               gap: 'var(--s-3)',
             }}
           >
-            {deal.completion_pct != null && (
-              <CompletionRing pct={deal.completion_pct} />
-            )}
+            {showDropoffRing && <CompletionRing pct={dropoffRingPct} />}
             <div style={{ minWidth: 0 }}>
               <div
                 data-testid="deal-completion"
                 className="mono"
                 style={{ fontSize: 'var(--fs-sm)', color: 'var(--ink)' }}
               >
-                {deal.completion_pct == null
-                  ? PLACEHOLDER
-                  : `${deal.completion_pct}% application complete`}
-                {deal.forms_total != null
-                  ? ` · ${deal.forms_signed ?? 0}/${deal.forms_total} forms signed`
-                  : ''}
+                {inEnrollment
+                  ? `Application ✓ submitted · Enrollment ${deal.forms_signed ?? 0} of ${deal.forms_total} forms`
+                  : completion != null
+                    ? `${completion}% application complete`
+                    : PLACEHOLDER}
               </div>
-              {deal.next_unsigned_form != null && (
+              {stuckForm != null && (
                 <div
                   data-testid="deal-next-form"
                   style={{
@@ -370,7 +389,7 @@ export default function DealView({
                     color: 'var(--signal-ink)',
                   }}
                 >
-                  Stuck on: {deal.next_unsigned_form}
+                  Stuck on: {stuckForm}
                 </div>
               )}
             </div>
