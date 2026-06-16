@@ -18,6 +18,7 @@ from app.api.funding import router as funding_router
 from app.api.geo import router as geo_router
 from app.api.marketing import router as marketing_router
 from app.api.notes import router as notes_router
+from app.api.publish import router as publish_router
 from app.api.scoreboard import router as scoreboard_router
 from app.api.seam import router as seam_router
 from app.core.settings import get_settings
@@ -92,6 +93,14 @@ app.include_router(geo_router)
 # schedule gate + pipeline guard are fail-closed (blocked vs simulated_sent, INV-3);
 # dispatch is SIMULATED, never live (INV-9); recipes attribute Tom Babb (INV-7).
 app.include_router(marketing_router)
+
+# Publish fan-out + dual-screen monitor (FR-3.6; ARCH §6) — /content/publish POST
+# (validate→fan-out across N channels→HubSpot GT Social Post mirror→placeholder
+# media→persist+log), /publish/monitor GET (the cockpit observability feed),
+# /publish/status GET (the eval-gate flag the UI reads to disable publish). Dispatch
+# is SIMULATED + mirror/media simulated/placeholder (INV-9, OUT-1); a red grounding
+# eval refuses the action fail-closed (INV-3).
+app.include_router(publish_router)
 
 # Consolidated eval suite (FR-4.5; ARCH §6) — /evals/run POST (run all four FR-4.x
 # evals over deterministic offline inputs + record the live suite-level kill state)
