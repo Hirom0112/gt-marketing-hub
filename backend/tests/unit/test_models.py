@@ -10,14 +10,17 @@ from __future__ import annotations
 from uuid import uuid4
 
 import pytest
+from pydantic import ValidationError
+
 from app.data.models import (
     AppForm,
     CommunityProfile,
     EnrollmentForms,
     FamilyRecord,
+    FundingState,
     LeadsNew,
+    Student,
 )
-from pydantic import ValidationError
 
 
 def _valid_family_record_kwargs() -> dict[str, object]:
@@ -115,3 +118,61 @@ def test_source_table_models_present() -> None:
 
     profile = CommunityProfile(community_profile_id=uuid4(), family_id=family_id)
     assert profile.community_profile_id is not None
+
+
+# ---------------------------------------------------------------------------
+# A-24 — per-child Student rows: one application per child, each its own funnel.
+# ---------------------------------------------------------------------------
+
+
+def _valid_student_kwargs() -> dict[str, object]:
+    """A minimal, valid set of inputs for a Student (A-24)."""
+    return {
+        "student_id": uuid4(),
+        "family_id": uuid4(),
+        "display_label": "Rivera household — Alex · Grade 3",
+        "synthetic_first_name": "Alex",
+        "grade": "3",
+        "current_stage": "enroll",
+        "funding_type": "tefa_standard",
+    }
+
+
+def test_student_carries_its_own_funnel_and_distinct_label() -> None:
+    """A Student owns a full per-child funnel + a distinct display label (A-24)."""
+    student = Student(**_valid_student_kwargs())  # type: ignore[arg-type]
+
+    # Per-child funnel state — the whole point of A-24: each child its own funnel.
+    assert student.current_stage.value == "enroll"
+    assert student.funding_state is FundingState.NONE  # derived default (§5.4)
+    assert student.stall_reason is None
+    # One application + one enrollment packet PER STUDENT (default unset).
+    assert "app_form_id" in Student.model_fields
+    assert "enrollment_form_id" in Student.model_fields
+
+    # The distinct per-student label (also disambiguates same-surname households).
+    assert student.display_label == "Rivera household — Alex · Grade 3"
+
+    # Child identity is synthetic-named (NFR-1 / INV-1).
+    assert "synthetic_first_name" in Student.model_fields
+    assert student.synthetic_first_name == "Alex"
+
+    # Enforces §4.8 enums on the per-student funnel fields.
+    bad_stage = _valid_student_kwargs()
+    bad_stage["current_stage"] = "graduated"
+    with pytest.raises(ValidationError):
+        Student(**bad_stage)  # type: ignore[arg-type]
+
+
+def test_app_form_and_enrollment_are_keyed_per_student() -> None:
+    """One application + one enrollment packet PER STUDENT (A-24)."""
+    family_id = uuid4()
+    student_id = uuid4()
+
+    # AppForm/EnrollmentForms accept a student_id (the per-child key). Optional so
+    # pre-A-24 family-only fixtures stay valid (non-breaking).
+    app_form = AppForm(app_form_id=uuid4(), family_id=family_id, student_id=student_id)
+    assert app_form.student_id == student_id
+
+    forms = EnrollmentForms(enrollment_form_id=uuid4(), family_id=family_id, student_id=student_id)
+    assert forms.student_id == student_id
