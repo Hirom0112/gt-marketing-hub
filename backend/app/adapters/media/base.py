@@ -52,22 +52,37 @@ class ImageRef(BaseModel):
 
     In v1 this is a **placeholder** stand-in: ``is_placeholder`` is True and
     ``placeholder_uri`` points at a synthetic asset, never a live-generated file.
+    The live impl (:class:`app.adapters.media.live_adapter.LiveMediaGenAdapter`)
+    reuses this same shape with ``is_placeholder=False`` and the real generated
+    asset URL carried in the optional ``asset_url`` field.
     ``cost_estimate_ref`` is a STRING pointing at the TECH_STACK §6 cost model —
     there is **no numeric price** here, so $0 spend is structural (OUT-1, INV-11).
     Frozen — a generated ref is an immutable record, not a mutable row.
 
     Attributes:
-        placeholder_uri: Synthetic stand-in URI for the (un-generated) image.
+        placeholder_uri: Stand-in URI for the image — a synthetic placeholder URI
+            in v1; on the live path it mirrors ``asset_url`` so existing readers
+            keyed on this field keep working.
+        asset_url: The real generated asset URL on the live path; ``None`` for a
+            placeholder ref (so ``asset_url is None`` ⇔ no live gen occurred).
         cost_estimate_ref: A pointer (string) into the TECH_STACK §6 cost model;
             never a hardcoded dollar figure.
-        is_placeholder: Always True in v1 — no live gen occurred.
+        is_placeholder: True for a placeholder ref (v1 default); False on the
+            live path.
     """
 
     model_config = ConfigDict(frozen=True)
 
     placeholder_uri: str
+    asset_url: str | None = None
     cost_estimate_ref: str
     is_placeholder: bool = True
+    # Dashboard-render hints so a placeholder shows something meaningful (still $0,
+    # deterministic, no network). Both are STRINGS — no numeric price ever enters
+    # the ref shape (OUT-1, INV-11). ``brief`` echoes the request; ``render_hint``
+    # is a deterministic synthetic ``"WxH format"`` descriptor (e.g. "1024x1024 png").
+    brief: str | None = None
+    render_hint: str | None = None
 
 
 class VideoRef(BaseModel):
@@ -75,19 +90,30 @@ class VideoRef(BaseModel):
 
     The video analogue of :class:`ImageRef`: a placeholder stand-in gated to the
     ``winner`` tier in production, carrying a ``cost_estimate_ref`` string and no
-    numeric price ($0 spend in v1). Frozen.
+    numeric price ($0 spend in v1). The live impl reuses this shape with
+    ``is_placeholder=False`` and the real ``asset_url``. Frozen.
 
     Attributes:
-        placeholder_uri: Synthetic stand-in URI for the (un-generated) video.
+        placeholder_uri: Stand-in URI for the video — a synthetic placeholder URI
+            in v1; on the live path it mirrors ``asset_url``.
+        asset_url: The real generated asset URL on the live path; ``None`` for a
+            placeholder ref.
         cost_estimate_ref: A pointer (string) into the TECH_STACK §6 cost model.
-        is_placeholder: Always True in v1 — no live gen occurred.
+        is_placeholder: True for a placeholder ref (v1 default); False on the
+            live path.
     """
 
     model_config = ConfigDict(frozen=True)
 
     placeholder_uri: str
+    asset_url: str | None = None
     cost_estimate_ref: str
     is_placeholder: bool = True
+    # Dashboard-render hints (strings — never a numeric price; OUT-1, INV-11).
+    # ``brief`` echoes the request; ``render_hint`` is a deterministic synthetic
+    # ``"WxH format"`` descriptor (e.g. "1280x720 mp4").
+    brief: str | None = None
+    render_hint: str | None = None
 
 
 class MediaGenAdapter(ABC):
