@@ -315,8 +315,13 @@ def _apply_events_handler(rows_by_query: dict[str, list[dict[str, Any]]]) -> Any
         if "family_id" in qs:
             fid = qs["family_id"][0].removeprefix("eq.")
             served = [r for r in rows_by_query.get("by_family", []) if r["family_id"] == fid]
-            # Emulate order=occurred_at.desc.
-            served = sorted(served, key=lambda r: r["occurred_at"], reverse=True)
+            # Emulate the repo's order: nav_seq.desc then occurred_at.desc (the
+            # "latest navigation position" sort the contract asks for).
+            served = sorted(
+                served,
+                key=lambda r: (r.get("nav_seq") or 0, r["occurred_at"]),
+                reverse=True,
+            )
         else:
             # The heatmap query filters event_type=eq.last_step_before_exit.
             served = rows_by_query.get("exits", [])
@@ -330,27 +335,66 @@ def test_drop_off_for_family_prefers_last_step_before_exit() -> None:
     events = [
         {
             "family_id": fid,
-            "step": "interest.num_children",
+            "step": "interest",
+            "form_key": None,
             "field_key": "num_children",
             "event_type": "field_focused",
             "occurred_at": "2026-06-02T10:00:00+00:00",
+            "nav_seq": 1,
         },
         {
             "family_id": fid,
-            "step": "enroll.form3",
-            "field_key": "income",
+            "step": "enroll",
+            "form_key": "data_collection_consent",
+            "field_key": "signature",
             "event_type": "last_step_before_exit",
             "occurred_at": "2026-06-02T09:00:00+00:00",
+            "nav_seq": 2,
         },
     ]
     repo = _make_repo(_apply_events_handler({"by_family": events}))
     point = repo.drop_off_for_family(UUID(fid))
     assert point == DropOffPoint(
         family_id=UUID(fid),
-        step="enroll.form3",
-        field_key="income",
+        step="enroll",
+        form_key="data_collection_consent",
+        field_key="signature",
         event_type="last_step_before_exit",
         occurred_at="2026-06-02T09:00:00+00:00",
+    )
+
+
+def test_drop_off_for_family_breaks_exit_ties_by_nav_seq() -> None:
+    """Two last_step_before_exit events ⇒ the higher nav_seq (later in nav order) wins."""
+    fid = _FID_APPLY
+    events = [
+        {
+            "family_id": fid,
+            "step": "enroll",
+            "form_key": "student_information",
+            "field_key": "first_name",
+            "event_type": "last_step_before_exit",
+            # SAME occurred_at as the other exit — only nav_seq disambiguates.
+            "occurred_at": "2026-06-02T09:00:00+00:00",
+            "nav_seq": 5,
+        },
+        {
+            "family_id": fid,
+            "step": "enroll",
+            "form_key": "tuition_agreement",
+            "field_key": "signature",
+            "event_type": "last_step_before_exit",
+            "occurred_at": "2026-06-02T09:00:00+00:00",
+            "nav_seq": 9,  # later in the navigation order — the true last position.
+        },
+    ]
+    repo = _make_repo(_apply_events_handler({"by_family": events}))
+    point = repo.drop_off_for_family(UUID(fid))
+    assert point is not None
+    assert (point.step, point.form_key, point.field_key) == (
+        "enroll",
+        "tuition_agreement",
+        "signature",
     )
 
 
@@ -359,23 +403,29 @@ def test_drop_off_for_family_falls_back_to_most_recent() -> None:
     events = [
         {
             "family_id": fid,
-            "step": "interest.tuition_aware",
+            "step": "interest",
+            "form_key": None,
             "field_key": None,
             "event_type": "step_viewed",
             "occurred_at": "2026-06-01T08:00:00+00:00",
+            "nav_seq": 1,
         },
         {
             "family_id": fid,
-            "step": "interest.attribution",
+            "step": "apply",
+            "form_key": "attribution",
             "field_key": "attribution",
             "event_type": "validation_error_shown",
             "occurred_at": "2026-06-01T09:00:00+00:00",
+            "nav_seq": 2,
         },
     ]
     repo = _make_repo(_apply_events_handler({"by_family": events}))
     point = repo.drop_off_for_family(UUID(fid))
     assert point is not None
-    assert point.step == "interest.attribution"  # most-recent, no exit event present.
+    # most-recent (highest nav_seq), no exit event present.
+    assert point.step == "apply"
+    assert point.form_key == "attribution"
 
 
 def test_drop_off_for_family_none_when_no_events() -> None:
@@ -383,15 +433,33 @@ def test_drop_off_for_family_none_when_no_events() -> None:
     assert repo.drop_off_for_family(UUID(_FID_INTEREST)) is None
 
 
-def test_drop_off_heatmap_counts_by_step_and_field() -> None:
+def test_drop_off_heatmap_counts_by_step_form_and_field() -> None:
     exits = [
-        {"step": "enroll.form3", "field_key": "income"},
-        {"step": "enroll.form3", "field_key": "income"},
-        {"step": "apply.confirm", "field_key": None},
+        {"step": "enroll", "form_key": "data_collection_consent", "field_key": "signature"},
+        {"step": "enroll", "form_key": "data_collection_consent", "field_key": "signature"},
+        {"step": "apply", "form_key": "consents", "field_key": None},
     ]
     repo = _make_repo(_apply_events_handler({"exits": exits}))
     buckets = repo.drop_off_heatmap()
     assert buckets == [
-        DropOffBucket(step="enroll.form3", field_key="income", count=2),
-        DropOffBucket(step="apply.confirm", field_key=None, count=1),
+        DropOffBucket(
+            step="enroll", form_key="data_collection_consent", field_key="signature", count=2
+        ),
+        DropOffBucket(step="apply", form_key="consents", field_key=None, count=1),
     ]
+
+
+def test_drop_off_heatmap_distinguishes_forms_within_a_step() -> None:
+    """Two enroll exits in DIFFERENT sub-forms tally as separate cells (form granularity)."""
+    exits = [
+        {"step": "enroll", "form_key": "student_information", "field_key": "first_name"},
+        {"step": "enroll", "form_key": "tuition_agreement", "field_key": "signature"},
+    ]
+    repo = _make_repo(_apply_events_handler({"exits": exits}))
+    buckets = repo.drop_off_heatmap()
+    # Two distinct (step, form_key, field_key) cells, each count 1 — NOT collapsed
+    # to one "enroll" bucket. Order: count tie ⇒ step, then form_key.
+    assert {(b.form_key, b.count) for b in buckets} == {
+        ("student_information", 1),
+        ("tuition_agreement", 1),
+    }

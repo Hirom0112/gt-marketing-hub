@@ -76,14 +76,18 @@ _FAMILY_EMBED = "*,leads_new!inner(*),app_form(*),enrollment_forms(*),community_
 class DropOffPoint:
     """One family's last-known apply-flow position before exit (A-24 drop-off view).
 
-    Metadata only — ``step`` / ``field_key`` / ``event_type`` (the closed
-    ``apply_event_type`` set), never a typed value/content and never a child key
-    (INV-1/INV-6/COPPA). Surfaced in the deal view as "where this family froze".
-    ``None`` when the family emitted no ``apply_events``.
+    Step → form → field granularity (0006): ``step`` ∈ {interest, apply, enroll,
+    tuition}, ``form_key`` the sub-form id (e.g. ``data_collection_consent``;
+    ``None`` for step-level events), ``field_key`` the field within it. Metadata
+    only — ``form_key`` is a STRUCTURAL form id, never a typed value/content and
+    never a child key (INV-1/INV-6/COPPA). Surfaced in the deal view as "stopped
+    at Enroll · Data Collection Consent · signature line". ``None`` when the
+    family emitted no ``apply_events``.
     """
 
     family_id: UUID
     step: str
+    form_key: str | None
     field_key: str | None
     event_type: str
     occurred_at: str | None
@@ -91,14 +95,16 @@ class DropOffPoint:
 
 @dataclass(frozen=True)
 class DropOffBucket:
-    """One cohort drop-off heatmap cell — a count of exits at a step/field (A-24).
+    """One cohort drop-off heatmap cell — a count of exits at a step/form/field (A-24).
 
-    Aggregate only: ``count`` families froze at this ``step`` (and ``field_key``,
-    when present). No family/child identity — it answers *where the cohort
-    freezes*, not *who*.
+    Aggregate only: ``count`` families froze at this ``step`` / ``form_key`` /
+    ``field_key`` (any of ``form_key`` / ``field_key`` ``None`` for coarser
+    events). No family/child identity — it answers *where the cohort freezes*, not
+    *who*. ``form_key`` is a structural sub-form id (INV-1/INV-6).
     """
 
     step: str
+    form_key: str | None
     field_key: str | None
     count: int
 
@@ -318,55 +324,79 @@ class SupabaseFamilyRepository(FamilyRepository):
     def drop_off_for_family(self, family_id: UUID) -> DropOffPoint | None:
         """The family's last apply-flow position before exit (A-24 deal-view view).
 
-        Prefers the explicit ``last_step_before_exit`` event; absent that, the
-        most-recent event of any kind. Metadata only (step/field/event), never a
-        value/content or child key (INV-1/INV-6). ``None`` when the family emitted
-        no ``apply_events``.
+        Step → form → field granularity (0006). Prefers the latest explicit
+        ``last_step_before_exit`` event; absent that, the most-recent event of any
+        kind. "Latest" orders by ``nav_seq`` desc (the monotonic per-family
+        navigation index) then ``occurred_at`` desc — so a same-timestamp tie is
+        broken by who came later in the navigation order. Returns ``step`` /
+        ``form_key`` / ``field_key``: metadata only, ``form_key`` a structural
+        sub-form id, never a value/content or child key (INV-1/INV-6). ``None``
+        when the family emitted no ``apply_events``.
         """
         rows = self._get(
             f"{_REST}/apply_events",
             {
-                "select": "step,field_key,event_type,occurred_at",
+                "select": "step,form_key,field_key,event_type,occurred_at,nav_seq",
                 "family_id": f"eq.{family_id}",
-                "order": "occurred_at.desc",
+                # nav_seq desc then occurred_at desc — the "latest navigation
+                # position" order (the contract's tie-break, nulls sort last).
+                "order": "nav_seq.desc.nullslast,occurred_at.desc",
             },
         )
         if not rows:
             return None
-        exit_rows = [r for r in rows if r.get("event_type") == "last_step_before_exit"]
-        chosen = exit_rows[0] if exit_rows else rows[0]
+        # Defensive re-sort: do not trust the server's order to be the contract's
+        # exact key — apply it here so the tie-break is deterministic in-process.
+        ordered = sorted(rows, key=self._nav_order_key, reverse=True)
+        exit_rows = [r for r in ordered if r.get("event_type") == "last_step_before_exit"]
+        chosen = exit_rows[0] if exit_rows else ordered[0]
         return DropOffPoint(
             family_id=family_id,
             step=str(chosen.get("step", "")),
+            form_key=chosen.get("form_key"),
             field_key=chosen.get("field_key"),
             event_type=str(chosen.get("event_type", "")),
             occurred_at=chosen.get("occurred_at"),
         )
 
-    def drop_off_heatmap(self) -> list[DropOffBucket]:
-        """Cohort drop-off heatmap — exit counts grouped by step+field (A-24).
+    @staticmethod
+    def _nav_order_key(row: dict[str, Any]) -> tuple[int, str]:
+        """Sort key for "latest navigation position": (nav_seq, occurred_at).
 
-        Counts ``last_step_before_exit`` events per (``step``, ``field_key``): the
-        cells where families freeze, aggregate only (no family/child identity).
-        Ordered by descending count then step for a stable, scannable surface.
+        ``nav_seq`` is the primary key (a missing one sorts earliest as -1);
+        ``occurred_at`` breaks a nav_seq tie. Used with ``reverse=True`` so the
+        latest position is first.
+        """
+        nav_seq = row.get("nav_seq")
+        nav = int(nav_seq) if nav_seq is not None else -1
+        return (nav, str(row.get("occurred_at") or ""))
+
+    def drop_off_heatmap(self) -> list[DropOffBucket]:
+        """Cohort drop-off heatmap — exit counts grouped by step+form+field (A-24).
+
+        Counts ``last_step_before_exit`` events per (``step``, ``form_key``,
+        ``field_key``): the cells where families freeze, aggregate only (no
+        family/child identity). Ordered by descending count then ``step`` /
+        ``form_key`` / ``field_key`` for a stable, scannable surface.
         """
         rows = self._get(
             f"{_REST}/apply_events",
             {
-                "select": "step,field_key",
+                "select": "step,form_key,field_key",
                 "event_type": "eq.last_step_before_exit",
             },
         )
-        tally: Counter[tuple[str, str | None]] = Counter()
+        tally: Counter[tuple[str, str | None, str | None]] = Counter()
         for row in rows:
             step = str(row.get("step", ""))
+            form_key = row.get("form_key")
             field_key = row.get("field_key")
-            tally[(step, field_key)] += 1
+            tally[(step, form_key, field_key)] += 1
         buckets = [
-            DropOffBucket(step=step, field_key=field_key, count=count)
-            for (step, field_key), count in tally.items()
+            DropOffBucket(step=step, form_key=form_key, field_key=field_key, count=count)
+            for (step, form_key, field_key), count in tally.items()
         ]
-        buckets.sort(key=lambda b: (-b.count, b.step, b.field_key or ""))
+        buckets.sort(key=lambda b: (-b.count, b.step, b.form_key or "", b.field_key or ""))
         return buckets
 
 
