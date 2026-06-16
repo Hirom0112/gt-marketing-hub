@@ -445,10 +445,21 @@ class Kpi(_StrictModel):
 
 
 class Scheduler(_StrictModel):
-    """FR-3.6 / OUT-2 content scheduler — dispatch is SIMULATED in v1."""
+    """FR-3.6 / OUT-2 content scheduler — dispatch is SIMULATED in v1.
+
+    The publish-monitor slice fans one publish request out to a subset of
+    ``publish_channels`` (a subset of the LOCKED ``Channel`` enum, CONTENT_SPEC
+    §2.1 — social-publishable feeds only). ``daily_caps`` is the per-platform max
+    SIMULATED dispatches/day; an over-cap channel is forced ``blocked`` (INV-8
+    governance posture). Both live here as the one canonical home (INV-11).
+    """
 
     # Never 'live' in v1 (INV-9, OUT-2): the field is typed shut to simulated.
     dispatch_mode: str
+    # Social-publishable channel tokens the fan-out may target (subset of Channel).
+    publish_channels: list[str]
+    # Per-platform-token max simulated dispatches/day (quota guard; over-cap ⇒ blocked).
+    daily_caps: dict[str, int]
 
     @field_validator("dispatch_mode")
     @classmethod
@@ -458,6 +469,21 @@ class Scheduler(_StrictModel):
                 f"scheduler.dispatch_mode must be 'simulated' in v1, got {value!r} (INV-9, OUT-2)"
             )
         return value
+
+    @model_validator(mode="after")
+    def _caps_cover_channels(self) -> Scheduler:
+        if not self.publish_channels:
+            raise ValueError("scheduler.publish_channels must be non-empty")
+        missing = [c for c in self.publish_channels if c not in self.daily_caps]
+        if missing:
+            raise ValueError(
+                f"scheduler.daily_caps must define a cap for every publish channel; "
+                f"missing {missing!r}"
+            )
+        bad = {k: v for k, v in self.daily_caps.items() if v < 1}
+        if bad:
+            raise ValueError(f"scheduler.daily_caps values must be >= 1, got {bad!r}")
+        return self
 
 
 class CrmGtProperties(_StrictModel):

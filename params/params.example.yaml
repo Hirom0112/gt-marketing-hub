@@ -139,6 +139,15 @@ kpi:                        # FR-3.11 — per-channel KPI rollup vs baseline/tar
 
 scheduler:                  # FR-3.6 / OUT-2 — dispatch is SIMULATED in v1
   dispatch_mode: simulated          # never 'live' in v1 (INV-9, OUT-2)
+  # publish-monitor fan-out: a publish request targets a subset of these channels.
+  # Subset of the LOCKED Channel enum (CONTENT_SPEC §2.1) — social-publishable feeds
+  # only. FB/YT/Threads/Pinterest are NOT in the enum (adding them is a spec change).
+  publish_channels: [instagram, tiktok, x, linkedin]
+  daily_caps:                       # per-platform max SIMULATED dispatches/day; over-cap ⇒ blocked (INV-8 posture)
+    instagram: 5
+    tiktok: 3
+    x: 10
+    linkedin: 3
 
 crm:                        # S10 — HubSpot CRM seam (ANALYSIS/hubspot-complement-plan.md)
   # Cockpit Stage enum value → HubSpot deal stage id. Provisioned by
