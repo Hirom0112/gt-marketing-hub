@@ -106,9 +106,16 @@ describe('DealView', () => {
 
   it('fetches the family by id (GET)', async () => {
     render(<DealView familyId="fam-123" />);
-    await waitFor(() => expect(fetch).toHaveBeenCalledTimes(1));
+    // The component fires two GETs on mount — the family record AND the CRM seam
+    // status (S14 W4). Find the family call by URL rather than asserting a total
+    // count, so the added /crm/status fetch doesn't break this assertion.
+    await waitFor(() => expect(fetch).toHaveBeenCalled());
     const fetchMock = fetch as unknown as ReturnType<typeof vi.fn>;
-    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit?];
+    const familyCall = fetchMock.mock.calls.find(([url]) =>
+      /\/families\/fam-123$/.test(url as string),
+    ) as [string, RequestInit?] | undefined;
+    expect(familyCall).toBeTruthy();
+    const [url, init] = familyCall as [string, RequestInit?];
     expect(url).toMatch(/\/families\/fam-123$/);
     expect(init?.method ?? 'GET').toBe('GET');
   });
@@ -294,5 +301,163 @@ describe('DealView — S12 W4 work-panel', () => {
       await screen.findByTestId('dismiss-family-reason-Declined'),
     );
     expect(onDismiss).toHaveBeenCalledWith('fam-123', 'Declined');
+  });
+});
+
+// --------------------------------------------------------------------------- #
+// S14 W4 — CRM seam badge + live-push kill switch. The deal view reads GET
+// /crm/status and FAILS CLOSED (INV-3 pattern; INV-8): a positive kill_switch
+// disables the "Seed to HubSpot" live-push and shows the operator a reason. An
+// absent / unknown / errored status FAILS OPEN — the action stays enabled.
+// --------------------------------------------------------------------------- #
+
+// A CRM-status shape (GET /crm/status). NO secret: token_configured is a bool.
+interface CrmStatusFixture {
+  crm_mode: 'simulate' | 'live';
+  kill_switch: boolean;
+  effective_mode: 'simulate' | 'live';
+  token_configured: boolean;
+  calls_per_run_cap: number;
+}
+
+// A fetch stub that ROUTES by URL: GET /crm/status → the CRM-status fixture,
+// GET /families/{id} → the family payload, POST …/seed → the seed response. This
+// mirrors that the component fires two GETs on mount (family + crm/status).
+function mockCrmFetch(
+  crm: CrmStatusFixture,
+  family: unknown = ENROLLED_PAYLOAD,
+): ReturnType<typeof vi.fn> {
+  const fn = vi.fn(async (url: string, init?: RequestInit) => {
+    if (/\/crm\/status$/.test(url)) {
+      return { ok: true, status: 200, json: async () => crm };
+    }
+    if (init?.method === 'POST' && /\/seed$/.test(url)) {
+      return { ok: true, status: 200, json: async () => SEED_RESPONSE };
+    }
+    return { ok: true, status: 200, json: async () => family };
+  });
+  vi.stubGlobal('fetch', fn);
+  return fn as unknown as ReturnType<typeof vi.fn>;
+}
+
+describe('DealView — S14 W4 CRM seam badge + kill switch', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+
+  it('fails closed when the kill switch is ON: disables the live-push + shows the note', async () => {
+    mockCrmFetch({
+      crm_mode: 'live',
+      kill_switch: true,
+      effective_mode: 'simulate',
+      token_configured: true,
+      calls_per_run_cap: 50,
+    });
+    render(<DealView familyId="fam-123" />);
+
+    // The live-push action is DISABLED (INV-8 fail-closed).
+    const seed = await screen.findByTestId('seed-hubspot');
+    expect(seed).toBeDisabled();
+    // …with an operator-facing reason.
+    expect(
+      await screen.findByTestId('seed-kill-switch-note'),
+    ).toHaveTextContent('Kill switch ON — live sync disabled');
+    // …and the seam badge reads the kill-switch state.
+    expect(await screen.findByTestId('crm-seam-badge')).toBeInTheDocument();
+    expect(screen.getByTestId('crm-seam-state')).toHaveTextContent(
+      'Kill switch ON — live sync disabled',
+    );
+  });
+
+  it('shows CRM: LIVE and enables the live-push when effective mode is live', async () => {
+    mockCrmFetch({
+      crm_mode: 'live',
+      kill_switch: false,
+      effective_mode: 'live',
+      token_configured: true,
+      calls_per_run_cap: 50,
+    });
+    render(<DealView familyId="fam-123" />);
+
+    expect(await screen.findByTestId('crm-seam-state')).toHaveTextContent(
+      'CRM: LIVE',
+    );
+    const seed = await screen.findByTestId('seed-hubspot');
+    expect(seed).toBeEnabled();
+    expect(screen.queryByTestId('seed-kill-switch-note')).toBeNull();
+  });
+
+  it('shows CRM: Simulated and enables the live-push when effective mode is simulate', async () => {
+    mockCrmFetch({
+      crm_mode: 'simulate',
+      kill_switch: false,
+      effective_mode: 'simulate',
+      token_configured: false,
+      calls_per_run_cap: 50,
+    });
+    render(<DealView familyId="fam-123" />);
+
+    expect(await screen.findByTestId('crm-seam-state')).toHaveTextContent(
+      'CRM: Simulated',
+    );
+    const seed = await screen.findByTestId('seed-hubspot');
+    expect(seed).toBeEnabled();
+    expect(screen.queryByTestId('seed-kill-switch-note')).toBeNull();
+  });
+
+  it('fails OPEN when /crm/status is non-ok: no badge, no note, action enabled', async () => {
+    // /crm/status 503 ⇒ the component never gets a CrmStatus ⇒ no badge, the
+    // live-push stays enabled (a missing status never silently disables it).
+    const fn = vi.fn(async (url: string, init?: RequestInit) => {
+      if (/\/crm\/status$/.test(url)) {
+        return { ok: false, status: 503, json: async () => ({}) };
+      }
+      if (init?.method === 'POST' && /\/seed$/.test(url)) {
+        return { ok: true, status: 200, json: async () => SEED_RESPONSE };
+      }
+      return { ok: true, status: 200, json: async () => ENROLLED_PAYLOAD };
+    });
+    vi.stubGlobal('fetch', fn);
+    render(<DealView familyId="fam-123" />);
+
+    // The deal loads and the live-push is enabled (fail open).
+    const seed = await screen.findByTestId('seed-hubspot');
+    expect(seed).toBeEnabled();
+    expect(screen.queryByTestId('crm-seam-badge')).toBeNull();
+    expect(screen.queryByTestId('seed-kill-switch-note')).toBeNull();
+  });
+
+  it('fails OPEN when the fetch rejects: action enabled, no kill-switch note', async () => {
+    const fn = vi.fn(async (url: string, init?: RequestInit) => {
+      if (/\/crm\/status$/.test(url)) {
+        throw new Error('network down');
+      }
+      if (init?.method === 'POST' && /\/seed$/.test(url)) {
+        return { ok: true, status: 200, json: async () => SEED_RESPONSE };
+      }
+      return { ok: true, status: 200, json: async () => ENROLLED_PAYLOAD };
+    });
+    vi.stubGlobal('fetch', fn);
+    render(<DealView familyId="fam-123" />);
+
+    const seed = await screen.findByTestId('seed-hubspot');
+    expect(seed).toBeEnabled();
+    expect(screen.queryByTestId('crm-seam-badge')).toBeNull();
+    expect(screen.queryByTestId('seed-kill-switch-note')).toBeNull();
+  });
+
+  it('fails OPEN on an unknown status shape: the type guard rejects it, action enabled', async () => {
+    // /crm/status resolves 200 but to some OTHER payload (no kill_switch field).
+    // isCrmStatus must reject it ⇒ no badge, action enabled (no silent disable).
+    mockCrmFetch(
+      { unexpected: 'shape' } as unknown as CrmStatusFixture,
+    );
+    render(<DealView familyId="fam-123" />);
+
+    const seed = await screen.findByTestId('seed-hubspot');
+    expect(seed).toBeEnabled();
+    expect(screen.queryByTestId('crm-seam-badge')).toBeNull();
+    expect(screen.queryByTestId('seed-kill-switch-note')).toBeNull();
   });
 });

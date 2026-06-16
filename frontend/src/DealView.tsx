@@ -62,6 +62,35 @@ type SeedState =
   | { status: 'error'; message: string }
   | { status: 'captured'; data: SeedResponse };
 
+// GET /crm/status (S14 W4) — the read-only CRM seam state the operator UI reads
+// to fail closed on the live-push action (INV-3 pattern; INV-8 kill switch). NO
+// secret: `token_configured` is a bool, the token itself is never surfaced.
+interface CrmStatus {
+  crm_mode: 'simulate' | 'live';
+  kill_switch: boolean;
+  // What the registry would ACTUALLY select — `simulate` when the kill switch is
+  // on even though crm_mode=live, so the indicator reflects real behavior.
+  effective_mode: 'simulate' | 'live';
+  token_configured: boolean;
+  calls_per_run_cap: number;
+}
+
+// A response shape only counts as a CrmStatus if it carries the discriminating
+// fields — so a stray GET that resolves to some OTHER payload (e.g. a test fetch
+// stub that serves the family object for every URL) does NOT masquerade as CRM
+// status and silently disable the action. Fail OPEN on an unknown shape: absent /
+// malformed status ⇒ no kill-switch banner, the action stays enabled (the kill
+// switch only fail-closes on a POSITIVE kill_switch=true from the real endpoint).
+function isCrmStatus(value: unknown): value is CrmStatus {
+  if (typeof value !== 'object' || value === null) return false;
+  const v = value as Record<string, unknown>;
+  return (
+    typeof v.kill_switch === 'boolean' &&
+    typeof v.effective_mode === 'string' &&
+    typeof v.crm_mode === 'string'
+  );
+}
+
 interface DealViewProps {
   familyId: string;
   // Bump to force a re-fetch (e.g. after an approved follow-up updates recency).
@@ -193,6 +222,10 @@ export default function DealView({
   const [seed, setSeed] = useState<SeedState>({ status: 'idle' });
   // The "Dismiss this family" reason picker (closed by default).
   const [dismissing, setDismissing] = useState(false);
+  // The CRM seam state (S14 W4) — null until /crm/status resolves (or if it is
+  // unavailable / an unknown shape, in which case we fail OPEN: no banner, the
+  // live-push stays enabled; the kill switch only blocks on a positive true).
+  const [crm, setCrm] = useState<CrmStatus | null>(null);
 
   function seedToHubSpot(): void {
     setSeed({ status: 'seeding' });
@@ -216,6 +249,24 @@ export default function DealView({
     setSeed({ status: 'idle' });
     setDismissing(false);
   }, [familyId]);
+
+  useEffect(() => {
+    // Surface the CRM seam state so the live-push action fails closed when the
+    // kill switch is on (S14 W4; INV-3/INV-8). Fail OPEN on any error / unknown
+    // shape — a missing status never silently disables the action.
+    let cancelled = false;
+    fetch(`${apiBaseUrl}/crm/status`)
+      .then((res) => (res.ok ? (res.json() as Promise<unknown>) : null))
+      .then((data) => {
+        if (!cancelled) setCrm(isCrmStatus(data) ? data : null);
+      })
+      .catch(() => {
+        if (!cancelled) setCrm(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -259,6 +310,10 @@ export default function DealView({
   }
 
   const deal = state.data;
+  // Fail closed (INV-8): the kill switch disables the live-push action. Only a
+  // POSITIVE kill_switch=true from /crm/status blocks — an absent / unknown status
+  // leaves the action enabled (fail open on missing state, never silently off).
+  const killSwitchOn = crm?.kill_switch === true;
   // A-23 — show the operator-facing label ("Texas voucher" / "Self-pay"), never
   // the raw enum. Voucher tiers (any TEFA) take the gate tone, self-pay the flow.
   const isTefa = deal.funding_type.toLowerCase().includes('tefa');
@@ -430,10 +485,16 @@ export default function DealView({
         />
       </dl>
 
+      {/* CRM seam indicator (S14 W4) — surfaces the HubSpot kill switch / CRM mode
+          so the operator can SEE the seam state and the live-push fails closed when
+          the kill switch is on (INV-3 pattern; INV-8). NO secret is shown. */}
+      <CrmSeamBadge crm={crm} />
+
       {/* "Seed to HubSpot" (S10 W3) — push this synthetic family live into the
           real portal, then surface the captured Deal + Contact ids as deep links.
           The deterministic backend route owns the write (INV-2); this button only
-          triggers it and renders the proof. */}
+          triggers it and renders the proof. The live-push FAILS CLOSED when the
+          HubSpot kill switch is on (S14 W4; INV-8) — disabled with a reason. */}
       <div
         style={{
           marginTop: 'var(--s-3)',
@@ -448,10 +509,24 @@ export default function DealView({
           icon={UploadCloud}
           data-testid="seed-hubspot"
           onClick={seedToHubSpot}
-          disabled={seed.status === 'seeding'}
+          disabled={seed.status === 'seeding' || killSwitchOn}
+          title={
+            killSwitchOn
+              ? 'HubSpot kill switch is ON — live sync is disabled (INV-8). Clear HUBSPOT_KILL_SWITCH to re-enable.'
+              : undefined
+          }
         >
           {seed.status === 'seeding' ? 'Seeding…' : 'Seed to HubSpot'}
         </Button>
+        {killSwitchOn && (
+          <span
+            data-testid="seed-kill-switch-note"
+            role="status"
+            style={{ fontSize: 'var(--fs-sm)', color: 'var(--signal-ink)' }}
+          >
+            Kill switch ON — live sync disabled
+          </span>
+        )}
         {seed.status === 'error' && (
           <span
             data-testid="seed-error"
@@ -542,6 +617,45 @@ export default function DealView({
         <CapturePanel data={seed.data} />
       )}
     </section>
+  );
+}
+
+// The CRM seam indicator (S14 W4). Surfaces the effective HubSpot seam so the
+// operator SEES the state and the live-push fails closed when the kill switch is
+// on (INV-3 pattern; INV-8). NO secret: it reads only the booleans/mode from
+// /crm/status. Renders nothing until the status resolves (fail open on absent).
+//   - kill switch ON ⇒ a signal-tone "Kill switch ON — live sync disabled" chip.
+//   - effective live ⇒ a flow-tone "CRM: LIVE" chip (writes land in the portal).
+//   - otherwise      ⇒ a neutral "CRM: Simulated" chip (recorded, never sent).
+function CrmSeamBadge({ crm }: { crm: CrmStatus | null }): JSX.Element | null {
+  if (crm === null) return null;
+  if (crm.kill_switch) {
+    return (
+      <div data-testid="crm-seam-badge" style={{ marginTop: 'var(--s-3)' }}>
+        <span data-testid="crm-seam-state" data-crm-effective={crm.effective_mode}>
+          <Chip tone="signal" title="HubSpot kill switch is ON — live writes are disabled (INV-8).">
+            Kill switch ON — live sync disabled
+          </Chip>
+        </span>
+      </div>
+    );
+  }
+  const live = crm.effective_mode === 'live';
+  return (
+    <div data-testid="crm-seam-badge" style={{ marginTop: 'var(--s-3)' }}>
+      <span data-testid="crm-seam-state" data-crm-effective={crm.effective_mode}>
+        <Chip
+          tone={live ? 'flow' : 'neutral'}
+          title={
+            live
+              ? 'CRM seam is LIVE — synthetic pushes land in the real HubSpot portal.'
+              : 'CRM seam is simulated — pushes are recorded, never sent (INV-9).'
+          }
+        >
+          {live ? 'CRM: LIVE' : 'CRM: Simulated'}
+        </Chip>
+      </span>
+    </div>
   );
 }
 

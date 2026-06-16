@@ -36,7 +36,7 @@ from app.adapters.sentiment.placeholder import PlaceholderSentimentAdapter
 from app.adapters.social.base import SocialAdapter
 from app.adapters.social.simulated import SimulatedSocialAdapter
 from app.core.params import AwardAmounts, Crm, Params, load_params
-from app.core.settings import get_settings
+from app.core.settings import CrmMode, Settings, get_settings
 
 # Default on-disk home for the persistent brand-memory store when no override is
 # supplied (ASSUMPTIONS A-11). The path is a config seam (env > default), not a
@@ -76,6 +76,34 @@ def _load_award_amounts() -> AwardAmounts:
     return _load_params().funding.award_amounts
 
 
+def effective_crm_mode(settings: Settings) -> CrmMode:
+    """The CRM mode the registry would ACTUALLY select for ``settings`` (pure).
+
+    The single source of truth for the §7/INV-8 precedence, extracted so a
+    read-only status surface can REPORT the effective seam state without
+    constructing a live adapter (or an httpx client) and without forking the
+    precedence (INV-11 — one canonical home). :func:`get_crm_adapter` consumes
+    this; nothing here reads the env or does I/O.
+
+    - ``CRM_MODE=simulate`` ⇒ ``"simulate"`` (the default recorder; INV-9).
+    - ``CRM_MODE=live`` + token + **kill switch on** ⇒ ``"simulate"`` — guard 3
+      (INV-8) degrades to the recorder; never a live call when the kill switch is on.
+    - ``CRM_MODE=live`` + token + no kill switch ⇒ ``"live"`` (the live adapter).
+    - ``CRM_MODE=live`` + **no token** ⇒ ``"live"`` — a live INTENT that is
+      misconfigured; :func:`get_crm_adapter` fails loud (``RuntimeError``) rather
+      than silently degrade (INV-9). Reported as ``"live"`` so the misconfig stays
+      visible, not hidden behind a false ``"simulate"``.
+    """
+    if settings.crm_mode == "simulate":
+        return "simulate"
+    # CRM_MODE == "live": the kill switch forces simulate even with a valid token
+    # (guard 3, INV-8). A missing token is a live INTENT that fails loud at
+    # construction (get_crm_adapter) — reported here as the "live" intent.
+    if settings.hubspot_private_app_token is not None and settings.hubspot_kill_switch:
+        return "simulate"
+    return "live"
+
+
 def get_crm_adapter() -> CRMAdapter:
     """Return the CRM adapter impl for the current ``CRM_MODE`` (S10 W2; §7, NFR-8).
 
@@ -91,30 +119,43 @@ def get_crm_adapter() -> CRMAdapter:
     - ``live`` + **no token** ⇒ ``RuntimeError`` — fail loud on misconfig rather
       than silently degrading to simulated (INV-9).
 
+    The simulate-vs-live decision is delegated to :func:`effective_crm_mode` (the
+    one canonical precedence, INV-11); the only branch it can't carry is the
+    fail-loud on ``live`` + no token, kept here at construction (INV-9).
+
     Raises:
         RuntimeError: when ``CRM_MODE=live`` but no HubSpot token is configured.
     """
     settings = get_settings()
-    if settings.crm_mode == "simulate":
-        return SimulatedCRMAdapter()
 
-    # CRM_MODE == "live" beyond this point.
-    if settings.hubspot_private_app_token is None:
+    # CRM_MODE == "live" + no token ⇒ fail loud on misconfig (INV-9). effective_crm_mode
+    # reports this as the live INTENT; the construction-time RuntimeError lives here.
+    if settings.crm_mode == "live" and settings.hubspot_private_app_token is None:
         raise RuntimeError(
             "CRM_MODE='live' requires HUBSPOT_PRIVATE_APP_TOKEN — none is configured. "
             "Fail loud on misconfig rather than silently degrade to simulated "
             "(INV-9). Set the token or use CRM_MODE='simulate'."
         )
 
-    # Guard 3 (INV-8): the kill switch forces the simulated adapter — never a live
-    # call — even with a valid token. Degrade, logged at the registry seam.
-    if settings.hubspot_kill_switch:
+    # Single canonical precedence: simulate (default), or live degraded to simulate
+    # by the kill switch (guard 3, INV-8). A live result needs a token (guaranteed
+    # non-None by the guard above).
+    if effective_crm_mode(settings) == "simulate":
         return SimulatedCRMAdapter()
 
+    # A live result implies a token — the no-token case raised above. Bind to a
+    # local so the type narrows from ``str | None`` to ``str`` (the guard above is
+    # the runtime proof; this re-check is the static one, and fails loud if the
+    # invariant is ever broken — never a None token to the live adapter, INV-9).
+    token = settings.hubspot_private_app_token
+    if token is None:  # pragma: no cover — unreachable past the fail-loud guard
+        raise RuntimeError(
+            "CRM_MODE='live' requires HUBSPOT_PRIVATE_APP_TOKEN — none is configured."
+        )
     client = httpx.Client(base_url=_HUBSPOT_BASE_URL)
     return LiveHubSpotCRMAdapter(
         client=client,
-        token=settings.hubspot_private_app_token,
+        token=token,
         crm=_load_crm_params(),
         award_amounts=_load_award_amounts(),
         calls_per_run_cap=settings.hubspot_calls_per_run_cap,

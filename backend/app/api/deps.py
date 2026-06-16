@@ -35,7 +35,13 @@ from app.observability.log_store import InMemoryObservabilityLog, ObservabilityL
 
 
 def _build_repository(params: Params) -> FamilyRepository:
-    """Seed the in-memory store, honoring the ``COCKPIT_SCENARIO`` toggle (A-21).
+    """Bind the live Supabase store when configured, else seed the in-memory one.
+
+    Single source of truth (A-24 M5): when ``SUPABASE_URL`` (+ service_role key)
+    is set, the LIVE :class:`SupabaseFamilyRepository` is bound — query-per-request
+    against the cloud project, server-only service_role, stage DERIVED on read —
+    and we do NOT also seed/bind an in-memory cohort. With no Supabase credential
+    the in-memory impl stays the v1 fallback (A-3), honoring ``COCKPIT_SCENARIO``:
 
     Default (no/blank/``june`` env) ⇒ the unchanged 24-family June demo cohort —
     so the June-anchored count/recency fixtures and the 404 tests are untouched.
@@ -50,7 +56,14 @@ def _build_repository(params: Params) -> FamilyRepository:
     """
     import os
 
+    from app.data.supabase_repository import build_supabase_repository
     from app.data.synthetic import generate_back_to_school, generate_realistic
+
+    # A-24 M5: a configured Supabase URL is the single source of truth — bind the
+    # live repo and skip in-memory seeding entirely.
+    supabase = build_supabase_repository(params)
+    if supabase is not None:
+        return supabase
 
     scenario = (os.environ.get("COCKPIT_SCENARIO", "") or "").strip().lower()
     if scenario == "back_to_school":

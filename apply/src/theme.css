@@ -1,0 +1,360 @@
+/* GT Anywhere brand replica — derived from a headless capture of
+   apply.gt.school / anywhere.gt.school (design-ref/*.png + extracted tokens):
+   warm cream paper, deep teal-navy panels, terracotta accent, Literata serif
+   headings, Inter Tight body, Inconsolata mono UI labels. Synthetic demo. */
+:root {
+  --paper: #fcf7f2; /* warm cream page bg */
+  --paper-2: #f8e8de; /* peach tint band */
+  --card: #ffffff;
+  --ink: #000f14; /* near-black teal ink */
+  --navy: #002838; /* deep teal — primary button / dark panels */
+  --navy-2: #013040;
+  --teal: #265d73; /* secondary text / muted links */
+  --terracotta: #e38454; /* accent / CTA glow / logo */
+  --terracotta-2: #d9734045;
+  --line: #e7dcd3; /* warm hairline border */
+  --line-2: #ead9cc;
+  --good: #1f7a5c;
+  --radius: 14px;
+  --radius-sm: 8px;
+  font-family: 'Inter Tight', Arial, system-ui, sans-serif;
+  color: var(--ink);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background:
+    radial-gradient(1100px 420px at 50% -160px, var(--paper-2), transparent 70%),
+    var(--paper);
+  color: var(--ink);
+  -webkit-font-smoothing: antialiased;
+}
+
+.shell {
+  max-width: 600px;
+  margin: 0 auto;
+  padding: 40px 20px 88px;
+}
+
+/* ---- brand wordmark: "GT" ink + "anywhere" terracotta (mirrors the site) ---- */
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  margin-bottom: 6px;
+}
+
+.brand .mark {
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  background: var(--navy);
+  display: grid;
+  place-items: center;
+  color: var(--paper);
+  font-family: 'Literata', Georgia, serif;
+  font-weight: 700;
+  font-size: 13px;
+  letter-spacing: -0.5px;
+}
+
+.brand .wordmark {
+  font-family: 'Literata', Georgia, serif;
+  font-size: 20px;
+  font-weight: 700;
+  letter-spacing: -0.3px;
+  line-height: 1;
+}
+
+.brand .wordmark .gt {
+  color: var(--ink);
+}
+
+.brand .wordmark .suffix {
+  color: var(--terracotta);
+}
+
+.brand h1 {
+  display: none; /* superseded by the wordmark */
+}
+
+.synthetic-banner {
+  margin: 18px 0 26px;
+  padding: 10px 13px;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--teal);
+  background: rgba(227, 132, 84, 0.08);
+  border: 1px solid var(--terracotta-2);
+  border-radius: var(--radius-sm);
+}
+
+/* ---- progress pips ---- */
+.steps {
+  display: flex;
+  gap: 7px;
+  margin-bottom: 26px;
+}
+
+.steps .pip {
+  flex: 1;
+  height: 4px;
+  border-radius: 2px;
+  background: var(--line-2);
+}
+
+.steps .pip.done {
+  background: var(--terracotta);
+}
+
+.steps .pip.active {
+  background: var(--navy);
+}
+
+/* ---- cards ---- */
+.card {
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 28px;
+  box-shadow: 0 1px 2px rgba(0, 15, 20, 0.04), 0 12px 32px rgba(0, 40, 56, 0.06);
+}
+
+.card h2 {
+  margin: 0 0 6px;
+  font-family: 'Literata', Georgia, serif;
+  font-size: 26px;
+  font-weight: 700;
+  letter-spacing: -0.4px;
+  color: var(--ink);
+}
+
+.card .sub {
+  margin: 0 0 22px;
+  color: var(--teal);
+  font-size: 14px;
+  line-height: 1.55;
+}
+
+.card.err {
+  border-color: #e6b3b3;
+  background: #fcf1f1;
+}
+
+/* ---- fields ---- */
+.field {
+  margin-bottom: 18px;
+}
+
+.field label {
+  display: block;
+  font-family: 'Inconsolata', monospace;
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  margin-bottom: 7px;
+  color: var(--teal);
+}
+
+select {
+  width: 100%;
+  padding: 12px 13px;
+  background: var(--paper);
+  color: var(--ink);
+  border: 1px solid var(--line-2);
+  border-radius: var(--radius-sm);
+  font: inherit;
+  font-size: 15px;
+  appearance: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8'%3E%3Cpath fill='%23265d73' d='M6 8 0 0h12z'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 14px center;
+  cursor: pointer;
+}
+
+select:focus {
+  outline: none;
+  border-color: var(--navy);
+  box-shadow: 0 0 0 3px rgba(0, 40, 56, 0.12);
+}
+
+select[data-error='true'] {
+  border-color: #d9734a;
+}
+
+.check-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 11px;
+  font-size: 14px;
+  line-height: 1.5;
+  color: var(--ink);
+  margin-bottom: 14px;
+}
+
+.check-row input {
+  margin-top: 2px;
+  accent-color: var(--navy);
+  width: 17px;
+  height: 17px;
+}
+
+.err {
+  color: #c1542b;
+  font-size: 13px;
+  margin-top: 8px;
+}
+
+/* ---- buttons: Inconsolata uppercase, navy primary (mirrors the site CTAs) ---- */
+.actions {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-top: 28px;
+  gap: 12px;
+}
+
+button {
+  font-family: 'Inconsolata', monospace;
+  font-size: 14px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 1.5px;
+  padding: 13px 22px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--ink);
+  background: var(--card);
+  color: var(--ink);
+  cursor: pointer;
+  transition: transform 0.05s ease, box-shadow 0.15s ease, background 0.15s ease;
+}
+
+button:hover:not(:disabled) {
+  box-shadow: 0 3px 10px rgba(0, 40, 56, 0.12);
+}
+
+button:active:not(:disabled) {
+  transform: translateY(1px);
+}
+
+button.primary {
+  background: var(--navy);
+  border-color: var(--navy);
+  color: var(--paper);
+}
+
+button.primary:hover:not(:disabled) {
+  background: var(--navy-2);
+}
+
+button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+/* ---- enroll form list ---- */
+.form-list {
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+  margin: 10px 0 4px;
+}
+
+.form-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 13px 15px;
+  border: 1px solid var(--line-2);
+  border-radius: var(--radius-sm);
+  background: var(--paper);
+  font-size: 15px;
+}
+
+.form-item button {
+  padding: 7px 16px;
+  font-size: 12px;
+  letter-spacing: 1px;
+}
+
+.form-item.signed {
+  border-color: rgba(31, 122, 92, 0.4);
+  background: rgba(31, 122, 92, 0.06);
+}
+
+.badge {
+  font-family: 'Inconsolata', monospace;
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  padding: 3px 10px;
+  border-radius: 999px;
+}
+
+.badge.signed {
+  background: rgba(31, 122, 92, 0.14);
+  color: var(--good);
+}
+
+/* ---- tuition deposit ---- */
+.deposit {
+  text-align: center;
+  padding: 22px 0 8px;
+  border-top: 1px solid var(--line);
+  margin-top: 8px;
+}
+
+.deposit .sub {
+  font-family: 'Inconsolata', monospace;
+  text-transform: uppercase;
+  letter-spacing: 1.5px;
+  font-size: 12px;
+  color: var(--teal);
+}
+
+.deposit .amount {
+  font-family: 'Literata', Georgia, serif;
+  font-size: 46px;
+  font-weight: 700;
+  margin: 6px 0;
+  color: var(--navy);
+}
+
+/* ---- done ---- */
+.done-screen {
+  text-align: center;
+  padding: 28px 0;
+}
+
+.done-screen .check {
+  width: 64px;
+  height: 64px;
+  margin: 0 auto 14px;
+  border-radius: 50%;
+  background: var(--navy);
+  color: var(--paper);
+  display: grid;
+  place-items: center;
+  font-size: 32px;
+}
+
+.done-screen h2 {
+  margin: 0 0 6px;
+}
+
+.synthetic-id {
+  display: inline-block;
+  font-family: 'Inconsolata', monospace;
+  font-size: 12px;
+  color: var(--teal);
+  margin-top: 18px;
+  padding: 5px 12px;
+  background: rgba(0, 40, 56, 0.05);
+  border-radius: 999px;
+}
