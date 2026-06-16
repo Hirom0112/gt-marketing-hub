@@ -21,3 +21,6 @@ params/params.yaml
 hubspot.config.yml
 hubspot.config.*.yml
 .hscli/
+
+# Supabase CLI scratch (linked-project ref + version cache; not source)
+supabase/.temp/
