@@ -299,7 +299,7 @@ def load_geo_content_pieces() -> list[GeoContentPiece]:
 def load_library_assets(
     params: Params | None = None, settings: Settings | None = None
 ) -> list[LibraryAsset]:
-    """Gate-routed library ASSETS from website pages + top imported captions (FR-3.4).
+    """Gate-routed library ASSETS from website pages + EVERY imported caption (FR-3.4).
 
     ``LibraryAsset.validation`` requires a PASSING ``ValidationResult`` id, and a
     fabricated ``vr-seed-pass-*`` is not allowed. So each candidate asset is
@@ -379,6 +379,9 @@ def load_library_assets(
         )
 
     # Website pages → blog-post-style library assets (the durable owned copy).
+    # A page whose path contains "/resource" is a GT resource/blog article
+    # ("blog"); every other owned page is a plain "website" page — the UI uses
+    # these tags to split the "Blog & resources" and "Website pages" segments.
     for page in seed.get("website_pages", []):
         body = str(page["body_summary"])
         if not body.strip():
@@ -386,6 +389,7 @@ def load_library_assets(
         source = str(page["source_url"])
         title = str(page["title"])
         keywords = str(page.get("keywords", ""))
+        kind_tag = "blog" if "/resource" in source else "website"
         _try_add(
             source=source,
             title=title[:120],
@@ -393,19 +397,26 @@ def load_library_assets(
             channel=Channel.LANDING_PAGE,
             fmt=ContentFormat.BLOG_POST,
             body=body,
-            tags=["website", "owned"],
+            tags=[kind_tag, "owned"],
             search_text=f"{title} {keywords} {body}".lower()[:400],
         )
 
-    # Top imported captions (one per theme, highest engagement) → copy assets.
-    seen_theme: set[str] = set()
+    # EVERY gate-passing social caption → a COPY asset (the social-posts shelf),
+    # deduped by the stable source-url id. Tagged [theme, platform, "social",
+    # "proven"] so the UI can filter the shelf by theme and platform. The gate
+    # drops any banned-claim caption (INV-4); a fabricated validation id is never
+    # used (the produced verdict's summary is recorded by `_try_add`).
+    seen_ids: set[str] = set()
     for rec in seed.get("exemplars", []):
-        theme = str(rec["theme"])
-        if theme in seen_theme:
-            continue
-        seen_theme.add(theme)
-        caption = str(rec["caption"])
         url = str(rec["url"])
+        asset_id = f"lib-import-{_stable_suffix(url)}"
+        if asset_id in seen_ids:
+            continue
+        seen_ids.add(asset_id)
+        theme = str(rec["theme"])
+        caption = str(rec["caption"])
+        if not caption.strip():
+            continue
         platform = str(rec["platform"])
         channel = _PLATFORM_CHANNEL.get(platform)
         _try_add(
@@ -415,7 +426,7 @@ def load_library_assets(
             channel=channel,
             fmt=ContentFormat.SHORT_CAPTION,
             body=caption,
-            tags=["social", "proven", theme],
-            search_text=f"{theme} {caption}".lower()[:400],
+            tags=[theme, platform, "social", "proven"],
+            search_text=f"{theme} {platform} {caption}".lower()[:400],
         )
     return assets

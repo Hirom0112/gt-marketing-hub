@@ -536,6 +536,43 @@ function ImageBatchPlaceholder(): JSX.Element {
   );
 }
 
+// The three shelves the library segments into. Social = generated/proven
+// captions (asset_type copy); Blog = GT resource/blog articles; Website = the
+// plain marketing pages. Derived from asset_type + tags the ingest stamps.
+type LibrarySegment = 'social' | 'blog' | 'website';
+
+const SEGMENT_LABELS: Record<LibrarySegment, string> = {
+  social: 'Social posts',
+  blog: 'Blog & resources',
+  website: 'Website pages',
+};
+
+// Tags that are platform/meta markers — everything else on a social asset is its
+// theme (gifted_identity, cost_tefa_esa, …), so the theme/platform filters can
+// split them apart without a separate field.
+const PLATFORM_TAGS = new Set([
+  'instagram',
+  'x/twitter',
+  'youtube',
+  'facebook',
+  'tiktok',
+]);
+const META_TAGS = new Set(['social', 'proven', 'blog', 'website', 'owned']);
+
+function segmentOf(asset: LibraryAsset): LibrarySegment {
+  if (asset.asset_type === 'copy') return 'social';
+  if (asset.tags?.includes('blog')) return 'blog';
+  return 'website';
+}
+
+function assetTheme(asset: LibraryAsset): string | undefined {
+  return asset.tags?.find((t) => !PLATFORM_TAGS.has(t) && !META_TAGS.has(t));
+}
+
+function assetPlatform(asset: LibraryAsset): string | undefined {
+  return asset.tags?.find((t) => PLATFORM_TAGS.has(t));
+}
+
 function LibraryPanel({
   state,
   query,
@@ -547,6 +584,28 @@ function LibraryPanel({
 }): JSX.Element {
   // Which asset is expanded to show its full copy (one at a time).
   const [expandedId, setExpandedId] = useState<string | null>(null);
+  // The active shelf, and the theme/platform filters within it.
+  const [segment, setSegment] = useState<LibrarySegment>('social');
+  const [themeFilter, setThemeFilter] = useState('');
+  const [platformFilter, setPlatformFilter] = useState('');
+
+  const assets = state.status === 'ready' ? state.assets : [];
+  const counts: Record<LibrarySegment, number> = { social: 0, blog: 0, website: 0 };
+  for (const a of assets) counts[segmentOf(a)] += 1;
+
+  const inSegment = assets.filter((a) => segmentOf(a) === segment);
+  const themes = Array.from(
+    new Set(inSegment.map(assetTheme).filter((t): t is string => Boolean(t))),
+  ).sort();
+  const platforms = Array.from(
+    new Set(inSegment.map(assetPlatform).filter((p): p is string => Boolean(p))),
+  ).sort();
+  const visible = inSegment.filter(
+    (a) =>
+      (!themeFilter || a.tags?.includes(themeFilter)) &&
+      (!platformFilter || a.tags?.includes(platformFilter)),
+  );
+
   return (
     <Card
       className="content-library"
@@ -594,6 +653,98 @@ function LibraryPanel({
         />
       </div>
 
+      {/* Segment control — Social posts / Blog & resources / Website pages. */}
+      <div
+        role="tablist"
+        aria-label="Library segments"
+        style={{ display: 'flex', gap: 'var(--s-2)', flexWrap: 'wrap' }}
+      >
+        {(['social', 'blog', 'website'] as LibrarySegment[]).map((seg) => {
+          const active = segment === seg;
+          return (
+            <button
+              key={seg}
+              type="button"
+              role="tab"
+              aria-selected={active}
+              data-testid={`library-segment-${seg}`}
+              onClick={() => {
+                setSegment(seg);
+                setThemeFilter('');
+                setPlatformFilter('');
+                setExpandedId(null);
+              }}
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: 'var(--s-1)',
+                padding: '6px 10px',
+                borderRadius: 'var(--r-sm)',
+                border: '1px solid var(--line)',
+                background: active ? 'var(--flow-wash)' : 'var(--surface-2)',
+                color: active ? 'var(--flow-ink)' : 'var(--ink)',
+                fontWeight: active ? 700 : 500,
+                fontSize: 'var(--fs-sm)',
+                cursor: 'pointer',
+              }}
+            >
+              {SEGMENT_LABELS[seg]}
+              <Chip tone={active ? 'flow' : 'neutral'}>{counts[seg]}</Chip>
+            </button>
+          );
+        })}
+      </div>
+
+      {/* Theme + platform filters (the social shelf is the one with both axes). */}
+      {segment === 'social' && (
+        <div style={{ display: 'flex', gap: 'var(--s-2)', flexWrap: 'wrap' }}>
+          <select
+            data-testid="library-filter-theme"
+            aria-label="Filter by theme"
+            value={themeFilter}
+            onChange={(e) => setThemeFilter(e.target.value)}
+            style={{
+              fontFamily: 'var(--sans)',
+              fontSize: 'var(--fs-sm)',
+              padding: '6px 8px',
+              borderRadius: 'var(--r-sm)',
+              border: '1px solid var(--line)',
+              background: 'var(--surface-2)',
+              color: 'var(--ink)',
+            }}
+          >
+            <option value="">All themes</option>
+            {themes.map((t) => (
+              <option key={t} value={t}>
+                {t}
+              </option>
+            ))}
+          </select>
+          <select
+            data-testid="library-filter-platform"
+            aria-label="Filter by platform"
+            value={platformFilter}
+            onChange={(e) => setPlatformFilter(e.target.value)}
+            style={{
+              fontFamily: 'var(--sans)',
+              fontSize: 'var(--fs-sm)',
+              padding: '6px 8px',
+              borderRadius: 'var(--r-sm)',
+              border: '1px solid var(--line)',
+              background: 'var(--surface-2)',
+              color: 'var(--ink)',
+            }}
+          >
+            <option value="">All platforms</option>
+            {platforms.map((p) => (
+              <option key={p} value={p}>
+                {p}
+              </option>
+            ))}
+          </select>
+        </div>
+      )}
+
       {state.status === 'loading' && (
         <p data-testid="library-loading" className="lab">
           Loading library…
@@ -609,12 +760,14 @@ function LibraryPanel({
         </p>
       )}
       {state.status === 'ready' &&
-        (state.assets.length === 0 ? (
+        (visible.length === 0 ? (
           <p
             data-testid="library-empty"
             style={{ fontSize: 'var(--fs-sm)', color: 'var(--muted)', margin: 0 }}
           >
-            {query ? `No assets match “${query}”.` : 'No kept assets yet.'}
+            {query || themeFilter || platformFilter
+              ? 'No assets match these filters.'
+              : `No ${SEGMENT_LABELS[segment].toLowerCase()} yet.`}
           </p>
         ) : (
           <ul
@@ -627,7 +780,7 @@ function LibraryPanel({
               gap: 'var(--s-2)',
             }}
           >
-            {state.assets.map((asset) => (
+            {visible.map((asset) => (
               <LibraryRow
                 key={asset.id}
                 asset={asset}

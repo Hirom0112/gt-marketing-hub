@@ -191,3 +191,90 @@ def test_library_assets_deterministic() -> None:
     a = load_library_assets(_params())
     b = load_library_assets(_params())
     assert [(x.id, x.body) for x in a] == [(x.id, x.body) for x in b]
+
+
+# --------------------------------------------------------------------------- #
+# Segmented content shelf — every gate-passing social caption is surfaced.
+# --------------------------------------------------------------------------- #
+def test_library_surfaces_many_social_copy_assets() -> None:
+    """ALL gate-passing exemplars become COPY assets, not just one per theme."""
+    from app.ai.schemas.brand import LibraryAssetType
+
+    assets = load_library_assets(_params())
+    copy_assets = [a for a in assets if a.asset_type is LibraryAssetType.COPY]
+    # The seed holds 404 exemplars across themes/platforms; far more than the
+    # 10-theme cap the old loader produced. Assert the shelf is well populated.
+    assert len(copy_assets) > 50
+
+
+def test_social_copy_assets_tagged_with_theme_and_platform() -> None:
+    """Each social copy asset carries its theme + platform + the social/proven tags.
+
+    The UI filters by these tags, so every exemplar's theme and platform must be
+    present, and the platform must be one of the catalog keys.
+    """
+    from app.ai.schemas.brand import LibraryAssetType
+
+    seed = _seed()
+    seed_platforms = {str(rec["platform"]) for rec in seed["exemplars"]}
+    assets = load_library_assets(_params())
+    copy_assets = [a for a in assets if a.asset_type is LibraryAssetType.COPY]
+    for asset in copy_assets:
+        assert "social" in asset.tags
+        assert "proven" in asset.tags
+        # Exactly one of the asset's tags is a seed platform (theme + platform
+        # + the two literals); the platform tag is recognizable.
+        platform_tags = [t for t in asset.tags if t in seed_platforms]
+        assert len(platform_tags) == 1
+
+
+def test_website_pages_tagged_blog_vs_website() -> None:
+    """Website pages are BLOG_POST assets tagged 'blog' (a /resource article) or 'website'."""
+    from app.ai.schemas.brand import LibraryAssetType
+
+    assets = load_library_assets(_params())
+    pages = [a for a in assets if a.asset_type is LibraryAssetType.BLOG_POST]
+    assert pages
+    for page in pages:
+        assert "owned" in page.tags
+        source = page.source_ref or ""
+        if "/resource" in source:
+            assert "blog" in page.tags
+            assert "website" not in page.tags
+        else:
+            assert "website" in page.tags
+            assert "blog" not in page.tags
+
+
+def test_social_copy_assets_dedup_by_stable_id() -> None:
+    """Asset ids are unique (dedup by stable id) and deterministic across loads."""
+    a = load_library_assets(_params())
+    ids = [x.id for x in a]
+    assert len(ids) == len(set(ids))
+    b = load_library_assets(_params())
+    assert [x.id for x in a] == [x.id for x in b]
+
+
+def test_library_assets_still_gate_routed_drops_banned(monkeypatch) -> None:
+    """A banned-claim caption injected into the seed is DROPPED by the real gate (INV-4)."""
+    import app.data.library_ingest as mod
+    from app.ai.schemas.brand import LibraryAssetType
+
+    seed = _seed()
+    banned_caption = "Our students score 4X higher than public school — guaranteed!"
+    seed["exemplars"] = [
+        {
+            "caption": banned_caption,
+            "engagement_kind": "likes",
+            "engagement_raw": 999,
+            "platform": "instagram",
+            "theme": "academic_outcomes",
+            "url": "https://example.test/banned-post",
+        }
+    ]
+    monkeypatch.setattr(mod, "_load_seed", lambda: seed)
+    assets = mod.load_library_assets(_params())
+    copy_assets = [a for a in assets if a.asset_type is LibraryAssetType.COPY]
+    # The gate blocks the 4X claim; it never becomes a library asset.
+    assert all(banned_caption not in (a.body or "") for a in copy_assets)
+    assert not copy_assets

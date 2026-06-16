@@ -74,21 +74,49 @@ const DEGRADED_BATCH = {
 };
 
 const LIBRARY_ASSETS = [
+  // Two social copy assets (the "Social posts" segment) — tagged theme +
+  // platform so the segment filters can narrow them.
   {
     id: 'asset-1',
-    title: 'Welcome email',
-    asset_type: 'email',
-    channel: 'email',
+    title: 'gifted_identity — proven caption',
+    asset_type: 'copy',
+    channel: 'instagram',
     body: 'Welcome to GT School — here is the next step for your gifted child.',
     source_ref: 'https://gt.school/welcome',
-    tags: ['email', 'proven'],
+    tags: ['gifted_identity', 'instagram', 'social', 'proven'],
     search_text: 'welcome to gt school',
   },
   {
     id: 'asset-2',
-    title: 'Open house promo',
-    asset_type: 'social',
-    search_text: 'open house this spring',
+    title: 'cost_tefa_esa — proven caption',
+    asset_type: 'copy',
+    channel: 'x',
+    body: 'Texas families can apply TEFA toward GT School tuition.',
+    source_ref: 'https://x.com/gtschool/status/1',
+    tags: ['cost_tefa_esa', 'x/twitter', 'social', 'proven'],
+    search_text: 'open house this spring tefa',
+  },
+  // One blog/resource article (the "Blog & resources" segment).
+  {
+    id: 'asset-3',
+    title: 'A Day in the Life of a GT School Student',
+    asset_type: 'blog_post',
+    channel: 'landing_page',
+    body: 'A long-form resource article about a day at GT School.',
+    source_ref: 'https://anywhere.gt.school/resources/a-day',
+    tags: ['blog', 'owned'],
+    search_text: 'a day in the life',
+  },
+  // One plain website page (the "Website pages" segment).
+  {
+    id: 'asset-4',
+    title: 'Academics',
+    asset_type: 'blog_post',
+    channel: 'landing_page',
+    body: 'The academics page describing the mastery-based program.',
+    source_ref: 'https://anywhere.gt.school/academics',
+    tags: ['website', 'owned'],
+    search_text: 'academics mastery based',
   },
 ];
 
@@ -207,12 +235,77 @@ describe('ContentWorkspace', () => {
     mockFetchRouted({ library: LIBRARY_ASSETS });
     render(<ContentWorkspace />);
 
+    // The Social segment is the default; its two copy assets render.
     expect(
       await screen.findByTestId('library-asset-asset-1'),
-    ).toHaveTextContent('Welcome email');
+    ).toHaveTextContent('gifted_identity — proven caption');
     expect(
       screen.getByTestId('library-asset-asset-2'),
-    ).toHaveTextContent('Open house promo');
+    ).toHaveTextContent('cost_tefa_esa — proven caption');
+  });
+
+  it('test_library_segments_render_with_counts', async () => {
+    mockFetchRouted({ library: LIBRARY_ASSETS });
+    render(<ContentWorkspace />);
+
+    // Three segments, each with its own count (2 social, 1 blog, 1 website).
+    const social = await screen.findByTestId('library-segment-social');
+    const blog = screen.getByTestId('library-segment-blog');
+    const website = screen.getByTestId('library-segment-website');
+    expect(social).toHaveTextContent('2');
+    expect(blog).toHaveTextContent('1');
+    expect(website).toHaveTextContent('1');
+  });
+
+  it('test_switching_segment_shows_the_right_asset_kind', async () => {
+    mockFetchRouted({ library: LIBRARY_ASSETS });
+    render(<ContentWorkspace />);
+
+    // Default segment = social: copy assets visible, blog/website hidden.
+    expect(await screen.findByTestId('library-asset-asset-1')).toBeInTheDocument();
+    expect(screen.queryByTestId('library-asset-asset-3')).toBeNull();
+    expect(screen.queryByTestId('library-asset-asset-4')).toBeNull();
+
+    // Switch to Blog & resources: only the blog article shows.
+    fireEvent.click(screen.getByTestId('library-segment-blog'));
+    expect(screen.getByTestId('library-asset-asset-3')).toBeInTheDocument();
+    expect(screen.queryByTestId('library-asset-asset-1')).toBeNull();
+    expect(screen.queryByTestId('library-asset-asset-4')).toBeNull();
+
+    // Switch to Website pages: only the plain page shows.
+    fireEvent.click(screen.getByTestId('library-segment-website'));
+    expect(screen.getByTestId('library-asset-asset-4')).toBeInTheDocument();
+    expect(screen.queryByTestId('library-asset-asset-3')).toBeNull();
+  });
+
+  it('test_theme_filter_narrows_the_social_segment', async () => {
+    mockFetchRouted({ library: LIBRARY_ASSETS });
+    render(<ContentWorkspace />);
+
+    // Both social assets show before filtering.
+    expect(await screen.findByTestId('library-asset-asset-1')).toBeInTheDocument();
+    expect(screen.getByTestId('library-asset-asset-2')).toBeInTheDocument();
+
+    // Filter to the gifted_identity theme: only asset-1 remains.
+    fireEvent.change(screen.getByTestId('library-filter-theme'), {
+      target: { value: 'gifted_identity' },
+    });
+    expect(screen.getByTestId('library-asset-asset-1')).toBeInTheDocument();
+    expect(screen.queryByTestId('library-asset-asset-2')).toBeNull();
+  });
+
+  it('test_platform_filter_narrows_the_social_segment', async () => {
+    mockFetchRouted({ library: LIBRARY_ASSETS });
+    render(<ContentWorkspace />);
+
+    expect(await screen.findByTestId('library-asset-asset-1')).toBeInTheDocument();
+
+    // Filter to the x/twitter platform: only asset-2 remains.
+    fireEvent.change(screen.getByTestId('library-filter-platform'), {
+      target: { value: 'x/twitter' },
+    });
+    expect(screen.getByTestId('library-asset-asset-2')).toBeInTheDocument();
+    expect(screen.queryByTestId('library-asset-asset-1')).toBeNull();
   });
 
   it('test_library_asset_expands_to_show_body_and_source', async () => {
