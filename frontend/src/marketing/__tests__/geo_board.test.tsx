@@ -67,6 +67,22 @@ const GEO_DISABLED = {
   competitor_citation_share: { 'joinprisma.com': 0.5 },
 };
 
+// A generate-to-win PASS: the piece published and re-sampling moved coverage.
+const GEO_GENERATED_PUBLISHED = {
+  ...GEO_SAMPLED,
+  published: true,
+  blocked: false,
+  failed_rules: [] as string[],
+};
+
+// A generate-to-win BLOCK: the gate rejected the body; nothing published.
+const GEO_GENERATED_BLOCKED = {
+  ...GEO_ENABLED,
+  published: false,
+  blocked: true,
+  failed_rules: ['v2_grounding', 'v4_onbrand'],
+};
+
 function mockFetch(payload: unknown): void {
   vi.stubGlobal(
     'fetch',
@@ -85,6 +101,27 @@ function mockFetchRouted(routes: { get?: unknown; sample?: unknown }): void {
     vi.fn(async (_url: string, init?: RequestInit) => {
       const payload =
         init?.method === 'POST' ? (routes.sample ?? {}) : (routes.get ?? {});
+      return { ok: true, status: 200, json: async () => payload };
+    }),
+  );
+}
+
+// Routes GET /geo, POST /geo/sample, and POST /geo/generate to distinct payloads
+// (both actions are POST, so route by URL too — not just method).
+function mockFetchByUrl(routes: {
+  get?: unknown;
+  sample?: unknown;
+  generate?: unknown;
+}): void {
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(async (url: string, init?: RequestInit) => {
+      let payload: unknown = routes.get ?? {};
+      if (init?.method === 'POST' && String(url).includes('/geo/generate')) {
+        payload = routes.generate ?? {};
+      } else if (init?.method === 'POST' && String(url).includes('/geo/sample')) {
+        payload = routes.sample ?? {};
+      }
       return { ok: true, status: 200, json: async () => payload };
     }),
   );
@@ -176,5 +213,53 @@ describe('GeoBoard', () => {
       expect(screen.getByTestId('geo-coverage')).toHaveTextContent('45%');
       expect(screen.getByTestId('geo-lift')).toHaveTextContent('+45%');
     });
+  });
+
+  it('generate-to-win POSTs the target prompt, publishes, and moves coverage', async () => {
+    mockFetchByUrl({ get: GEO_ENABLED, generate: GEO_GENERATED_PUBLISHED });
+    render(<GeoBoard />);
+
+    const input = await screen.findByTestId('geo-generate-prompt');
+    fireEvent.change(input, {
+      target: { value: 'best online gifted school in texas' },
+    });
+    fireEvent.click(screen.getByTestId('geo-generate'));
+
+    // Fires POST /geo/generate with the target prompt.
+    await waitFor(() => {
+      const fetchMock = fetch as unknown as ReturnType<typeof vi.fn>;
+      const call = fetchMock.mock.calls.find(
+        (c) =>
+          String(c[0]).includes('/geo/generate') &&
+          (c[1] as RequestInit | undefined)?.method === 'POST',
+      );
+      expect(call).toBeTruthy();
+      const body = JSON.parse(String((call?.[1] as RequestInit).body)) as {
+        target_prompt: string;
+      };
+      expect(body.target_prompt).toBe('best online gifted school in texas');
+    });
+
+    // The published outcome shows and the board re-renders with moved coverage.
+    expect(await screen.findByTestId('geo-generate-published')).toBeInTheDocument();
+    await waitFor(() => {
+      expect(screen.getByTestId('geo-coverage')).toHaveTextContent('45%');
+    });
+  });
+
+  it('generate-to-win surfaces the blocked outcome when the gate rejects (fail-closed)', async () => {
+    mockFetchByUrl({ get: GEO_ENABLED, generate: GEO_GENERATED_BLOCKED });
+    render(<GeoBoard />);
+
+    const input = await screen.findByTestId('geo-generate-prompt');
+    fireEvent.change(input, {
+      target: { value: 'kids learn 4x faster guaranteed' },
+    });
+    fireEvent.click(screen.getByTestId('geo-generate'));
+
+    // The blocked outcome lists the failing rules; nothing published (INV-4).
+    const blocked = await screen.findByTestId('geo-generate-blocked');
+    expect(blocked).toHaveTextContent(/v2_grounding/);
+    expect(screen.queryByTestId('geo-generate-published')).toBeNull();
   });
 });

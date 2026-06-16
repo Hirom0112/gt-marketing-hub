@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Globe, Lock, RefreshCw, Sparkles } from 'lucide-react';
+import { Ban, Globe, Lock, RefreshCw, Sparkles } from 'lucide-react';
 import { apiBaseUrl } from '../config';
 import { Button, Card, Chip, Stat } from '../ui';
 
@@ -41,10 +41,26 @@ interface GeoTrackingView {
   competitor_citation_share?: Record<string, number>; // domain → 0.0..1.0
 }
 
+// POST /geo/generate response — the tracking view PLUS the gate outcome. A
+// PASS publishes the generated piece and re-samples (coverage/lift move); a
+// BLOCK publishes nothing and lists the failing rules (fail-closed, INV-4).
+interface GeoGenerateView extends GeoTrackingView {
+  published: boolean;
+  blocked: boolean;
+  failed_rules: string[];
+}
+
 type LoadState =
   | { status: 'loading' }
   | { status: 'error'; message: string }
   | { status: 'ready'; data: GeoTrackingView };
+
+interface GenerateResult {
+  published: boolean;
+  blocked: boolean;
+  failed_rules: string[];
+  prompt: string;
+}
 
 const PLACEHOLDER = '—';
 
@@ -110,6 +126,10 @@ export default function GeoBoard(): JSX.Element {
   // Tracks an in-flight re-sampling run so the control can show progress and
   // not double-fire.
   const [sampling, setSampling] = useState(false);
+  // The generate-to-win prompt + its in-flight + last-outcome state.
+  const [genPrompt, setGenPrompt] = useState('');
+  const [generating, setGenerating] = useState(false);
+  const [genResult, setGenResult] = useState<GenerateResult | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -149,6 +169,40 @@ export default function GeoBoard(): JSX.Element {
         setState({ status: 'error', message });
       })
       .finally(() => setSampling(false));
+  }
+
+  // Generate-to-win: POST a target prompt → the server builds a piece, gates it,
+  // and (on PASS) publishes + re-samples so coverage/lift move; on BLOCK nothing
+  // publishes and the failing rules surface (fail-closed, INV-4). Re-renders the
+  // board from the returned view either way.
+  function generateToWin(): void {
+    const target = genPrompt.trim();
+    if (!target) return;
+    setGenerating(true);
+    setGenResult(null);
+    fetch(`${apiBaseUrl}/geo/generate`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ target_prompt: target }),
+    })
+      .then((res) => {
+        if (!res.ok) throw new Error(`geo generate failed: ${res.status}`);
+        return res.json() as Promise<GeoGenerateView>;
+      })
+      .then((data) => {
+        setState({ status: 'ready', data });
+        setGenResult({
+          published: data.published,
+          blocked: data.blocked,
+          failed_rules: data.failed_rules,
+          prompt: target,
+        });
+      })
+      .catch((err: unknown) => {
+        const message = err instanceof Error ? err.message : 'unknown error';
+        setState({ status: 'error', message });
+      })
+      .finally(() => setGenerating(false));
   }
 
   if (state.status === 'loading') {
@@ -365,16 +419,84 @@ export default function GeoBoard(): JSX.Element {
       </Card>
 
       {evalGreen ? (
-        <div>
-          <Button
-            variant="primary"
-            icon={sampling ? RefreshCw : Sparkles}
-            data-testid="geo-run-sampling"
-            onClick={runSampling}
-            disabled={sampling}
-          >
-            {sampling ? 'Running sampling…' : 'Run sampling (generate-to-win)'}
-          </Button>
+        <div style={{ display: 'grid', gap: 'var(--s-3)' }}>
+          {/* Generate-to-win: the flywheel. Type a target prompt → the server
+              generates a structure-first piece, gates it, and on PASS publishes
+              + re-samples so coverage/lift move; on BLOCK nothing publishes and
+              the failing rules show (fail-closed, INV-4). */}
+          <Card style={{ display: 'grid', gap: 'var(--s-3)' }}>
+            <p className="lab" style={{ margin: 0 }}>
+              Generate content to win a prompt — publishes, re-samples, moves coverage
+            </p>
+            <div style={{ display: 'flex', gap: 'var(--s-2)', flexWrap: 'wrap' }}>
+              <input
+                data-testid="geo-generate-prompt"
+                aria-label="Target prompt to win"
+                value={genPrompt}
+                onChange={(e) => setGenPrompt(e.target.value)}
+                placeholder="e.g. best accredited online gifted school in Texas"
+                style={{
+                  flex: 1,
+                  minWidth: 240,
+                  fontFamily: 'var(--sans)',
+                  fontSize: 'var(--fs-body)',
+                  border: '1px solid var(--line)',
+                  borderRadius: 'var(--r-md)',
+                  padding: 'var(--s-2) var(--s-3)',
+                  background: 'var(--surface-2)',
+                  color: 'var(--ink)',
+                }}
+              />
+              <Button
+                variant="primary"
+                icon={Sparkles}
+                data-testid="geo-generate"
+                onClick={generateToWin}
+                disabled={generating || !genPrompt.trim()}
+              >
+                {generating ? 'Generating…' : 'Generate to win'}
+              </Button>
+            </div>
+            {genResult &&
+              (genResult.blocked ? (
+                <div
+                  data-testid="geo-generate-blocked"
+                  role="alert"
+                  style={{
+                    display: 'flex',
+                    alignItems: 'flex-start',
+                    gap: 'var(--s-2)',
+                    color: 'var(--signal-ink)',
+                    fontSize: 'var(--fs-sm)',
+                  }}
+                >
+                  <Ban size={15} aria-hidden style={{ flexShrink: 0, marginTop: 2 }} />
+                  <span>
+                    Blocked by the grounding gate — not published:{' '}
+                    <strong>{genResult.failed_rules.join(', ') || 'failed validation'}</strong>
+                  </span>
+                </div>
+              ) : genResult.published ? (
+                <div
+                  data-testid="geo-generate-published"
+                  role="status"
+                  style={{ color: 'var(--flow-ink)', fontSize: 'var(--fs-sm)' }}
+                >
+                  ✓ Published “{genResult.prompt}” — re-sampled; coverage{' '}
+                  {pct(geo.coverage_mean)}, lift {signedPct(geo.lift)}
+                </div>
+              ) : null)}
+          </Card>
+          <div>
+            <Button
+              icon={RefreshCw}
+              data-testid="geo-run-sampling"
+              onClick={runSampling}
+              disabled={sampling}
+            >
+              {sampling ? 'Running sampling…' : 'Run sampling (re-measure coverage)'}
+            </Button>
+          </div>
         </div>
       ) : (
         // INV-3 fail closed: a red GEO eval disables the generate-to-win action.
