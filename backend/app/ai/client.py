@@ -78,7 +78,7 @@ def _default_transport(
     """
 
     def transport(prompt: str, *, max_tokens: int) -> tuple[str, int, int]:
-        import anthropic  # type: ignore[import-not-found]  # lazy: optional live-only dep
+        import anthropic  # lazy: optional live-only dep (mypy: see [tool.mypy] override)
 
         client = anthropic.Anthropic(api_key=settings.anthropic_api_key)
         message = client.messages.create(
@@ -86,9 +86,7 @@ def _default_transport(
             max_tokens=max_tokens,
             messages=[{"role": "user", "content": prompt}],
         )
-        text = "".join(
-            block.text for block in message.content if getattr(block, "type", None) == "text"
-        )
+        text = "".join(block.text for block in message.content if block.type == "text")
         usage = message.usage
         return (text, usage.input_tokens, usage.output_tokens)
 
