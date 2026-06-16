@@ -85,14 +85,14 @@ def _batch_json() -> str:
         copy_text="Thanks for your interest in GT School. Here is the next step for your family.",
         channel="email",
     )
-    # Malformed: missing required `concept` ⇒ DROPPED at the boundary (INV-2).
+    # Unusable: NO copy at all ⇒ DROPPED (the tolerant parser coerces missing
+    # mechanical fields, but an item with no copy has no content to surface).
     malformed = {
         "id": "cc-gen-malformed",
         "batch_id": "batch-gen-001",
         "prompt": "x",
         "channel": "instagram",
         "format": "short_caption",
-        "copy": "Missing a concept field — should be dropped, never coerced.",
         "audience_tag": "general",
         "lifecycle": "candidate",
         "decision": {"decision": "pending"},
@@ -177,6 +177,52 @@ def test_graph_surfaces_only_passing_candidates(tmp_path: Path) -> None:
     # withheld_count counts gated-but-failing candidates (the malformed never parsed).
     assert outcome.withheld_count == 1
     assert outcome.degraded is False
+
+
+def test_graph_coerces_fenced_loose_edge_output(tmp_path: Path) -> None:
+    """A ```json-fenced batch with loose fields still yields a coerced candidate.
+
+    The live edge wraps JSON in a markdown fence and emits a non-enum ``format``
+    ("single-image caption") while omitting the mechanical envelope (id/provenance).
+    The tolerant parser strips the fence, coerces the format to ``short_caption``,
+    maps the audience, and synthesizes the envelope — so a live batch is NOT
+    silently empty. The copy is taken verbatim, so the gate still judges the real
+    text (coercion fixes shape, never safety).
+    """
+    from app.adapters.brand_memory.sqlite_store import SqliteBrandMemoryStore
+    from app.data.synthetic import generate_brand_memory
+
+    params = load_params(EXAMPLE_PARAMS)
+    store = SqliteBrandMemoryStore(
+        tmp_path / "brand.sqlite3", weight_step=params.brand_memory.weight_step
+    )
+    for item in generate_brand_memory():
+        store.upsert(item)
+    settings = _settings_with_key()
+    budget = RunBudget.from_config(settings=settings, params=params)
+    fenced = (
+        '```json\n[{"format": "single-image caption", '
+        '"concept": "TEFA affordability explainer", '
+        '"copy": "Texas families can use an Education Freedom Account toward GT School tuition.", '
+        '"audience": "prospective parent"}]\n```'
+    )
+    outcome = generate_content_batch(
+        "Campaign: cost_tefa_esa",
+        Channel.INSTAGRAM,
+        store=store,
+        client=_llm_client_returning(fenced),
+        budget=budget,
+        settings=settings,
+        params=params,
+        brand_judge=_on_brand_judge(),
+    )
+    assert outcome.degraded is False
+    assert len(outcome.surfaced) == 1
+    candidate = outcome.surfaced[0].candidate
+    assert candidate.format.value == "short_caption"  # coerced from "single-image caption"
+    assert candidate.audience_tag.value == "prospective_parent"  # coerced from "prospective parent"
+    assert "Education Freedom Account" in candidate.copy_text  # copy taken verbatim
+    assert candidate.provenance.brand_memory_refs  # envelope synthesized + conditioned
 
 
 # --------------------------------------------------------------------------- #

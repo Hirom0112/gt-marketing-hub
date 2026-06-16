@@ -36,8 +36,46 @@ from pydantic import ValidationError
 
 from app.ai.client import LLMClient
 from app.ai.conditioning import ConditioningBlock, assemble_conditioning
-from app.ai.schemas.content import Channel, ContentCandidate
+from app.ai.schemas.content import (
+    AudienceTag,
+    Channel,
+    ContentCandidate,
+    ContentFormat,
+    Decision,
+    GeneratedBy,
+    HumanDecision,
+    LifecycleStage,
+    Provenance,
+)
 from app.core.eval_gate import BrandJudge, BrandRuleLike, ValidationResult, evaluate_message
+
+# A fixed provenance stamp for a live-generated candidate. The candidate's
+# `created_at` is audit METADATA only — the §10 observability log records the real
+# proposal instant separately — so a stable marker keeps the module pure (no
+# datetime.now) without losing the audit trail (NFR-6).
+_LIVE_CREATED_AT = "2026-06-15T00:00:00+00:00"
+
+# Loose non-enum `format` strings the edge emits → the nearest ContentFormat token
+# (the model rarely uses the exact §2.2 enum). Substring-matched, first hit wins.
+_FORMAT_HINTS: tuple[tuple[str, str], ...] = (
+    ("thread", "thread"),
+    ("long", "long_caption"),  # "long caption" before the generic "caption" hint
+    ("caption", "short_caption"),  # "single-image caption", "ig caption" → a caption
+    ("tweet", "short_caption"),
+    ("post", "short_caption"),
+    ("blog", "blog_post"),
+    ("faq", "faq_block"),
+    ("comparison", "comparison_table"),
+    ("table", "comparison_table"),
+    ("definition", "definition"),
+    ("subject", "email_subject"),
+    ("email", "email_body"),
+    ("video", "video_script"),
+    ("reel", "video_script"),
+    ("script", "video_script"),
+    ("ad", "ad_copy"),
+    ("image brief", "image_brief"),  # only a genuine image brief, not "...image caption"
+)
 
 if TYPE_CHECKING:
     from app.adapters.brand_memory.base import BrandMemoryStore
@@ -152,31 +190,155 @@ def build_campaign_prompt(
     return "\n".join(lines)
 
 
-def _parse_batch(text: str, block: ConditioningBlock) -> list[ContentCandidate]:
-    """Parse the edge's JSON array into a list of :class:`ContentCandidate` (§5.3 step 3).
+def _strip_code_fence(text: str) -> str:
+    """Strip a leading/trailing markdown ``` fence the edge often wraps JSON in.
 
-    A non-array payload or a malformed candidate is DROPPED — never coerced into
-    a write (INV-2). Each parsed candidate's ``provenance.brand_memory_refs`` is
-    set to the conditioning block's refs so the audit trail records exactly what
-    shaped it (NFR-6).
+    Claude routinely returns ```json …``` rather than a bare array; without this
+    ``json.loads`` fails on the whole payload and a live batch yields ZERO
+    candidates. Drops the opening fence line (``` or ```json) and the closing ```.
+    """
+    t = text.strip()
+    if t.startswith("```"):
+        newline = t.find("\n")
+        if newline != -1:
+            t = t[newline + 1 :]
+        if t.rstrip().endswith("```"):
+            t = t.rstrip()[:-3]
+    return t.strip()
+
+
+def _coerce_format(value: object) -> ContentFormat:
+    """Map the edge's free-text format to the nearest §2.2 ContentFormat token.
+
+    Tries the exact token (normalizing spaces/hyphens), then a substring hint
+    (e.g. "single-image caption" → short_caption via fallthrough), else defaults
+    to ``short_caption`` so a loose value never drops the whole candidate.
+    """
+    if isinstance(value, str):
+        token = value.strip().lower().replace(" ", "_").replace("-", "_")
+        try:
+            return ContentFormat(token)
+        except ValueError:
+            low = value.lower()
+            for hint, fmt in _FORMAT_HINTS:
+                if hint in low:
+                    return ContentFormat(fmt)
+    return ContentFormat.SHORT_CAPTION
+
+
+def _coerce_audience(value: object) -> AudienceTag:
+    """Map the edge's audience string to a valid §3 AudienceTag (else ``general``)."""
+    if isinstance(value, str):
+        token = value.strip().lower().replace(" ", "_").replace("-", "_")
+        try:
+            return AudienceTag(token)
+        except ValueError:
+            pass
+    return AudienceTag.GENERAL
+
+
+def _coerce_candidate(
+    item: dict[str, object],
+    index: int,
+    channel: Channel | str,
+    prompt: str,
+    block: ConditioningBlock,
+) -> ContentCandidate | None:
+    """Build a valid candidate from a LOOSE edge item (§5.3 robustness).
+
+    The edge reliably emits the CREATIVE fields (copy/concept/claims) but not the
+    strict mechanical envelope (id/batch_id/provenance) or exact enum tokens. Take
+    the creative content VERBATIM — so the V-2..V-4 gates judge the REAL copy and a
+    "4X" claim still blocks — and synthesize/coerce only the structural fields.
+    Returns ``None`` when there is no usable copy. Still a proposal (INV-2): the
+    human keeps/discards and the gate still runs on the actual text.
+    """
+    copy_value = item.get("copy") or item.get("copy_text")
+    if not isinstance(copy_value, str) or not copy_value.strip():
+        return None
+    concept_value = item.get("concept")
+    concept = (
+        concept_value.strip()
+        if isinstance(concept_value, str) and concept_value.strip()
+        else copy_value.strip()[:120]
+    )
+    claims_raw = item.get("claims")
+    claims = [str(c) for c in claims_raw] if isinstance(claims_raw, list) else []
+    cta_value = item.get("cta")
+    cta = cta_value if isinstance(cta_value, str) and cta_value.strip() else None
+    channel_value = channel.value if isinstance(channel, Channel) else str(channel)
+    try:
+        channel_enum = Channel(channel_value)
+    except ValueError:
+        channel_enum = Channel.INSTAGRAM
+    id_value = item.get("id")
+    item_id = id_value if isinstance(id_value, str) and id_value.strip() else f"cc-live-{index}"
+    batch_value = item.get("batch_id")
+    batch_id = batch_value if isinstance(batch_value, str) and batch_value.strip() else "batch-live"
+    try:
+        return ContentCandidate(
+            id=item_id,
+            batch_id=batch_id,
+            prompt=prompt or "campaign",
+            channel=channel_enum,
+            format=_coerce_format(item.get("format")),
+            concept=concept,
+            copy=copy_value,
+            claims=claims,
+            cta=cta,
+            audience_tag=_coerce_audience(item.get("audience_tag") or item.get("audience")),
+            lifecycle=LifecycleStage.CANDIDATE,
+            decision=HumanDecision(decision=Decision.PENDING),
+            provenance=Provenance(
+                generated_by=GeneratedBy.LLM,
+                created_at=_LIVE_CREATED_AT,
+                brand_memory_refs=list(block.brand_memory_refs),
+            ),
+        )
+    except ValidationError:
+        return None
+
+
+def _parse_batch(
+    text: str, block: ConditioningBlock, channel: Channel | str, prompt: str
+) -> list[ContentCandidate]:
+    """Parse the edge's JSON into a list of :class:`ContentCandidate` (§5.3 step 3).
+
+    Robust to how the edge actually replies: strips a ```json fence, tolerates a
+    ``{"candidates": [...]}`` wrapper or a single object, then for each item tries
+    STRICT validation first (a conformant edge) and falls back to tolerant
+    coercion (:func:`_coerce_candidate`) — taking the creative copy verbatim and
+    synthesizing only the mechanical envelope. A surfaced candidate still passes
+    the full V-1..V-4 gate downstream, so coercion fixes shape, never safety. Each
+    candidate carries the conditioning ``brand_memory_refs`` (NFR-6).
     """
     try:
-        raw = json.loads(text)
+        raw = json.loads(_strip_code_fence(text))
     except (json.JSONDecodeError, ValueError):
         return []
+    if isinstance(raw, dict):
+        # Tolerate a wrapper object ({"candidates": [...]}) or a single candidate.
+        wrapped: object = None
+        for key in ("candidates", "batch", "items", "posts"):
+            if isinstance(raw.get(key), list):
+                wrapped = raw[key]
+                break
+        raw = wrapped if isinstance(wrapped, list) else [raw]
     if not isinstance(raw, list):
         return []
 
     candidates: list[ContentCandidate] = []
-    for item in raw:
+    for index, item in enumerate(raw):
         if not isinstance(item, dict):
             continue
         try:
-            candidate = ContentCandidate.model_validate(item)
-        except ValidationError:
-            # Malformed candidate — dropped at the boundary, never coerced (INV-2).
+            candidates.append(_stamp_refs(ContentCandidate.model_validate(item), block))
             continue
-        candidates.append(_stamp_refs(candidate, block))
+        except ValidationError:
+            pass
+        coerced = _coerce_candidate(item, index, channel, prompt, block)
+        if coerced is not None:
+            candidates.append(coerced)
     return candidates
 
 
@@ -284,7 +446,7 @@ def generate_content_batch(
     if result.degraded:
         candidates = _degraded_candidates(store, channel, prompt, block)
     else:
-        candidates = _parse_batch(result.text, block)
+        candidates = _parse_batch(result.text, block, channel, prompt)
 
     # `BrandRule` satisfies the gate's structural `BrandRuleLike` (it reads only
     # `rule_type`/`statement`/`active`); the cast bridges the invariant Protocol
