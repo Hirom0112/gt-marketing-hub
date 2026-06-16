@@ -180,7 +180,6 @@ def load_brand_memory_exemplars(params: Params | None = None) -> list[BrandMemor
         if per_theme.get(theme, 0) >= top_n:
             continue
         platform = str(rec["platform"])
-        channel = _PLATFORM_CHANNEL.get(platform)
         url = str(rec["url"])
         weight = _normalized_weight(platform, int(rec["engagement_raw"]), params)
         items.append(
@@ -191,7 +190,13 @@ def load_brand_memory_exemplars(params: Params | None = None) -> list[BrandMemor
                 signal=BrandMemorySignal.KEPT,
                 source_ref=url,
                 weight=weight,
-                channel_scope=[channel] if channel is not None else [],
+                # GLOBAL scope (empty): a brand-memory exemplar captures proven
+                # VOICE, which transfers across channels — a strong gifted-identity
+                # X hook conditions email/Instagram/blog generation just as well.
+                # Hard-scoping to the origin platform left every non-origin channel
+                # (incl. the UI default) with an empty degraded batch. The origin
+                # platform is still recorded in source_ref + the engagement weight.
+                channel_scope=[],
                 active=True,
                 version=1,
                 provenance=prov,
