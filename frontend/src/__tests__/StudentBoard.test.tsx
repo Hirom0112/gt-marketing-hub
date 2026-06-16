@@ -167,4 +167,24 @@ describe('StudentBoard', () => {
       expect(screen.getByTestId('student-board-error')).toBeInTheDocument(),
     );
   });
+
+  it('defaults to the active scope and refetches when a scope tab is clicked', async () => {
+    render(<StudentBoard />);
+    await screen.findByTestId('student-board');
+
+    // The board opens on the active slice (closed-out children don't lead it).
+    const fetchMock = fetch as unknown as ReturnType<typeof vi.fn>;
+    expect(String(fetchMock.mock.calls[0]?.[0])).toContain('scope=active');
+
+    // Switching to History refetches the server's history slice (server owns the
+    // filter; this UI never re-derives recovery state).
+    fireEvent.click(screen.getByTestId('student-scope-history'));
+    await waitFor(() =>
+      expect(
+        fetchMock.mock.calls.some((call) =>
+          String(call[0]).includes('scope=history'),
+        ),
+      ).toBe(true),
+    );
+  });
 });

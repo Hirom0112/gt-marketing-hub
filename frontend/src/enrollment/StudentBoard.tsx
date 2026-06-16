@@ -64,15 +64,28 @@ function fundingLabel(fundingType: string | null | undefined): string | null {
   return fundingType;
 }
 
+// The board scope, mirroring the server's GET /students?scope axis. ``active``
+// (default) is the live recovery slice — closed-out children don't lead the
+// board; history/all surface recovered + dismissed children too.
+type Scope = 'active' | 'history' | 'all';
+
+const SCOPES: ReadonlyArray<{ key: Scope; label: string }> = [
+  { key: 'active', label: 'Active' },
+  { key: 'history', label: 'History' },
+  { key: 'all', label: 'All' },
+];
+
 export default function StudentBoard({
   selectedFamilyId,
   onSelectFamily,
 }: StudentBoardProps = {}): JSX.Element {
+  const [scope, setScope] = useState<Scope>('active');
   const [state, setState] = useState<LoadState>({ status: 'loading' });
 
   useEffect(() => {
     let cancelled = false;
-    fetch(`${apiBaseUrl}/students`)
+    setState({ status: 'loading' });
+    fetch(`${apiBaseUrl}/students?scope=${scope}`)
       .then((res) => {
         if (!res.ok) throw new Error(`students request failed: ${res.status}`);
         return res.json() as Promise<StudentBoardResponse>;
@@ -89,24 +102,93 @@ export default function StudentBoard({
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [scope]);
+
+  const scopeToggle = (
+    <div
+      role="tablist"
+      aria-label="Board scope"
+      data-testid="student-scope-toggle"
+      style={{ display: 'inline-flex', gap: '2px' }}
+    >
+      {SCOPES.map(({ key, label }) => {
+        const active = key === scope;
+        return (
+          <button
+            key={key}
+            type="button"
+            role="tab"
+            aria-selected={active}
+            data-testid={`student-scope-${key}`}
+            onClick={() => setScope(key)}
+            style={{
+              border: '1px solid var(--line)',
+              background: active ? 'var(--ink)' : 'var(--surface)',
+              color: active ? 'var(--surface)' : 'var(--ink)',
+              borderRadius: 'var(--r-pill)',
+              padding: '3px 10px',
+              fontSize: 11,
+              fontWeight: 600,
+              cursor: 'pointer',
+              fontFamily: 'inherit',
+            }}
+          >
+            {label}
+          </button>
+        );
+      })}
+    </div>
+  );
+
+  // The header bar (title + scope toggle) renders in EVERY state so the operator
+  // can switch scope while loading or after an error — not just once data lands.
+  const headerBar = (
+    <div
+      className="lab"
+      style={{
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        gap: 'var(--s-2)',
+        marginBottom: 'var(--s-2)',
+      }}
+    >
+      <span
+        style={{
+          display: 'inline-flex',
+          alignItems: 'center',
+          gap: 'var(--s-1)',
+        }}
+      >
+        <Users size={11} aria-hidden /> Students — one application per child,
+        grouped by household
+      </span>
+      {scopeToggle}
+    </div>
+  );
 
   if (state.status === 'loading') {
     return (
-      <p data-testid="student-board-loading" className="lab">
-        Loading students…
-      </p>
+      <section aria-label="Student board" data-testid="student-board">
+        {headerBar}
+        <p data-testid="student-board-loading" className="lab">
+          Loading students…
+        </p>
+      </section>
     );
   }
   if (state.status === 'error') {
     return (
-      <p
-        data-testid="student-board-error"
-        role="alert"
-        style={{ color: 'var(--signal-ink)', fontSize: 'var(--fs-sm)' }}
-      >
-        Could not load students: {state.message}
-      </p>
+      <section aria-label="Student board" data-testid="student-board">
+        {headerBar}
+        <p
+          data-testid="student-board-error"
+          role="alert"
+          style={{ color: 'var(--signal-ink)', fontSize: 'var(--fs-sm)' }}
+        >
+          Could not load students: {state.message}
+        </p>
+      </section>
     );
   }
 
@@ -115,26 +197,17 @@ export default function StudentBoard({
 
   return (
     <section aria-label="Student board" data-testid="student-board">
+      {headerBar}
       <div
         className="lab"
         style={{
           display: 'flex',
           alignItems: 'center',
-          justifyContent: 'space-between',
+          justifyContent: 'flex-end',
           gap: 'var(--s-2)',
           marginBottom: 'var(--s-2)',
         }}
       >
-        <span
-          style={{
-            display: 'inline-flex',
-            alignItems: 'center',
-            gap: 'var(--s-1)',
-          }}
-        >
-          <Users size={11} aria-hidden /> Students — one application per child,
-          grouped by household
-        </span>
         <span
           data-testid="student-board-total"
           style={{ color: 'var(--muted)' }}
