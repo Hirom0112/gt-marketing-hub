@@ -30,7 +30,7 @@ from app.core.settings import Settings
 from app.data.notes_repository import InMemoryNotesRepository, NotesRepository
 from app.data.repository import FamilyRepository, InMemoryFamilyRepository
 from app.evals.suite import EvalSuiteResult
-from app.marketing.library import ContentLibrary, InMemoryContentLibrary
+from app.marketing.library import ContentLibrary, SqliteContentLibrary
 from app.observability.log_store import InMemoryObservabilityLog, ObservabilityLog
 
 
@@ -264,9 +264,28 @@ def _build_brand_memory_store() -> BrandMemoryStore:
 # list so `reset_brand_memory_store` can rebind for test isolation.
 _brand_memory_store: list[BrandMemoryStore] = [_build_brand_memory_store()]
 
-# Singleton content library (FR-3.4) — seeded from the §11.4 kept+validated assets.
-# One-slot list so `reset_content_library` can rebind for test isolation.
-_content_library: list[ContentLibrary] = [InMemoryContentLibrary.seeded()]
+def _build_content_library() -> ContentLibrary:
+    """Construct the seeded PERSISTENT content library (FR-3.4, D-8, A-11).
+
+    Mirrors :func:`_build_brand_memory_store`: the library is server-side
+    persistent (a kept asset survives a restart, D-8), not in-memory — so the v1
+    impl is the stdlib-``sqlite3``-backed :class:`SqliteContentLibrary` over a
+    temp-file path (no Postgres in this env, A-3/A-11; Postgres in prod). The file
+    is removed on each process start so the singleton is deterministic from the
+    seed (imported real assets, falling back to the §11.4 synthetic inventory).
+    """
+    import tempfile
+    from pathlib import Path
+
+    db_path = Path(tempfile.gettempdir()) / "gt_cockpit_content_library.sqlite3"
+    db_path.unlink(missing_ok=True)
+    return SqliteContentLibrary.seeded(db_path)
+
+
+# Singleton content library (FR-3.4) — seeded from the §11.4 kept+validated assets,
+# PERSISTED to a temp-file sqlite path (D-8). One-slot list so
+# `reset_content_library` can rebind for test isolation.
+_content_library: list[ContentLibrary] = [_build_content_library()]
 
 
 def _build_brand_rules() -> list[BrandRule]:
@@ -351,20 +370,25 @@ def get_llm_client() -> LLMClient:
 
 
 def get_brand_judge() -> BrandJudge | None:
-    """FastAPI dependency yielding the V-4 brand judge, or None (fail-closed).
+    """FastAPI dependency yielding the V-4 brand judge (a proposal — INV-2).
 
-    INV-4 / §9.4: without a live judge the gate must DENY V-4, never silently
-    pass. There is no live LLM judge wired in v1, so this returns ``None`` —
-    which makes V-4 deny — both when the LLM is unavailable AND (for now) when it
-    is available. The dependency EXISTS so tests can override it with a
-    deterministic judge; wiring the real judge is the only change here later.
+    The real :class:`app.ai.brand_judge.BrandJudge` is wired here: LLM-backed when
+    ``_settings.llm_available`` (scored via the gated edge client, no live call
+    under test), HEURISTIC otherwise — a DETERMINISTIC offline conformance score so
+    dev/no-key content can pass V-4 on genuinely on-brand copy WITHOUT a live call,
+    while off-brand / banned copy scores below the params floor (never a silent
+    pass; INV-8/§9.4 fail-closed posture).
+
+    The judge is INJECTED into the gate, never imported by ``app/core/`` (purity,
+    INV-2). The gate's V-1/V-2/V-3 still block banned patterns regardless of this
+    judge (INV-4), and the no-judge-at-all path (``brand_judge=None``) still denies
+    V-4 — that seam is preserved; this dependency simply always supplies a judge
+    now. Tests override this with their own deterministic judge.
     """
-    if not _settings.llm_available:
-        return None
-    # TODO(S7): wire the live LLM brand judge to `_settings` here. Until then we
-    # return None even with a key so V-4 fails closed (INV-4) rather than passing
-    # an un-judged message — the seam is the point, not the impl.
-    return None
+    from app.ai.brand_judge import BrandJudge as _RealBrandJudge
+
+    client = get_llm_client() if _settings.llm_available else None
+    return _RealBrandJudge(settings=_settings, params=_params, client=client)
 
 
 def get_crm_adapter_dep() -> CRMAdapter:
@@ -456,5 +480,9 @@ def reset_brand_memory_store() -> None:
 
 
 def reset_content_library() -> None:
-    """Rebind the content-library singleton to a fresh seeded library (test isolation)."""
-    _content_library[0] = InMemoryContentLibrary.seeded()
+    """Rebind the content-library singleton to a fresh seeded library (test isolation).
+
+    Rebuilds the PERSISTENT sqlite library (a fresh temp-file from the seed), the
+    same seam pattern as :func:`reset_brand_memory_store`.
+    """
+    _content_library[0] = _build_content_library()

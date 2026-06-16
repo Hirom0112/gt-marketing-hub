@@ -289,6 +289,85 @@ def test_post_pipeline_advance_unvalidated_blocked() -> None:
 
 
 # --------------------------------------------------------------------------- #
+# POST /content/schedule → CRM adapter path (Bet 1; default simulated, INV-9).
+# --------------------------------------------------------------------------- #
+
+
+def test_schedule_email_simulated_sent_routes_through_crm_adapter() -> None:
+    """An approved+passing EMAIL post ALSO routes through the CRM adapter dep.
+
+    The default simulated CRM adapter records the send in-memory (no network); the
+    READY-TO-FLIP config (CRM_MODE=live) would push the SAME call to the portal.
+    """
+    from app.adapters.hubspot.crm_adapter import SimulatedCRMAdapter
+
+    adapter = SimulatedCRMAdapter()
+    app.dependency_overrides[deps.get_crm_adapter_dep] = lambda: adapter
+
+    resp = client.post(
+        "/content/schedule",
+        json={
+            "channel": "email",
+            "scheduled_for": "2026-07-01T09:00:00Z",
+            "approval": {"decision": "approve"},
+            "validation": {"passed": True},
+        },
+    )
+    assert resp.status_code == 200
+    assert resp.json()["dispatch_status"] == "simulated_sent"
+    # The CRM adapter was invoked and recorded the send (simulated, no network).
+    assert len(adapter.sent_log) == 1
+    assert adapter.sent_log[0].channel == "email"
+    assert adapter.sent_log[0].simulated is True
+
+
+def test_schedule_blocked_email_does_not_call_crm_adapter() -> None:
+    """A blocked EMAIL post does NOT reach the CRM adapter (fail-closed, INV-3/4)."""
+    from app.adapters.hubspot.crm_adapter import SimulatedCRMAdapter
+
+    adapter = SimulatedCRMAdapter()
+    app.dependency_overrides[deps.get_crm_adapter_dep] = lambda: adapter
+
+    resp = client.post(
+        "/content/schedule",
+        json={
+            "channel": "email",
+            "scheduled_for": "2026-07-01T09:00:00Z",
+            "approval": {"decision": "approve"},
+            "validation": {"passed": False},  # failing validation ⇒ blocked.
+        },
+    )
+    assert resp.status_code == 200
+    assert resp.json()["dispatch_status"] == "blocked"
+    assert adapter.sent_log == []  # the gate blocked it BEFORE any CRM call.
+
+
+def test_schedule_non_email_does_not_call_crm_adapter() -> None:
+    """A non-EMAIL (instagram) simulated_sent post does NOT route through the CRM.
+
+    Bet 1 targets the EMAIL channel only; other channels stay on the simulated
+    social queue, so the CRM (HubSpot) adapter is not invoked for them.
+    """
+    from app.adapters.hubspot.crm_adapter import SimulatedCRMAdapter
+
+    adapter = SimulatedCRMAdapter()
+    app.dependency_overrides[deps.get_crm_adapter_dep] = lambda: adapter
+
+    resp = client.post(
+        "/content/schedule",
+        json={
+            "channel": "instagram",
+            "scheduled_for": "2026-07-01T09:00:00Z",
+            "approval": {"decision": "approve"},
+            "validation": {"passed": True},
+        },
+    )
+    assert resp.status_code == 200
+    assert resp.json()["dispatch_status"] == "simulated_sent"
+    assert adapter.sent_log == []  # EMAIL-only routing; instagram untouched.
+
+
+# --------------------------------------------------------------------------- #
 # GET /recipes
 # --------------------------------------------------------------------------- #
 

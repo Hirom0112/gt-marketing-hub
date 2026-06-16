@@ -18,7 +18,9 @@ It imports nothing from ``anthropic`` / ``langgraph`` and runs no eval / LLM.
 
 from __future__ import annotations
 
+import sqlite3
 from abc import ABC, abstractmethod
+from pathlib import Path
 
 from app.ai.schemas.brand import LibraryAsset
 from app.ai.schemas.content import LifecycleStage
@@ -109,6 +111,133 @@ class InMemoryContentLibrary(ContentLibrary):
         from app.data.synthetic import generate_library_assets
 
         library = cls()
+        imported = load_library_assets()
+        for asset in imported if imported else generate_library_assets():
+            library.add(asset)
+        return library
+
+
+class SqliteContentLibrary(ContentLibrary):
+    """Persistent :class:`ContentLibrary` backed by stdlib ``sqlite3`` (D-8, A-11).
+
+    The persistent v1 local impl, mirroring
+    :class:`app.adapters.brand_memory.sqlite_store.SqliteBrandMemoryStore`: there
+    is no Postgres in this env (ASSUMPTIONS A-3), so the local impl uses the Python
+    **stdlib** ``sqlite3`` module — **no new dependency**. The production Postgres
+    table (deny-by-default RLS, INV-5) is the prod swap.
+
+    The defining property (D-8): a kept asset is server-side **persistent**, not
+    browser localStorage. Each :class:`LibraryAsset` is serialized via Pydantic
+    ``model_dump_json`` into a row keyed by ``id``; a brand-new store opened against
+    the SAME ``db_path`` reads the prior assets back from disk. ``lifecycle`` is
+    denormalized into its own column so :meth:`search` can re-assert the kept filter
+    in SQL. Runs no evals and calls no LLM (imports nothing from ``anthropic`` /
+    ``langgraph``).
+    """
+
+    def __init__(self, db_path: str | Path) -> None:
+        # ":memory:" is allowed only for single-connection use (data is not
+        # durable); the persistence guarantee (D-8) needs a real file path.
+        self._db_path = str(db_path)
+        self._ensure_schema()
+
+    def _connect(self) -> sqlite3.Connection:
+        """Open a connection to the backing sqlite file (stdlib only, no I/O deps)."""
+        return sqlite3.connect(self._db_path)
+
+    def _ensure_schema(self) -> None:
+        """Create the content_library table if it does not yet exist (idempotent).
+
+        ``seq`` preserves insertion order (the in-memory impl's contract) so search
+        returns assets in the order they were added, deterministically.
+        """
+        with self._connect() as conn:
+            conn.execute(
+                "CREATE TABLE IF NOT EXISTS content_library ("
+                "  id        TEXT PRIMARY KEY,"
+                "  seq       INTEGER,"
+                "  lifecycle TEXT NOT NULL,"
+                "  payload   TEXT NOT NULL"
+                ")"
+            )
+
+    def add(self, asset: LibraryAsset) -> LibraryAsset:
+        """Insert or replace ``asset`` by ``id`` (idempotent); persist and return it.
+
+        On a first insert the asset takes the next sequence number (insertion
+        order); a replace keeps the existing ``seq`` so re-adding does not reorder.
+        """
+        with self._connect() as conn:
+            existing = conn.execute(
+                "SELECT seq FROM content_library WHERE id = ?", (asset.id,)
+            ).fetchone()
+            if existing is not None:
+                seq = existing[0]
+            else:
+                row = conn.execute(
+                    "SELECT COALESCE(MAX(seq), -1) + 1 FROM content_library"
+                ).fetchone()
+                seq = row[0]
+            conn.execute(
+                "INSERT INTO content_library (id, seq, lifecycle, payload) VALUES (?, ?, ?, ?) "
+                "ON CONFLICT(id) DO UPDATE SET "
+                "lifecycle=excluded.lifecycle, payload=excluded.payload",
+                (asset.id, seq, asset.lifecycle.value, asset.model_dump_json()),
+            )
+        return asset
+
+    def get(self, asset_id: str) -> LibraryAsset | None:
+        """Return the persisted asset with ``asset_id``, or ``None`` if absent."""
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT payload FROM content_library WHERE id = ?", (asset_id,)
+            ).fetchone()
+        if row is None:
+            return None
+        return LibraryAsset.model_validate_json(row[0])
+
+    def search(
+        self, *, search_text: str | None = None, tags: list[str] | None = None
+    ) -> list[LibraryAsset]:
+        """Return kept + validated assets matching ``search_text`` / ``tags`` (FR-3.4).
+
+        The kept filter is pushed to SQL (``lifecycle='kept'``); the text/tag
+        filters re-use the in-memory impl's semantics over the deserialized asset.
+        Results keep insertion order via the ``seq`` column.
+        """
+        text = search_text.lower().strip() if search_text else None
+        wanted_tags = {t.lower() for t in tags} if tags else set()
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT payload FROM content_library WHERE lifecycle = ? ORDER BY seq",
+                (LifecycleStage.KEPT.value,),
+            ).fetchall()
+        results: list[LibraryAsset] = []
+        for (payload,) in rows:
+            asset = LibraryAsset.model_validate_json(payload)
+            # Defensive re-assert: only kept + validated assets surface (FR-3.4 / §5).
+            if asset.lifecycle is not LifecycleStage.KEPT or not asset.validation:
+                continue
+            if text is not None and text not in asset.search_text.lower():
+                continue
+            if wanted_tags and not wanted_tags.issubset({t.lower() for t in asset.tags}):
+                continue
+            results.append(asset)
+        return results
+
+    @classmethod
+    def seeded(cls, db_path: str | Path) -> SqliteContentLibrary:
+        """Hydrate a persistent library, preferring distilled real assets (Phase-1).
+
+        Same seed contract as :meth:`InMemoryContentLibrary.seeded` (imported
+        IMPORT-provenance assets, falling back to the §11.4 synthetic inventory),
+        but persisted to ``db_path`` so the seed survives a restart. ``add`` is
+        idempotent on ``id``, so re-seeding an existing file is a no-op in shape.
+        """
+        from app.data.library_ingest import load_library_assets
+        from app.data.synthetic import generate_library_assets
+
+        library = cls(db_path)
         imported = load_library_assets()
         for asset in imported if imported else generate_library_assets():
             library.add(asset)

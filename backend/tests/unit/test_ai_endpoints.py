@@ -176,15 +176,18 @@ def test_draft_returns_only_passing_proposal() -> None:
 # 2. No judge ⇒ even a clean draft is blocked (V-4 deny; fail-closed at the API).
 # --------------------------------------------------------------------------- #
 def test_blocked_draft_surfaces_none_without_judge() -> None:
-    """With no brand judge (no key) a clean draft is V-4-denied ⇒ surfaced False.
+    """With no key, a bland/un-branded draft is V-4-denied ⇒ surfaced False.
 
-    Fail-closed at the API boundary: the default ``get_brand_judge`` returns None
-    (no live judge wired), so V-4 denies even a clean, grounded draft.
+    Fail-closed at the API boundary: the default ``get_brand_judge`` now returns
+    the REAL heuristic judge (no live call, no key), which scores this bland body
+    BELOW the params floor — so V-4 denies it. (Genuinely on-brand GT copy would
+    instead clear the floor; the judge never silently passes un-branded copy.)
     """
     family_id = _a_family_id()
     body = "Hello, a quick note about your enrollment and funding next steps."
-    # No judge override (default None). Use a key-present client so we still reach
-    # the gate (the proposal parses) — V-4 denies because no judge is injected.
+    # No judge override (the real heuristic judge runs). Use a key-present LLM
+    # client so the proposal parses and reaches the gate — V-4 denies because the
+    # heuristic scores this bland copy below the brand floor.
     app.dependency_overrides[deps.get_llm_client] = lambda: _llm_client_returning(
         _proposal_json(family_id, body=body)
     )

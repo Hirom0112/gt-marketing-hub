@@ -47,6 +47,7 @@ from uuid import UUID, uuid4
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
+from app.adapters.hubspot.crm_adapter import CRMAdapter
 from app.adapters.sentiment.base import SentimentAdapter, SentimentWindow
 from app.ai.schemas.brand import MarketingRecipe
 from app.ai.schemas.content import (
@@ -57,6 +58,7 @@ from app.ai.schemas.content import (
     Provenance,
 )
 from app.api.deps import (
+    get_crm_adapter_dep,
     get_observability_log,
     get_params,
     get_repository,
@@ -148,6 +150,7 @@ ParamsDep = Annotated[Params, Depends(get_params)]
 SentimentAdapterDep = Annotated[SentimentAdapter, Depends(get_sentiment_adapter_dep)]
 LogDep = Annotated[ObservabilityLog, Depends(get_observability_log)]
 RepositoryDep = Annotated[FamilyRepository, Depends(get_repository)]
+CRMAdapterDep = Annotated[CRMAdapter, Depends(get_crm_adapter_dep)]
 
 
 # --------------------------------------------------------------------------- #
@@ -399,6 +402,7 @@ def post_content_schedule(
     request: ScheduleRequest,
     params: ParamsDep,
     log: LogDep,
+    crm_adapter: CRMAdapterDep,
 ) -> ScheduledPost:
     """Build → gate → simulate-send a scheduled post (FR-3.6; INV-9; NFR-6).
 
@@ -408,6 +412,14 @@ def post_content_schedule(
     ``approve`` ⇒ ``simulated_sent`` (with a deterministic receipt), else
     ``blocked`` — a blocked post returns 200 (fail-closed, NOT a 500). The action
     is appended to the §10 audit log. A simulated_sent post enters the queue.
+
+    Bet 1 (READY-TO-FLIP): an approved+validated **EMAIL** post that reaches
+    ``simulated_sent`` ALSO routes through the CRM adapter dep
+    (``crm_adapter.send_message(...)``) — a Note / trigger-property write. The
+    DEFAULT adapter is simulated (records in-memory, no network; INV-9), so nothing
+    hits the portal unless ``CRM_MODE=live`` selects the live HubSpot adapter — the
+    SAME call, the config flip. A blocked post never reaches this call (fail-closed,
+    INV-3/INV-4): the routing is gated on the terminal ``simulated_sent`` status.
     """
     # dispatch_mode is params-owned and typed shut to simulated (INV-9/OUT-2).
     dispatch_mode = DispatchMode(params.scheduler.dispatch_mode)
@@ -446,6 +458,19 @@ def post_content_schedule(
 
     if dispatched.dispatch_status is DispatchStatus.SIMULATED_SENT:
         _SCHEDULE_QUEUE.append(dispatched)
+        # Bet 1: an approved+validated EMAIL post pushes through the CRM adapter
+        # (a Note / trigger-property write). Default simulated ⇒ recorded in-memory,
+        # no network; CRM_MODE=live ⇒ the SAME call hits the portal (the flip). Only
+        # the EMAIL channel routes here; other channels stay on the simulated social
+        # queue. Reached ONLY on simulated_sent — a blocked post never calls it.
+        if request.channel is Channel.EMAIL:
+            crm_adapter.send_message(
+                {
+                    "channel": Channel.EMAIL.value,
+                    "body": f"Scheduled email post for {dispatched.scheduled_for}.",
+                    "scheduled_post_id": str(dispatched.id),
+                }
+            )
 
     return dispatched
 
