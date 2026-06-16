@@ -81,6 +81,15 @@ _DEFAULT_ENGINE = "simulated"
 GEO_GENERATE_FLOW = "geo_generate"
 GEO_GENERATE_EVAL_NAME = "message_safety_grounding"
 
+# The §9.6 subject label for a GEO generate-to-win proposal. The SHARED gate
+# (`app.core.eval_gate`) classifies subject_type STRUCTURALLY off the text field,
+# so a GeoContentPiece (which carries `.body`) is mislabeled `enrollment_draft`,
+# and its UUID `.id` is dropped because the gate keeps subject_ref only for string
+# ids. Both are CORRECTED here at the GEO logging layer (NOT in the shared gate,
+# which other flows depend on): the audit entry for a GEO piece is labeled `geo`
+# and carries the piece's UUID. Owned here so the fix is local to the GEO surface.
+GEO_SUBJECT_TYPE = "geo"
+
 # The PROCESS-SHARED published-prompt registry (FR-3.7). A GEO piece published via
 # POST /geo/generate records its target prompt → the params-derived GT cite-bucket
 # band here; every subsequently-built SimulatedGeoSamplingAdapter consults it so
@@ -383,16 +392,25 @@ def post_geo_generate(
 
     # Log the generated piece + its grounding verdict to the audit spine (NFR-6),
     # labeled geo_generate so the audit records the flywheel subject explicitly.
+    # The shared gate's verdict mislabels this GeoContentPiece as an
+    # `enrollment_draft` and drops its UUID (string-id-only subject_ref); CORRECT
+    # both here at the GEO logging layer — the audit entry is `geo` and the piece's
+    # UUID rides through as content_ref and the recorded subject_ref (NFR-6).
     proposal_id = uuid4()
     log.log_proposal(
         proposal_id=proposal_id,
         flow=GEO_GENERATE_FLOW,
         schema_version=GEO_SCHEMA_VERSION,
+        content_ref=piece.id,
         payload={
             "target_prompt": request.target_prompt,
             "geo_structure": piece.geo_structure.value,
             "published": published,
             "failed_rules": failed_rules,
+            # Override the shared gate's structural mislabel (`enrollment_draft` /
+            # dropped UUID) — GEO proposal audit entries are labeled `geo`.
+            "subject_type": GEO_SUBJECT_TYPE,
+            "subject_ref": str(piece.id),
         },
     )
     log.log_eval(

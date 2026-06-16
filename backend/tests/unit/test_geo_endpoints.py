@@ -236,3 +236,59 @@ def test_generate_to_win_logs_proposal_and_eval() -> None:
     audit = log.get_audit(record.proposal_id)
     assert audit is not None
     assert audit.evals  # the grounding gate verdict is attached
+
+
+def test_generate_to_win_audit_subject_is_geo_with_piece_uuid() -> None:
+    """The GEO generate proposal audit entry is labeled `geo` and carries the
+    GeoContentPiece's UUID as subject_ref — NOT the shared gate's mislabeled
+    `enrollment_draft` / dropped UUID (S5 backlog; NFR-6 observability).
+
+    The shared `eval_gate._subject_type` classifies a `.body`-bearing record as
+    `enrollment_draft` and drops a non-string `subject_ref`; a GeoContentPiece has
+    a UUID `.id` and a `.body`, so the gate verdict mislabels it. The GEO logging
+    layer must correct the audit entry to the `geo` subject and re-attach the UUID.
+    """
+    from app.marketing.geo import build_geo_piece
+    from app.marketing.schemas.geo import GeoStructure
+
+    expected_id = build_geo_piece(
+        target_prompt=_TARGET_PROMPT, structure=GeoStructure.DEFINITION
+    ).id
+
+    log = deps.get_observability_log()
+    resp = client.post("/geo/generate", json={"target_prompt": _TARGET_PROMPT})
+    assert resp.status_code == 200
+
+    record = log.list_proposals()[-1]
+    # Labeled `geo` (not `enrollment_draft`) and the UUID is preserved, not dropped.
+    assert record.payload.get("subject_type") == "geo"
+    assert record.content_ref == expected_id
+    assert record.payload.get("subject_ref") == str(expected_id)
+
+
+def test_enrollment_draft_proposal_still_labeled_enrollment_draft() -> None:
+    """Regression guard: an enrollment_draft proposal through the gate still records
+    `subject_type="enrollment_draft"` — only GEO entries change (S5 backlog).
+    """
+    from pathlib import Path
+    from uuid import uuid4
+
+    from app.ai.schemas.enrollment_draft import Claim, DraftAction, EnrollmentDraftProposal
+    from app.core.eval_gate import evaluate_message
+    from app.core.params import load_params
+    from app.core.settings import Settings
+
+    example_params = Path(__file__).resolve().parents[3] / "params" / "params.example.yaml"
+    draft = EnrollmentDraftProposal(
+        action=DraftAction.NUDGE,
+        family_id=uuid4(),
+        body="A grounded, on-brand enrollment nudge for the family.",
+        claims=[Claim(text="GT School offers a gifted curriculum.", source_ref="kb-1")],
+    )
+    verdict = evaluate_message(
+        draft,
+        settings=Settings(),
+        params=load_params(example_params),
+        brand_judge=lambda _r, _n: 0.99,
+    )
+    assert verdict.subject_type == "enrollment_draft"
