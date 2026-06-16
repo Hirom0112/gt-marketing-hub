@@ -96,9 +96,24 @@ geo:                        # FR-3.7 / RESEARCH.md Q5
   prompt_set_size: 30
   cadence: weekly
   baseline_coverage: 0.0            # the 0% baseline GT starts from
+  # generate-to-win flywheel (FR-3.7): once a GEO piece is published for a prompt,
+  # the simulated engine cites GT for that prompt far more often — coverage RISES.
+  # Expressed as the GT cite-likelihood buckets (out of 256) for a PUBLISHED prompt;
+  # the unpublished baseline is ~8/256 (~3%). 200/256 (~78%) makes the lift visible.
+  # NOT live behaviour (no live engine in v1, INV-9) — it shapes the simulation only.
+  published_cite_buckets: 200       # GT cite buckets (of 256) once a prompt is won
 
 brand_memory:               # FR-3.2 / CONTENT_SPEC §8.3.2 — the keep/discard learning loop
   weight_step: 1.0                  # affirm (+) / discard (-) conditioning weight delta (INV-11)
+
+library_ingest:             # Phase-1 marketing — distilled scraper-library seed (GT's own proven content)
+  top_n_per_theme: 3                # max exemplars kept per INSIGHTS theme (keeps the seed small + deterministic)
+  normalization:            # per-platform engagement caps → comparable [0,1] weight (X views ≠ IG likes)
+    instagram_likes_max: 200        # IG/FB/TikTok carry `likes`; X/YouTube carry `views_plays`
+    facebook_likes_max: 200
+    tiktok_likes_max: 200
+    x_views_max: 130000             # X tops out ~131K views on the strongest post
+    youtube_views_max: 50000        # YouTube view ceiling for normalization
 
 creator_scoring:            # FR-3.8 / CONTENT_SPEC §8.1 — creator-discovery fit + authenticity
   fit:                      # sub-weights over [0,1] sub-factors; MUST sum to 1.0
@@ -124,6 +139,15 @@ kpi:                        # FR-3.11 — per-channel KPI rollup vs baseline/tar
 
 scheduler:                  # FR-3.6 / OUT-2 — dispatch is SIMULATED in v1
   dispatch_mode: simulated          # never 'live' in v1 (INV-9, OUT-2)
+  # publish-monitor fan-out: a publish request targets a subset of these channels.
+  # Subset of the LOCKED Channel enum (CONTENT_SPEC §2.1) — social-publishable feeds
+  # only. FB/YT/Threads/Pinterest are NOT in the enum (adding them is a spec change).
+  publish_channels: [instagram, tiktok, x, linkedin]
+  daily_caps:                       # per-platform max SIMULATED dispatches/day; over-cap ⇒ blocked (INV-8 posture)
+    instagram: 5
+    tiktok: 3
+    x: 10
+    linkedin: 3
 
 crm:                        # S10 — HubSpot CRM seam (ANALYSIS/hubspot-complement-plan.md)
   # Cockpit Stage enum value → HubSpot deal stage id. Provisioned by
@@ -165,3 +189,18 @@ crm:                        # S10 — HubSpot CRM seam (ANALYSIS/hubspot-complem
       - gt_apply_date
     contact:
       - gt_synthetic_id
+    # GT Social Post custom-object props (publish-monitor W3): the second-screen
+    # mirror of each dispatched social post. Provisioned by the script.
+    social_post:
+      - gt_synthetic_id        # idempotency key = str(post_id) (NEVER PII; INV-1)
+      - gt_platform            # the dispatch channel (instagram/x/...)
+      - gt_dispatch_status     # the §6 dispatch verdict (simulated_sent/...)
+      - gt_scheduled_for       # the scheduled-for marker
+      - gt_campaign_theme      # the publish request's campaign theme
+      - gt_content_ref         # source content ref (asset/candidate id)
+      - gt_simulated_receipt   # the simulated dispatch receipt
+  # The GT Social Post custom object (publish-monitor W3). object_type is the
+  # CRM v3 path id; placeholder shape — re-provision to fill it on a real portal.
+  gt_social_post_object:
+    object_type: "p_gt_social_post"
+    id_property: gt_synthetic_id

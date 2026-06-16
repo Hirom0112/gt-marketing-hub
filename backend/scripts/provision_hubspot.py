@@ -134,6 +134,70 @@ _CONTACT_PROPERTIES: list[dict[str, Any]] = [
     },
 ]
 
+# ---------------------------------------------------------------------------
+# GT Social Post custom object (publish-monitor W3): the SECOND-screen mirror of
+# each dispatched social post, so the team can monitor publishing on HubSpot too.
+# The cockpit stays the primary observability plane. Created idempotently — if
+# the object type already exists (matched by its name), creation is skipped and
+# only any net-new properties are added.
+# ---------------------------------------------------------------------------
+_SOCIAL_POST_OBJECT_NAME = "gt_social_post"
+_SOCIAL_POST_LABELS = {"singular": "GT Social Post", "plural": "GT Social Posts"}
+# The object's own properties (the gt_* names mirror params crm.gt_properties.
+# social_post). gt_synthetic_id is the primary display + idempotency key — it
+# carries str(post_id), NEVER any contact identity (INV-1).
+_SOCIAL_POST_PROPERTIES: list[dict[str, Any]] = [
+    {
+        "name": "gt_synthetic_id",
+        "label": "GT Synthetic ID",
+        "type": "string",
+        "fieldType": "text",
+        "description": "Cockpit synthetic post id — upsert key (NEVER PII; INV-1).",
+    },
+    {
+        "name": "gt_platform",
+        "label": "GT Platform",
+        "type": "string",
+        "fieldType": "text",
+        "description": "Dispatch channel (instagram/tiktok/x/linkedin/...).",
+    },
+    {
+        "name": "gt_dispatch_status",
+        "label": "GT Dispatch Status",
+        "type": "string",
+        "fieldType": "text",
+        "description": "The §6 dispatch verdict (simulated_sent/blocked/failed/queued).",
+    },
+    {
+        "name": "gt_scheduled_for",
+        "label": "GT Scheduled For",
+        "type": "string",
+        "fieldType": "text",
+        "description": "The scheduled-for marker from the publish request.",
+    },
+    {
+        "name": "gt_campaign_theme",
+        "label": "GT Campaign Theme",
+        "type": "string",
+        "fieldType": "text",
+        "description": "The publish request's campaign theme.",
+    },
+    {
+        "name": "gt_content_ref",
+        "label": "GT Content Ref",
+        "type": "string",
+        "fieldType": "text",
+        "description": "Source content ref (asset/candidate id).",
+    },
+    {
+        "name": "gt_simulated_receipt",
+        "label": "GT Simulated Receipt",
+        "type": "string",
+        "fieldType": "text",
+        "description": "The simulated dispatch receipt (INV-9; v1 sends are simulated).",
+    },
+]
+
 
 def _load_token() -> str:
     """Read HUBSPOT_PRIVATE_APP_TOKEN from the repo-root .env (no dotenv dep)."""
@@ -271,6 +335,74 @@ def create_properties(
     return ensured
 
 
+def _find_custom_object(client: httpx.Client, name: str) -> dict[str, Any] | None:
+    """Return the existing custom-object schema with this ``name``, else None."""
+    resp = client.get("/crm/v3/schemas")
+    resp.raise_for_status()
+    for schema in resp.json().get("results", []):
+        if schema.get("name") == name or schema.get("objectTypeId") == name:
+            obj: dict[str, Any] = schema
+            return obj
+    return None
+
+
+def provision_social_post_object(client: httpx.Client, *, dry_run: bool) -> dict[str, str]:
+    """Create the GT Social Post custom object + its props idempotently (W3).
+
+    Returns ``{"object_type", "id_property"}`` — the params ``crm.
+    gt_social_post_object`` config read back from the live portal. If the object
+    already exists it is reused (matched by name) and only net-new properties are
+    added; ``gt_synthetic_id`` is the requiredProperty + primaryDisplayProperty
+    (the upsert idempotency key — NEVER PII, INV-1).
+    """
+    existing = _find_custom_object(client, _SOCIAL_POST_OBJECT_NAME)
+    if existing is not None:
+        object_type = str(existing.get("fullyQualifiedName") or existing.get("objectTypeId"))
+        print(
+            f"  · custom object {_SOCIAL_POST_OBJECT_NAME!r} exists ({object_type}) — ensure props"
+        )
+        create_properties(client, object_type, _SOCIAL_POST_PROPERTIES, dry_run=dry_run)
+        return {"object_type": object_type, "id_property": "gt_synthetic_id"}
+
+    if dry_run:
+        print(f"  ~ [dry-run] CREATE custom object {_SOCIAL_POST_OBJECT_NAME!r} + properties")
+        return {"object_type": f"p_{_SOCIAL_POST_OBJECT_NAME}", "id_property": "gt_synthetic_id"}
+
+    body: dict[str, Any] = {
+        "name": _SOCIAL_POST_OBJECT_NAME,
+        "labels": _SOCIAL_POST_LABELS,
+        "primaryDisplayProperty": "gt_synthetic_id",
+        "requiredProperties": ["gt_synthetic_id"],
+        "searchableProperties": ["gt_synthetic_id"],
+        "properties": _SOCIAL_POST_PROPERTIES,
+        "associatedObjects": [],
+    }
+    resp = client.post("/crm/v3/schemas", json=body)
+    resp.raise_for_status()
+    created = resp.json()
+    object_type = str(created.get("fullyQualifiedName") or created.get("objectTypeId"))
+    print(f"  ✓ created custom object {_SOCIAL_POST_OBJECT_NAME!r} ({object_type})")
+    return {"object_type": object_type, "id_property": "gt_synthetic_id"}
+
+
+def write_social_post_object_to_params(config: dict[str, str], *, dry_run: bool) -> None:
+    """Rewrite crm.gt_social_post_object in the local params.yaml from the live read-back."""
+    if not _PARAMS_PATH.exists():
+        print(f"  ! {_PARAMS_PATH} not found — skipping params write (copy from example first).")
+        return
+    data = yaml.safe_load(_PARAMS_PATH.read_text(encoding="utf-8"))
+    crm = data.setdefault("crm", {})
+    if crm.get("gt_social_post_object") == config:
+        print("  · params crm.gt_social_post_object already matches live — skip")
+        return
+    if dry_run:
+        print(f"  ~ [dry-run] would write crm.gt_social_post_object = {config}")
+        return
+    crm["gt_social_post_object"] = config
+    _PARAMS_PATH.write_text(yaml.safe_dump(data, sort_keys=False), encoding="utf-8")
+    print(f"  ✓ wrote crm.gt_social_post_object → {_PARAMS_PATH}")
+
+
 def write_stage_map_to_params(stage_map: dict[str, str], *, dry_run: bool) -> None:
     """Rewrite crm.stage_map in the local params.yaml from the live read-back."""
     if not _PARAMS_PATH.exists():
@@ -302,14 +434,18 @@ def main() -> int:
         print("\n[1/3] Reshape deal pipeline → 4 cockpit stages")
         stage_map = reshape_pipeline(client, dry_run=args.dry_run)
 
-        print("\n[2/3] Create custom properties (idempotent)")
+        print("\n[2/4] Create custom properties (idempotent)")
         deal_props = create_properties(client, "deals", _DEAL_PROPERTIES, dry_run=args.dry_run)
         contact_props = create_properties(
             client, "contacts", _CONTACT_PROPERTIES, dry_run=args.dry_run
         )
 
-        print("\n[3/3] Write stage map back to params.yaml")
+        print("\n[3/4] Provision GT Social Post custom object (publish-monitor W3)")
+        social_post_config = provision_social_post_object(client, dry_run=args.dry_run)
+
+        print("\n[4/4] Write stage map + custom object config back to params.yaml")
         write_stage_map_to_params(stage_map, dry_run=args.dry_run)
+        write_social_post_object_to_params(social_post_config, dry_run=args.dry_run)
 
     print("\n=== Summary ===")
     print("Stage map (cockpit → HubSpot stage id):")
@@ -317,6 +453,7 @@ def main() -> int:
         print(f"  {value:<12} → {stage_id}")
     print(f"Deal gt_* properties ensured:    {deal_props}")
     print(f"Contact gt_* properties ensured: {contact_props}")
+    print(f"GT Social Post custom object:    {social_post_config}")
     print("Reused existing deal props (no dup): amount, funding_source, program_type")
     print("INV-1: schema only — no contact/deal records written.")
     return 0

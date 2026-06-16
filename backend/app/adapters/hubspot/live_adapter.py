@@ -38,7 +38,12 @@ from uuid import UUID
 
 import httpx
 
-from app.adapters.hubspot.crm_adapter import CRMAdapter, SendResult, SyncResult
+from app.adapters.hubspot.crm_adapter import (
+    CRMAdapter,
+    SendResult,
+    SyncResult,
+    is_mirrorable,
+)
 from app.adapters.hubspot.stage_map import (
     StageMappingError,
     cockpit_stage_to_hubspot_id,
@@ -48,6 +53,7 @@ from app.core.funding_gate import award_for_tier
 from app.core.params import AwardAmounts, Crm
 from app.core.seam import MirrorState
 from app.data.models import FamilyRecord
+from app.marketing.schemas.publish import PlatformDispatch, PublishRequest
 
 logger = logging.getLogger(__name__)
 
@@ -352,6 +358,55 @@ class LiveHubSpotCRMAdapter(CRMAdapter):
         """Resolve a contact/deal object id by ``gt_synthetic_id`` (never email)."""
         match = self._search_by_gt_id(object_path, gt_id, [_GT_SYNTHETIC_ID])
         return None if match is None else str(match["id"])
+
+    # ----------------------------------------------------- GT Social Post mirror
+    def _social_post_properties(
+        self, dispatch: PlatformDispatch, request: PublishRequest
+    ) -> dict[str, Any]:
+        """Build the GT Social Post props from a dispatch + its request (W3).
+
+        The idempotency key is ``gt_synthetic_id = str(post_id)`` — NEVER a
+        contact identity (INV-1). Every other gt_* prop is gated on the params
+        declaration (INV-11) AND on the value being present (``None`` ⇒ skip, no
+        empty writes). ``gt_content_ref`` prefers the asset ref, then candidate.
+        """
+        declared = set(self._crm.gt_properties.social_post)
+        id_prop = self._crm.gt_social_post_object.id_property
+        props: dict[str, Any] = {id_prop: str(dispatch.post_id)}
+        if "gt_platform" in declared:
+            props["gt_platform"] = dispatch.channel.value
+        if "gt_dispatch_status" in declared:
+            props["gt_dispatch_status"] = dispatch.dispatch_status.value
+        if "gt_scheduled_for" in declared:
+            props["gt_scheduled_for"] = request.scheduled_for
+        if "gt_campaign_theme" in declared and request.campaign_theme is not None:
+            props["gt_campaign_theme"] = request.campaign_theme
+        if "gt_content_ref" in declared:
+            content_ref = request.asset_ref or request.candidate_ref
+            if content_ref is not None:
+                props["gt_content_ref"] = str(content_ref)
+        if "gt_simulated_receipt" in declared and dispatch.simulated_result is not None:
+            props["gt_simulated_receipt"] = dispatch.simulated_result
+        return props
+
+    def mirror_social_post(
+        self, dispatch: PlatformDispatch, *, request: PublishRequest
+    ) -> str | None:
+        """Upsert one GT Social Post custom object behind the four guards (W3).
+
+        The cockpit is the primary observability plane; this writes the SECOND
+        screen so the team can monitor publishing on HubSpot too. Idempotent on
+        ``gt_synthetic_id = str(post_id)`` (NEVER a contact identity — INV-1, so a
+        real-contact collision is structurally impossible here). A non-mirrorable
+        dispatch (skipped/blocked/failed/capped) returns ``None`` with NO HubSpot
+        call. Each call rides guard 3's per-run budget + the registry kill switch
+        (INV-8). Returns the live custom-object id.
+        """
+        if not is_mirrorable(dispatch):
+            return None
+        object_path = f"/crm/v3/objects/{self._crm.gt_social_post_object.object_type}"
+        gt_id = str(dispatch.post_id)
+        return self._upsert(object_path, gt_id, self._social_post_properties(dispatch, request))
 
 
 def _parse_hs_timestamp(raw: object) -> datetime | None:

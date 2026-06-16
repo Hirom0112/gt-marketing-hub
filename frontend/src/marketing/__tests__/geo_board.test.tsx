@@ -13,6 +13,7 @@ import GeoBoard from '../GeoBoard';
 // runtime deps). fireEvent only (no user-event dep).
 
 // A healthy GEO read: coverage 30% vs the 0% baseline ⇒ lift +30%; eval green.
+// GT citation share ≈ 3% vs competitors ≈ 50% (growth-strategy Bet 3).
 const GEO_ENABLED = {
   coverage_mean: 0.3,
   baseline: 0.0,
@@ -23,6 +24,14 @@ const GEO_ENABLED = {
   enabled: true,
   prompt_set: ['best online school for gifted kids', 'gt school reviews'],
   engine: 'simulated-llm',
+  gt_citation_share: 0.03,
+  competitor_citation_share: {
+    'joinprisma.com': 0.5,
+    'fusionacademy.com': 0.48,
+    'davidsononline.org': 0.49,
+    'k12.com': 0.51,
+    'niche.com': 0.5,
+  },
 };
 
 // A re-sampled read after a POST /geo/sample run: coverage climbs to 45%.
@@ -36,6 +45,11 @@ const GEO_SAMPLED = {
   enabled: true,
   prompt_set: ['best online school for gifted kids', 'gt school reviews'],
   engine: 'simulated-llm',
+  gt_citation_share: 0.12,
+  competitor_citation_share: {
+    'joinprisma.com': 0.5,
+    'k12.com': 0.51,
+  },
 };
 
 // A red GEO eval (enabled:false) AND too few samples — fail-closed surface.
@@ -49,6 +63,24 @@ const GEO_DISABLED = {
   enabled: false,
   prompt_set: ['best online school for gifted kids'],
   engine: 'simulated-llm',
+  gt_citation_share: 0.01,
+  competitor_citation_share: { 'joinprisma.com': 0.5 },
+};
+
+// A generate-to-win PASS: the piece published and re-sampling moved coverage.
+const GEO_GENERATED_PUBLISHED = {
+  ...GEO_SAMPLED,
+  published: true,
+  blocked: false,
+  failed_rules: [] as string[],
+};
+
+// A generate-to-win BLOCK: the gate rejected the body; nothing published.
+const GEO_GENERATED_BLOCKED = {
+  ...GEO_ENABLED,
+  published: false,
+  blocked: true,
+  failed_rules: ['v2_grounding', 'v4_onbrand'],
 };
 
 function mockFetch(payload: unknown): void {
@@ -69,6 +101,27 @@ function mockFetchRouted(routes: { get?: unknown; sample?: unknown }): void {
     vi.fn(async (_url: string, init?: RequestInit) => {
       const payload =
         init?.method === 'POST' ? (routes.sample ?? {}) : (routes.get ?? {});
+      return { ok: true, status: 200, json: async () => payload };
+    }),
+  );
+}
+
+// Routes GET /geo, POST /geo/sample, and POST /geo/generate to distinct payloads
+// (both actions are POST, so route by URL too — not just method).
+function mockFetchByUrl(routes: {
+  get?: unknown;
+  sample?: unknown;
+  generate?: unknown;
+}): void {
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(async (url: string, init?: RequestInit) => {
+      let payload: unknown = routes.get ?? {};
+      if (init?.method === 'POST' && String(url).includes('/geo/generate')) {
+        payload = routes.generate ?? {};
+      } else if (init?.method === 'POST' && String(url).includes('/geo/sample')) {
+        payload = routes.sample ?? {};
+      }
       return { ok: true, status: 200, json: async () => payload };
     }),
   );
@@ -100,6 +153,22 @@ describe('GeoBoard', () => {
     mockFetch(GEO_ENABLED);
     render(<GeoBoard />);
     expect(await screen.findByTestId('geo-variance')).toBeInTheDocument();
+  });
+
+  it('renders the GT-vs-competitor citation share bars (~3% vs ~50%)', async () => {
+    mockFetch(GEO_ENABLED);
+    render(<GeoBoard />);
+
+    // GT's own share bar (the ~3% leadership figure).
+    const gtBar = await screen.findByTestId('geo-share-gt');
+    expect(gtBar).toHaveTextContent('3%');
+
+    // A competitor's share bar (the ~50% they dominate at).
+    const compBars = screen.getAllByTestId('geo-share-competitor');
+    expect(compBars.length).toBeGreaterThan(0);
+    expect(compBars.some((b) => b.textContent?.includes('50%'))).toBe(true);
+    // The leading competitor is cited far more than GT — the gap is shown.
+    expect(compBars.some((b) => b.textContent?.includes('k12.com'))).toBe(true);
   });
 
   it('disables the generate-to-win action when the GEO eval is red (INV-3 fail-closed)', async () => {
@@ -144,5 +213,53 @@ describe('GeoBoard', () => {
       expect(screen.getByTestId('geo-coverage')).toHaveTextContent('45%');
       expect(screen.getByTestId('geo-lift')).toHaveTextContent('+45%');
     });
+  });
+
+  it('generate-to-win POSTs the target prompt, publishes, and moves coverage', async () => {
+    mockFetchByUrl({ get: GEO_ENABLED, generate: GEO_GENERATED_PUBLISHED });
+    render(<GeoBoard />);
+
+    const input = await screen.findByTestId('geo-generate-prompt');
+    fireEvent.change(input, {
+      target: { value: 'best online gifted school in texas' },
+    });
+    fireEvent.click(screen.getByTestId('geo-generate'));
+
+    // Fires POST /geo/generate with the target prompt.
+    await waitFor(() => {
+      const fetchMock = fetch as unknown as ReturnType<typeof vi.fn>;
+      const call = fetchMock.mock.calls.find(
+        (c) =>
+          String(c[0]).includes('/geo/generate') &&
+          (c[1] as RequestInit | undefined)?.method === 'POST',
+      );
+      expect(call).toBeTruthy();
+      const body = JSON.parse(String((call?.[1] as RequestInit).body)) as {
+        target_prompt: string;
+      };
+      expect(body.target_prompt).toBe('best online gifted school in texas');
+    });
+
+    // The published outcome shows and the board re-renders with moved coverage.
+    expect(await screen.findByTestId('geo-generate-published')).toBeInTheDocument();
+    await waitFor(() => {
+      expect(screen.getByTestId('geo-coverage')).toHaveTextContent('45%');
+    });
+  });
+
+  it('generate-to-win surfaces the blocked outcome when the gate rejects (fail-closed)', async () => {
+    mockFetchByUrl({ get: GEO_ENABLED, generate: GEO_GENERATED_BLOCKED });
+    render(<GeoBoard />);
+
+    const input = await screen.findByTestId('geo-generate-prompt');
+    fireEvent.change(input, {
+      target: { value: 'kids learn 4x faster guaranteed' },
+    });
+    fireEvent.click(screen.getByTestId('geo-generate'));
+
+    // The blocked outcome lists the failing rules; nothing published (INV-4).
+    const blocked = await screen.findByTestId('geo-generate-blocked');
+    expect(blocked).toHaveTextContent(/v2_grounding/);
+    expect(screen.queryByTestId('geo-generate-published')).toBeNull();
   });
 });

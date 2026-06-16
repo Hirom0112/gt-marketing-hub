@@ -33,6 +33,13 @@ from pydantic import BaseModel, ConfigDict
 
 from app.core.seam import MirrorState
 from app.data.models import FamilyRecord, Stage
+from app.marketing.schemas.publish import (
+    MirrorStatus,
+    PlatformDispatch,
+    PublishMonitor,
+    PublishRequest,
+)
+from app.marketing.schemas.scheduling import DispatchStatus
 
 
 class SyncResult(BaseModel):
@@ -97,6 +104,67 @@ class CRMAdapter(ABC):
     def send_message(self, message: dict[str, Any]) -> SendResult:
         """Send an outbound email/nudge. Simulated in v1 (INV-9)."""
 
+    @abstractmethod
+    def mirror_social_post(
+        self, dispatch: PlatformDispatch, *, request: PublishRequest
+    ) -> str | None:
+        """Mirror one dispatched social post into HubSpot as a GT Social Post (W3).
+
+        The cockpit is the primary observability plane; this writes the SECOND
+        screen — one GT Social Post custom-object record per DISPATCHED post so
+        the team can monitor publishing on the HubSpot screen too. Idempotent on
+        the post id (``gt_synthetic_id = str(post_id)``; NEVER any contact
+        identity, INV-1).
+
+        Returns the HubSpot object id of the mirrored record, or ``None`` when
+        there is nothing to mirror — a ``skipped`` mirror state, a blocked/failed
+        dispatch, or a capped one (those carry no live publish). The simulated
+        impl returns a deterministic synthetic id (no wall-clock/uuid4).
+        """
+
+
+def is_mirrorable(dispatch: PlatformDispatch) -> bool:
+    """Pure predicate: does this dispatch warrant a GT Social Post mirror?
+
+    Only a dispatch that actually published (``simulated_sent``) and is still
+    eligible (``mirror_status == pending``) is mirrored. A blocked/failed/capped
+    dispatch, or one already ``skipped``/``mirrored``, is NOT — the mirror is the
+    second screen for posts that went out, never a record of a non-event.
+    """
+    return (
+        dispatch.mirror_status is MirrorStatus.PENDING
+        and dispatch.dispatch_status is DispatchStatus.SIMULATED_SENT
+        and not dispatch.capped
+    )
+
+
+def apply_mirror_results(
+    monitor: PublishMonitor, mirror_ids: dict[UUID, str | None]
+) -> PublishMonitor:
+    """Pure: fold per-dispatch mirror ids into an updated, immutable PublishMonitor.
+
+    ``mirror_ids`` maps a dispatch's ``post_id`` to the HubSpot object id returned
+    by :meth:`CRMAdapter.mirror_social_post` (or ``None`` when nothing was
+    mirrored). For each dispatch with a non-``None`` id, the returned monitor
+    flips that dispatch's ``mirror_status`` PENDING→MIRRORED; a ``None`` (or
+    absent) entry leaves the dispatch untouched. ``hubspot_object_id`` is set to
+    the FIRST mirrored id (the representative record for the request), preserving
+    any id already present. Fully deterministic — no I/O, no wall clock.
+    """
+    updated: list[PlatformDispatch] = []
+    first_mirrored: str | None = monitor.hubspot_object_id
+    for dispatch in monitor.dispatches:
+        obj_id = mirror_ids.get(dispatch.post_id)
+        if obj_id is not None and dispatch.mirror_status is MirrorStatus.PENDING:
+            updated.append(dispatch.model_copy(update={"mirror_status": MirrorStatus.MIRRORED}))
+            if first_mirrored is None:
+                first_mirrored = obj_id
+        else:
+            updated.append(dispatch)
+    return monitor.model_copy(
+        update={"dispatches": tuple(updated), "hubspot_object_id": first_mirrored}
+    )
+
 
 class SimulatedCRMAdapter(CRMAdapter):
     """In-memory recorder — records writes/sends, performs **no** I/O (INV-9).
@@ -113,6 +181,8 @@ class SimulatedCRMAdapter(CRMAdapter):
         # Append-only audit logs (the "recorder"). No network client.
         self.pushed_log: list[SyncResult] = []
         self.sent_log: list[SendResult] = []
+        # GT Social Post mirrors recorded: (synthetic object id, post id).
+        self.mirrored_log: list[tuple[str, UUID]] = []
         # The simulated HubSpot mirror, keyed by family — rebuilt from pushes.
         self._mirror: dict[UUID, tuple[Stage, datetime | None]] = {}
 
@@ -149,3 +219,20 @@ class SimulatedCRMAdapter(CRMAdapter):
         result = SendResult(simulated=True, recorded_id=uuid4().hex, channel=channel)
         self.sent_log.append(result)
         return result
+
+    def mirror_social_post(
+        self, dispatch: PlatformDispatch, *, request: PublishRequest
+    ) -> str | None:
+        """Record a GT Social Post mirror and return a DETERMINISTIC synthetic id.
+
+        Records-never-sends (INV-9): appends to ``mirrored_log`` and returns an id
+        derived purely from the post id — no wall clock, no ``uuid4`` — so the same
+        dispatch always yields the same id (re-running the fan-out is idempotent).
+        A non-mirrorable dispatch (skipped/blocked/failed/capped) returns ``None``
+        and records nothing, matching the live impl's contract.
+        """
+        if not is_mirrorable(dispatch):
+            return None
+        object_id = f"sim-gtsp-{dispatch.post_id}"
+        self.mirrored_log.append((object_id, dispatch.post_id))
+        return object_id

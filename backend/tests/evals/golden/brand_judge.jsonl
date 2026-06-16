@@ -1,0 +1,10 @@
+{"label": "onbrand-email-program-led", "expected_onbrand": true, "text": "Thanks for your interest in GT School. We'd love to walk your family through our mastery-based gifted K-8 program and the enrollment steps for your child."}
+{"label": "onbrand-caption-mastery", "expected_onbrand": true, "text": "Gifted K-8, built around mastery. See how a GT School day actually works for your child — students advance when they have truly learned the material."}
+{"label": "onbrand-faq-parent-respectful", "expected_onbrand": true, "text": "Is GT School a test-prep program? No. GT School is a mastery-based gifted K-8 program; families enroll their child when the fit is right."}
+{"label": "onbrand-nudge-plain-voice", "expected_onbrand": true, "text": "A quick note about your GT School enrollment. Here is what the next step looks like for your family, and a time to talk it through with our team about your child's learning."}
+{"label": "onbrand-email-program-detail", "expected_onbrand": true, "text": "GT School is a gifted K-8 program where students learn at mastery. We'd be glad to help your family understand enrollment and what the program means for your child."}
+{"label": "offbrand-hype-amazing", "expected_onbrand": false, "text": "This is the most amazing, incredible, world-class school. Act now — limited time! Don't miss out, hurry and sign up today!!!"}
+{"label": "offbrand-banned-multiplier", "expected_onbrand": false, "text": "Our students learn at 4X speed and we guarantee they will get into the best colleges. Unbeatable, revolutionary results."}
+{"label": "offbrand-minor-targeting", "expected_onbrand": false, "text": "Hey kids! Sign up today for the most amazing after-school program. Buy now before it's gone!"}
+{"label": "offbrand-bland-generic", "expected_onbrand": false, "text": "Hello, a quick note about the next steps. Please reach out whenever you are ready to continue the process."}
+{"label": "offbrand-pure-hype", "expected_onbrand": false, "text": "The best, unbeatable, guaranteed, world-class experience. Act now, limited time, hurry!"}

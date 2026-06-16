@@ -28,15 +28,42 @@ from app.adapters.media.base import ImageRef, MediaGenAdapter, MediaSpec, VideoR
 _PLACEHOLDER_SCHEME = "placeholder://gt-media"
 _COST_ESTIMATE_REF = "TECH_STACK.md#6-cost-model:media-gen"
 
+# Synthetic render-hint catalogues. A dashboard needs *something* to lay out, so a
+# placeholder ref carries a deterministic ``"WxH format"`` hint picked from these
+# fixtures by the asset digest — NOT a tunable governing live behaviour (no live
+# gen exists in the placeholder), and emphatically not a price (OUT-1, INV-11);
+# they're fixtures of the v1 simulation, so they live with the simulation.
+_IMAGE_DIMENSIONS = ("1024x1024", "1024x768", "1080x1350", "1200x628")
+_VIDEO_DIMENSIONS = ("1280x720", "1080x1920", "1920x1080")
+_IMAGE_FORMAT = "png"
+_VIDEO_FORMAT = "mp4"
 
-def _asset_id(kind: str, spec: MediaSpec) -> str:
-    """Deterministic synthetic asset id from ``(kind, brief, tier)``.
 
-    A salted BLAKE2b digest gives a stable id with no shared entropy state —
-    pure, no I/O, reproducible across processes (no PRNG/GUID/clock).
+def _digest(kind: str, spec: MediaSpec) -> bytes:
+    """Salted BLAKE2b digest of ``(kind, brief, tier)`` — the shared entropy source.
+
+    Pure, no I/O, reproducible across processes (no PRNG/GUID/clock); both the
+    asset id and the synthetic render hint derive from this same digest so a spec
+    maps to one stable placeholder.
     """
     key = f"{kind}:{spec.brief}:{spec.tier}".encode()
-    return hashlib.blake2b(key, digest_size=8).hexdigest()
+    return hashlib.blake2b(key, digest_size=8).digest()
+
+
+def _asset_id(kind: str, spec: MediaSpec) -> str:
+    """Deterministic synthetic asset id from ``(kind, brief, tier)`` (hex digest)."""
+    return _digest(kind, spec).hex()
+
+
+def _render_hint(kind: str, spec: MediaSpec, dimensions: tuple[str, ...], fmt: str) -> str:
+    """A deterministic synthetic ``"WxH format"`` hint for a dashboard to render.
+
+    The dimension is chosen from ``dimensions`` by the asset digest (stable per
+    spec, no entropy state); ``fmt`` is the kind's file format. A STRING only — no
+    numeric price ever enters the ref shape (OUT-1, INV-11).
+    """
+    index = _digest(kind, spec)[0] % len(dimensions)
+    return f"{dimensions[index]} {fmt}"
 
 
 class PlaceholderMediaGenAdapter(MediaGenAdapter):
@@ -57,9 +84,11 @@ class PlaceholderMediaGenAdapter(MediaGenAdapter):
         """
         asset = _asset_id("image", spec)
         return ImageRef(
-            placeholder_uri=f"{_PLACEHOLDER_SCHEME}/image/{asset}.png",
+            placeholder_uri=f"{_PLACEHOLDER_SCHEME}/image/{asset}.{_IMAGE_FORMAT}",
             cost_estimate_ref=_COST_ESTIMATE_REF,
             is_placeholder=True,
+            brief=spec.brief,
+            render_hint=_render_hint("image", spec, _IMAGE_DIMENSIONS, _IMAGE_FORMAT),
         )
 
     def generate_video(self, spec: MediaSpec) -> VideoRef:
@@ -70,7 +99,9 @@ class PlaceholderMediaGenAdapter(MediaGenAdapter):
         """
         asset = _asset_id("video", spec)
         return VideoRef(
-            placeholder_uri=f"{_PLACEHOLDER_SCHEME}/video/{asset}.mp4",
+            placeholder_uri=f"{_PLACEHOLDER_SCHEME}/video/{asset}.{_VIDEO_FORMAT}",
             cost_estimate_ref=_COST_ESTIMATE_REF,
             is_placeholder=True,
+            brief=spec.brief,
+            render_hint=_render_hint("video", spec, _VIDEO_DIMENSIONS, _VIDEO_FORMAT),
         )

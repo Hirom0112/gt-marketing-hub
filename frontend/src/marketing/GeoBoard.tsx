@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Globe, Lock, RefreshCw, Sparkles } from 'lucide-react';
+import { Ban, Globe, Lock, RefreshCw, Sparkles } from 'lucide-react';
 import { apiBaseUrl } from '../config';
 import { Button, Card, Chip, Stat } from '../ui';
 
@@ -35,12 +35,32 @@ interface GeoTrackingView {
   enabled: boolean; // false ⇒ GEO eval is RED ⇒ disable generate-to-win
   prompt_set: string[];
   engine: string;
+  // GT-vs-competitor citation share (FR-3.7; growth-strategy Bet 3): GT ≈ 3% vs
+  // competitors ≈ 50%. The ~3%-vs-~50% leadership view rendered as share bars.
+  gt_citation_share?: number; // 0.0..1.0 — GT's own slice of cited domains
+  competitor_citation_share?: Record<string, number>; // domain → 0.0..1.0
+}
+
+// POST /geo/generate response — the tracking view PLUS the gate outcome. A
+// PASS publishes the generated piece and re-samples (coverage/lift move); a
+// BLOCK publishes nothing and lists the failing rules (fail-closed, INV-4).
+interface GeoGenerateView extends GeoTrackingView {
+  published: boolean;
+  blocked: boolean;
+  failed_rules: string[];
 }
 
 type LoadState =
   | { status: 'loading' }
   | { status: 'error'; message: string }
   | { status: 'ready'; data: GeoTrackingView };
+
+interface GenerateResult {
+  published: boolean;
+  blocked: boolean;
+  failed_rules: string[];
+  prompt: string;
+}
 
 const PLACEHOLDER = '—';
 
@@ -56,11 +76,60 @@ function signedPct(fraction: number): string {
   return `${sign}${value}%`;
 }
 
+// One citation-share bar: a labelled domain + a fill proportional to its share
+// of the cited slots, with the whole-percent figure. The GT bar (tone 'flow')
+// reads tiny next to the competitor bars (tone 'signal') — the ~3% vs ~50% gap.
+function ShareBar({
+  testId,
+  label,
+  domain,
+  share,
+  tone,
+}: {
+  testId: string;
+  label: string;
+  domain: string;
+  share: number;
+  tone: 'flow' | 'signal';
+}): JSX.Element {
+  const width = `${Math.min(100, Math.max(0, share * 100))}%`;
+  const fill = tone === 'flow' ? 'var(--flow)' : 'var(--signal)';
+  return (
+    <div data-testid={testId} data-domain={domain} style={{ display: 'grid', gap: 2 }}>
+      <div
+        style={{
+          display: 'flex',
+          justifyContent: 'space-between',
+          fontSize: 'var(--fs-sm)',
+        }}
+      >
+        <span className="mono">{label}</span>
+        <span className="mono">{pct(share)}</span>
+      </div>
+      <div
+        aria-hidden
+        style={{
+          height: 8,
+          borderRadius: 'var(--r-sm)',
+          background: 'var(--surface-2)',
+          overflow: 'hidden',
+        }}
+      >
+        <div style={{ width, height: '100%', background: fill }} />
+      </div>
+    </div>
+  );
+}
+
 export default function GeoBoard(): JSX.Element {
   const [state, setState] = useState<LoadState>({ status: 'loading' });
   // Tracks an in-flight re-sampling run so the control can show progress and
   // not double-fire.
   const [sampling, setSampling] = useState(false);
+  // The generate-to-win prompt + its in-flight + last-outcome state.
+  const [genPrompt, setGenPrompt] = useState('');
+  const [generating, setGenerating] = useState(false);
+  const [genResult, setGenResult] = useState<GenerateResult | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -102,6 +171,40 @@ export default function GeoBoard(): JSX.Element {
       .finally(() => setSampling(false));
   }
 
+  // Generate-to-win: POST a target prompt → the server builds a piece, gates it,
+  // and (on PASS) publishes + re-samples so coverage/lift move; on BLOCK nothing
+  // publishes and the failing rules surface (fail-closed, INV-4). Re-renders the
+  // board from the returned view either way.
+  function generateToWin(): void {
+    const target = genPrompt.trim();
+    if (!target) return;
+    setGenerating(true);
+    setGenResult(null);
+    fetch(`${apiBaseUrl}/geo/generate`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ target_prompt: target }),
+    })
+      .then((res) => {
+        if (!res.ok) throw new Error(`geo generate failed: ${res.status}`);
+        return res.json() as Promise<GeoGenerateView>;
+      })
+      .then((data) => {
+        setState({ status: 'ready', data });
+        setGenResult({
+          published: data.published,
+          blocked: data.blocked,
+          failed_rules: data.failed_rules,
+          prompt: target,
+        });
+      })
+      .catch((err: unknown) => {
+        const message = err instanceof Error ? err.message : 'unknown error';
+        setState({ status: 'error', message });
+      })
+      .finally(() => setGenerating(false));
+  }
+
   if (state.status === 'loading') {
     return (
       <p data-testid="geo-loading" className="lab">
@@ -129,6 +232,14 @@ export default function GeoBoard(): JSX.Element {
   // On too few samples we never assert a point estimate — the CI is widened.
   const ci = pct(Math.sqrt(Math.max(geo.variance, 0)));
   const liftTone = geo.lift > 0 ? 'flow' : geo.lift < 0 ? 'signal' : 'neutral';
+
+  // GT-vs-competitor citation share (FR-3.7; growth-strategy Bet 3). Competitors
+  // sorted high→low so the leader (the ~50% gap GT is measured against) reads
+  // first. The bar width is the share as a percent of the slot stream.
+  const gtShare = geo.gt_citation_share ?? 0;
+  const competitorShare = geo.competitor_citation_share ?? {};
+  const competitorRows = Object.entries(competitorShare).sort((a, b) => b[1] - a[1]);
+  const hasShare = competitorRows.length > 0 || gtShare > 0;
 
   return (
     <section
@@ -191,6 +302,43 @@ export default function GeoBoard(): JSX.Element {
           />
         </Card>
       </div>
+
+      {/* GT-vs-competitor citation share — the ~3%-GT vs ~50%-competitor
+          leadership view (growth-strategy Bet 3). GT's own bar first, then the
+          gifted-school competitors high→low; the gap is the whole point. */}
+      {hasShare && (
+        <Card>
+          <p className="lab" style={{ margin: 0 }}>
+            Citation share — who AI-search cites for these prompts
+          </p>
+          <div
+            data-testid="geo-share-bars"
+            style={{
+              display: 'grid',
+              gap: 'var(--s-2)',
+              marginTop: 'var(--s-3)',
+            }}
+          >
+            <ShareBar
+              testId="geo-share-gt"
+              label="GT School"
+              domain="gtschool.com"
+              share={gtShare}
+              tone="flow"
+            />
+            {competitorRows.map(([domain, share]) => (
+              <ShareBar
+                key={domain}
+                testId="geo-share-competitor"
+                label={domain}
+                domain={domain}
+                share={share}
+                tone="signal"
+              />
+            ))}
+          </div>
+        </Card>
+      )}
 
       <Card>
         <div
@@ -271,16 +419,84 @@ export default function GeoBoard(): JSX.Element {
       </Card>
 
       {evalGreen ? (
-        <div>
-          <Button
-            variant="primary"
-            icon={sampling ? RefreshCw : Sparkles}
-            data-testid="geo-run-sampling"
-            onClick={runSampling}
-            disabled={sampling}
-          >
-            {sampling ? 'Running sampling…' : 'Run sampling (generate-to-win)'}
-          </Button>
+        <div style={{ display: 'grid', gap: 'var(--s-3)' }}>
+          {/* Generate-to-win: the flywheel. Type a target prompt → the server
+              generates a structure-first piece, gates it, and on PASS publishes
+              + re-samples so coverage/lift move; on BLOCK nothing publishes and
+              the failing rules show (fail-closed, INV-4). */}
+          <Card style={{ display: 'grid', gap: 'var(--s-3)' }}>
+            <p className="lab" style={{ margin: 0 }}>
+              Generate content to win a prompt — publishes, re-samples, moves coverage
+            </p>
+            <div style={{ display: 'flex', gap: 'var(--s-2)', flexWrap: 'wrap' }}>
+              <input
+                data-testid="geo-generate-prompt"
+                aria-label="Target prompt to win"
+                value={genPrompt}
+                onChange={(e) => setGenPrompt(e.target.value)}
+                placeholder="e.g. best accredited online gifted school in Texas"
+                style={{
+                  flex: 1,
+                  minWidth: 240,
+                  fontFamily: 'var(--sans)',
+                  fontSize: 'var(--fs-body)',
+                  border: '1px solid var(--line)',
+                  borderRadius: 'var(--r-md)',
+                  padding: 'var(--s-2) var(--s-3)',
+                  background: 'var(--surface-2)',
+                  color: 'var(--ink)',
+                }}
+              />
+              <Button
+                variant="primary"
+                icon={Sparkles}
+                data-testid="geo-generate"
+                onClick={generateToWin}
+                disabled={generating || !genPrompt.trim()}
+              >
+                {generating ? 'Generating…' : 'Generate to win'}
+              </Button>
+            </div>
+            {genResult &&
+              (genResult.blocked ? (
+                <div
+                  data-testid="geo-generate-blocked"
+                  role="alert"
+                  style={{
+                    display: 'flex',
+                    alignItems: 'flex-start',
+                    gap: 'var(--s-2)',
+                    color: 'var(--signal-ink)',
+                    fontSize: 'var(--fs-sm)',
+                  }}
+                >
+                  <Ban size={15} aria-hidden style={{ flexShrink: 0, marginTop: 2 }} />
+                  <span>
+                    Blocked by the grounding gate — not published:{' '}
+                    <strong>{genResult.failed_rules.join(', ') || 'failed validation'}</strong>
+                  </span>
+                </div>
+              ) : genResult.published ? (
+                <div
+                  data-testid="geo-generate-published"
+                  role="status"
+                  style={{ color: 'var(--flow-ink)', fontSize: 'var(--fs-sm)' }}
+                >
+                  ✓ Published “{genResult.prompt}” — re-sampled; coverage{' '}
+                  {pct(geo.coverage_mean)}, lift {signedPct(geo.lift)}
+                </div>
+              ) : null)}
+          </Card>
+          <div>
+            <Button
+              icon={RefreshCw}
+              data-testid="geo-run-sampling"
+              onClick={runSampling}
+              disabled={sampling}
+            >
+              {sampling ? 'Running sampling…' : 'Run sampling (re-measure coverage)'}
+            </Button>
+          </div>
         </div>
       ) : (
         // INV-3 fail closed: a red GEO eval disables the generate-to-win action.

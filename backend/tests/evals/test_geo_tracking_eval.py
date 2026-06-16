@@ -19,11 +19,11 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
-from app.evals.geo_tracking_eval import GeoTrackingResult, evaluate_geo_tracking
 
 from app.adapters.geo_sampling.base import GeoObservation
 from app.adapters.geo_sampling.simulated import SimulatedGeoSamplingAdapter
 from app.core.params import GeoTracking, Params, load_params
+from app.evals.geo_tracking_eval import GeoTrackingResult, evaluate_geo_tracking
 
 EXAMPLE_PARAMS = Path(__file__).resolve().parents[3] / "params" / "params.example.yaml"
 
@@ -137,6 +137,24 @@ def test_param_drift(params: Params) -> None:
     lowered = evaluate_geo_tracking(observations, params=_with_min_samples(params, runs - 1))
     assert lowered.insufficient_samples is False
     assert lowered.enabled is True
+
+
+def test_surfaces_gt_vs_competitor_citation_share(params: Params) -> None:
+    """The eval surfaces GT≈low vs competitors≈high citation share (FR-3.7).
+
+    The ~3%-GT-vs-~50%-competitor leadership view (growth-strategy Bet 3): GT's
+    citation share over the sampled slots is far below at least one competitor's.
+    """
+    min_samples = params.eval_thresholds.geo_tracking.min_samples_per_prompt
+    observations = _sample(max(min_samples, 30))
+
+    result = evaluate_geo_tracking(observations, params=params)
+
+    assert 0.0 <= result.gt_citation_share <= 1.0
+    assert result.competitor_citation_share, "per-competitor share must be surfaced"
+    # GT (near 0% baseline) is cited far less than the leading competitor.
+    top_competitor = max(result.competitor_citation_share.values())
+    assert result.gt_citation_share < top_competitor
 
 
 def test_report_variance_param_gates_surfacing(params: Params) -> None:

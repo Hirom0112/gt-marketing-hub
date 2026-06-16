@@ -130,6 +130,57 @@ def test_simulated_is_not_a_live_engine_call() -> None:
         assert token not in source, f"simulated geo adapter must not reference {token!r}"
 
 
+def test_publishing_a_prompt_raises_gt_coverage() -> None:
+    """generate-to-win flywheel: a PUBLISHED prompt samples at a higher GT cite rate.
+
+    Today GT's cite-probability is a fixed near-0% constant, so publishing can
+    never move coverage. The adapter consults a published-prompt registry: once a
+    prompt is published, GT is cited far more often FOR THAT PROMPT (the lift
+    amount is a param, read by the adapter — INV-11). The OTHER prompts are
+    unaffected (the win is prompt-scoped). Deterministic under a fixed seed.
+    """
+    adapter = SimulatedGeoSamplingAdapter()
+    won, other = _PROMPTS
+
+    def gt_hits(prompt: str) -> int:
+        obs = adapter.sample([prompt], _ENGINE, min_samples_per_prompt=40, seed=3)
+        return sum(1 for o in obs if o.brand_cited)
+
+    baseline_hits = gt_hits(won)
+
+    # Publish a piece for `won` — the adapter now cites GT much more for it.
+    adapter.publish(won, published_cite_buckets=200)
+
+    assert gt_hits(won) > baseline_hits, "publishing must RAISE GT coverage (lift > 0)"
+    # The win is prompt-scoped: a prompt that was NOT published is unchanged.
+    assert gt_hits(other) == 0 or gt_hits(other) <= baseline_hits + 2
+
+
+def test_published_lift_amount_is_parametric() -> None:
+    """The lift amount is the param the adapter is told, not a hardcoded literal.
+
+    A larger `published_cite_buckets` cites GT more often than a smaller one — so
+    a code literal would NOT respond to the param (INV-11). Deterministic seed.
+    """
+    won = _PROMPTS[0]
+
+    def hits_with(buckets: int) -> int:
+        adapter = SimulatedGeoSamplingAdapter()
+        adapter.publish(won, published_cite_buckets=buckets)
+        obs = adapter.sample([won], _ENGINE, min_samples_per_prompt=60, seed=4)
+        return sum(1 for o in obs if o.brand_cited)
+
+    assert hits_with(240) > hits_with(64)
+
+
+def test_unpublished_prompt_stays_near_baseline() -> None:
+    """With no publish, the adapter is unchanged — GT stays near the 0% baseline."""
+    adapter = SimulatedGeoSamplingAdapter()
+    obs = adapter.sample(_PROMPTS, _ENGINE, min_samples_per_prompt=40, seed=5)
+    brand_hits = sum(1 for o in obs if o.brand_cited)
+    assert brand_hits < len(obs) // 2
+
+
 def test_registry_returns_simulated(monkeypatch: pytest.MonkeyPatch) -> None:
     """v1 default ⇒ simulated impl; a future live mode fails loud (no silent poll)."""
     monkeypatch.setenv("SEND_MODE", "simulate")

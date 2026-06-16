@@ -307,11 +307,16 @@ class LatencyBudgetMs(_StrictModel):
 
 
 class Geo(_StrictModel):
-    """FR-3.7 GEO prompt-set + cadence + 0% baseline (§8)."""
+    """FR-3.7 GEO prompt-set + cadence + 0% baseline + generate-to-win lift (§8)."""
 
     prompt_set_size: int
     cadence: str
     baseline_coverage: float
+    # generate-to-win flywheel (FR-3.7): the GT cite-likelihood buckets (of 256)
+    # the simulated engine uses for a PROMPT THAT HAS BEEN WON (a GEO piece was
+    # generated, gate-passed, and published). The single canonical home for the
+    # lift amount (INV-11); the simulated adapter reads it, never a code literal.
+    published_cite_buckets: int
 
 
 class BrandMemory(_StrictModel):
@@ -324,6 +329,50 @@ class BrandMemory(_StrictModel):
     """
 
     weight_step: float
+
+
+class LibraryIngestNormalization(_StrictModel):
+    """library_ingest.normalization — per-platform engagement caps (INV-11).
+
+    Scraped engagement is NOT comparable across platforms: X / YouTube carry a
+    `views_plays` count in the tens-of-thousands while Instagram / Facebook /
+    TikTok carry a `likes` count in the low hundreds. The distill + loader
+    normalize each post's raw engagement by its platform cap into [0,1], so
+    `weight` ranks WITHIN a platform (an X view and an IG like are never
+    compared directly). Each cap divides that platform's raw signal; the result
+    is clamped to [0,1]. The canonical home for those caps — never a code
+    literal.
+    """
+
+    instagram_likes_max: int
+    facebook_likes_max: int
+    tiktok_likes_max: int
+    x_views_max: int
+    youtube_views_max: int
+
+
+class LibraryIngest(_StrictModel):
+    """Scraper-library ingest tunables (Phase-1 marketing; INV-11).
+
+    The distilled `brand_library.json` (GT's OWN proven public marketing) seeds
+    brand memory, GEO prompts, and the content library. `top_n_per_theme` caps
+    how many exemplars the distill keeps per INSIGHTS theme so the seed stays
+    small and deterministic; `normalization` holds the per-platform engagement
+    caps that map raw engagement into a comparable [0,1] `weight`. The library
+    ROOT path is NOT a param — it is the `GT_LIBRARY_PATH` env var (TECH_STACK
+    §5); the committed in-repo JSON path is a fixed code constant, not a tunable.
+    """
+
+    top_n_per_theme: int
+    normalization: LibraryIngestNormalization
+
+    @model_validator(mode="after")
+    def _top_n_positive(self) -> LibraryIngest:
+        if self.top_n_per_theme < 1:
+            raise ValueError(
+                f"library_ingest.top_n_per_theme must be >= 1, got {self.top_n_per_theme!r}"
+            )
+        return self
 
 
 class CreatorScoringFit(_StrictModel):
@@ -396,10 +445,21 @@ class Kpi(_StrictModel):
 
 
 class Scheduler(_StrictModel):
-    """FR-3.6 / OUT-2 content scheduler — dispatch is SIMULATED in v1."""
+    """FR-3.6 / OUT-2 content scheduler — dispatch is SIMULATED in v1.
+
+    The publish-monitor slice fans one publish request out to a subset of
+    ``publish_channels`` (a subset of the LOCKED ``Channel`` enum, CONTENT_SPEC
+    §2.1 — social-publishable feeds only). ``daily_caps`` is the per-platform max
+    SIMULATED dispatches/day; an over-cap channel is forced ``blocked`` (INV-8
+    governance posture). Both live here as the one canonical home (INV-11).
+    """
 
     # Never 'live' in v1 (INV-9, OUT-2): the field is typed shut to simulated.
     dispatch_mode: str
+    # Social-publishable channel tokens the fan-out may target (subset of Channel).
+    publish_channels: list[str]
+    # Per-platform-token max simulated dispatches/day (quota guard; over-cap ⇒ blocked).
+    daily_caps: dict[str, int]
 
     @field_validator("dispatch_mode")
     @classmethod
@@ -410,6 +470,21 @@ class Scheduler(_StrictModel):
             )
         return value
 
+    @model_validator(mode="after")
+    def _caps_cover_channels(self) -> Scheduler:
+        if not self.publish_channels:
+            raise ValueError("scheduler.publish_channels must be non-empty")
+        missing = [c for c in self.publish_channels if c not in self.daily_caps]
+        if missing:
+            raise ValueError(
+                f"scheduler.daily_caps must define a cap for every publish channel; "
+                f"missing {missing!r}"
+            )
+        bad = {k: v for k, v in self.daily_caps.items() if v < 1}
+        if bad:
+            raise ValueError(f"scheduler.daily_caps values must be >= 1, got {bad!r}")
+        return self
+
 
 class CrmGtProperties(_StrictModel):
     """crm.gt_properties — the gt_* custom HubSpot property internal names (S10).
@@ -417,10 +492,38 @@ class CrmGtProperties(_StrictModel):
     Provisioned by ``scripts/provision_hubspot.py`` and read by the live adapter
     so a property name lives in exactly one place (INV-11): the adapter never
     hardcodes ``gt_synthetic_id`` et al.
+
+    ``social_post`` are the gt_* properties on the **GT Social Post** custom
+    object (publish-monitor W3): the second-screen mirror of each dispatched
+    social post. Same INV-11 posture — the mirror adapter reads these names,
+    never a code literal.
     """
 
     deal: list[str]
     contact: list[str]
+    social_post: list[str]
+
+
+class CrmSocialPostObject(_StrictModel):
+    """crm.gt_social_post_object — the GT Social Post custom object config (W3).
+
+    The publish-monitor mirror upserts one custom-object record per dispatched
+    social post so the team can monitor publishing on the HubSpot screen too. Per
+    INV-11 the object's API identifiers live here (provisioned by
+    ``scripts/provision_hubspot.py``), never hardcoded in the adapter:
+
+    - ``object_type`` is the CRM v3 object identifier the adapter puts in the URL
+      path (``/crm/v3/objects/{object_type}``) — HubSpot accepts either the
+      ``fullyQualifiedName`` (``p<portal>_gt_social_post``) or the object type id
+      (``2-XXXXXXX``). A placeholder ships in the example; the live params.yaml
+      carries the provisioned value.
+    - ``id_property`` is the idempotency upsert key on the object — the
+      ``gt_synthetic_id`` analogue keyed on ``str(post_id)`` (NEVER any contact
+      identity; INV-1).
+    """
+
+    object_type: str
+    id_property: str
 
 
 class Crm(_StrictModel):
@@ -439,6 +542,24 @@ class Crm(_StrictModel):
     synthetic_email_domains: list[str]
     real_domain_denylist: list[str]
     gt_properties: CrmGtProperties
+    gt_social_post_object: CrmSocialPostObject
+
+    @model_validator(mode="after")
+    def _social_post_id_property_declared(self) -> Crm:
+        """The custom object's upsert key MUST be in the social_post prop list.
+
+        Keeps the two homes consistent (INV-11): the idempotency key the mirror
+        upserts on (``gt_social_post_object.id_property``) has to be a property the
+        provisioner declares on ``gt_properties.social_post``, else a drift would
+        let the adapter key on a property that was never created.
+        """
+        if self.gt_social_post_object.id_property not in self.gt_properties.social_post:
+            raise ValueError(
+                "crm.gt_social_post_object.id_property "
+                f"{self.gt_social_post_object.id_property!r} must appear in "
+                f"crm.gt_properties.social_post {self.gt_properties.social_post!r}"
+            )
+        return self
 
 
 class Params(_StrictModel):
@@ -455,6 +576,7 @@ class Params(_StrictModel):
     latency_budget_ms: LatencyBudgetMs
     geo: Geo
     brand_memory: BrandMemory
+    library_ingest: LibraryIngest
     creator_scoring: CreatorScoring
     kpi: Kpi
     scheduler: Scheduler

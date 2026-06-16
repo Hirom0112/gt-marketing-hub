@@ -47,6 +47,7 @@ from uuid import UUID, uuid4
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
+from app.adapters.hubspot.crm_adapter import CRMAdapter
 from app.adapters.sentiment.base import SentimentAdapter, SentimentWindow
 from app.ai.schemas.brand import MarketingRecipe
 from app.ai.schemas.content import (
@@ -57,12 +58,15 @@ from app.ai.schemas.content import (
     Provenance,
 )
 from app.api.deps import (
+    get_crm_adapter_dep,
     get_observability_log,
     get_params,
+    get_repository,
     get_sentiment_adapter_dep,
 )
 from app.core.eval_gate import RuleVerdict, ValidationResult
 from app.core.params import Params
+from app.data.repository import FamilyRepository
 from app.data.synthetic import (
     generate_content_pipeline,
     generate_creator_records,
@@ -101,19 +105,38 @@ SCHEDULE_EVAL_NAME = "dispatch_gate"
 # the params-owned tunables are surface_threshold / kpi.levers / dispatch_mode,
 # read per request, INV-11). These describe the simulation harness only.
 #
-# A small per-channel observed-rate map so `GET /kpi` is deterministic and shows
-# movement over the params baselines. Channels absent here default to baseline
-# in `roll_up` (lever_delta 0). Keyed by the `Channel` token.
+# Per-channel observed rates for `GET /kpi`. The honest current state per
+# ANALYSIS/growth-strategy.md ("Acquisition: near-zero" — 0% email nurture, 0%
+# paid, 0% AI-search/GEO, branded-only organic): we do NOT fabricate progress.
+# Every acquisition channel's observed rate equals its 0.0 params baseline, so the
+# board truthfully shows each lever BELOW target ("not turned on yet") — which is
+# the motivation for the levers, not a bug. Channels absent here default to
+# baseline in `roll_up` (lever_delta 0). Real organic baselines are hydrated from
+# the scraped 440-post catalog in the ingest slice (Phase 1). Keyed by `Channel`.
 _OBSERVED_RATES: dict[str, float] = {
-    Channel.INSTAGRAM.value: 0.03,
-    Channel.EMAIL.value: 0.11,
-    Channel.BLOG.value: 0.04,
-    Channel.GEO.value: 0.01,
+    Channel.INSTAGRAM.value: 0.0,
+    Channel.EMAIL.value: 0.0,
+    Channel.BLOG.value: 0.0,
+    Channel.GEO.value: 0.0,
 }
 
 # The default sentiment window the placeholder adapter aggregates over (opaque
 # date strings — the placeholder source is offline/synthetic, no wall clock).
 _SENTIMENT_WINDOW = SentimentWindow(start="2026-01-01", end="2026-12-31")
+
+# Composition-layer fixture for `GET /geo-targeting`: the demand metros the
+# growth strategy NAMES (the summer-camp city set in the scraped catalog —
+# Austin/Houston/Dallas/Raleigh). NOT a domain tunable (no scoring/threshold
+# reads from it) and NOT params-owned (per the breadth-agent ownership rule) —
+# it is a fixed, documented composition-layer constant like `_OBSERVED_RATES`,
+# describing the strategy's stated target metros so the panel can surface them.
+# These are AGGREGATE metro labels only (INV-6) — no individual/minor keying.
+_DEMAND_METROS: tuple[tuple[str, str], ...] = (
+    ("Austin", "TX"),
+    ("Houston", "TX"),
+    ("Dallas", "TX"),
+    ("Raleigh", "NC"),
+)
 
 # The in-memory simulated post queue (A-3): posts that reached `simulated_sent`
 # are appended here so `GET /content/schedule` can surface the queue. Held in a
@@ -126,6 +149,8 @@ _SCHEDULE_QUEUE: list[ScheduledPost] = []
 ParamsDep = Annotated[Params, Depends(get_params)]
 SentimentAdapterDep = Annotated[SentimentAdapter, Depends(get_sentiment_adapter_dep)]
 LogDep = Annotated[ObservabilityLog, Depends(get_observability_log)]
+RepositoryDep = Annotated[FamilyRepository, Depends(get_repository)]
+CRMAdapterDep = Annotated[CRMAdapter, Depends(get_crm_adapter_dep)]
 
 
 # --------------------------------------------------------------------------- #
@@ -226,6 +251,79 @@ def get_sentiment(adapter: SentimentAdapterDep) -> SentimentView:
 
 
 # --------------------------------------------------------------------------- #
+# GET /geo-targeting — the FR-3.9 AGGREGATE region rollup (INV-6).
+#
+# A DISTINCT endpoint from the `/geo` GEO board (which owns AI-search citation
+# structures): this is the marketing-breadth geo-targeting panel's data source.
+# It rolls the synthetic `LeadsNew.region` field — an AGGREGATE region label by
+# construction (§4.2, P-4: never a ZIP/lat-long of a minor) — up into per-region
+# lead counts, and surfaces the strategy's NAMED demand metros. There is NO
+# per-child / per-minor / individual-keyed field anywhere in the response
+# (INV-6 — targeting is aggregate-only, never child-keyed).
+# --------------------------------------------------------------------------- #
+
+
+class RegionDemandOut(BaseModel):
+    """One AGGREGATE region row — a count + share, never an individual (INV-6)."""
+
+    region: str
+    lead_count: int
+    share: float
+
+
+class DemandMetroOut(BaseModel):
+    """A strategy-named demand metro (aggregate metro label only, INV-6)."""
+
+    metro: str
+    state: str
+
+
+class GeoTargetingOut(BaseModel):
+    """The FR-3.9 geo-targeting view — aggregate region rollup + named metros.
+
+    Deliberately carries ONLY aggregate fields: per-region ``lead_count``/``share``
+    and the named ``demand_metros``. No per-child, per-minor, or individual-keyed
+    field is representable here (INV-6 — aggregate-only, no child-keyed targeting).
+    """
+
+    regions: list[RegionDemandOut]
+    demand_metros: list[DemandMetroOut]
+    total: int
+
+
+@router.get("/geo-targeting", response_model=GeoTargetingOut)
+def get_geo_targeting(repo: RepositoryDep) -> GeoTargetingOut:
+    """AGGREGATE region rollup + named demand metros (FR-3.9; INV-6).
+
+    Rolls the synthetic ``LeadsNew.region`` field up into per-region lead counts
+    (region is aggregate by construction — no minor keying, §4.2/P-4), sorted by
+    count desc then region for a stable order, with each region's share of the
+    total. Then surfaces the strategy's NAMED demand metros (Austin/Houston/
+    Dallas/Raleigh). Read-only; nothing is logged. The response has NO per-child
+    or individual-keyed field — targeting is aggregate-only (INV-6).
+    """
+    counts: dict[str, int] = {}
+    for joined in repo.list_joined():
+        lead = joined.lead
+        if lead is None:
+            continue
+        counts[lead.region] = counts.get(lead.region, 0) + 1
+
+    total = sum(counts.values())
+    regions = [
+        RegionDemandOut(
+            region=region,
+            lead_count=count,
+            share=(count / total) if total else 0.0,
+        )
+        # Sort by count desc, then region asc — a stable, deterministic order.
+        for region, count in sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))
+    ]
+    demand_metros = [DemandMetroOut(metro=metro, state=state) for metro, state in _DEMAND_METROS]
+    return GeoTargetingOut(regions=regions, demand_metros=demand_metros, total=total)
+
+
+# --------------------------------------------------------------------------- #
 # GET /kpi — the §3.11 per-channel rollup vs the params levers (INV-11).
 # --------------------------------------------------------------------------- #
 
@@ -304,6 +402,7 @@ def post_content_schedule(
     request: ScheduleRequest,
     params: ParamsDep,
     log: LogDep,
+    crm_adapter: CRMAdapterDep,
 ) -> ScheduledPost:
     """Build → gate → simulate-send a scheduled post (FR-3.6; INV-9; NFR-6).
 
@@ -313,6 +412,14 @@ def post_content_schedule(
     ``approve`` ⇒ ``simulated_sent`` (with a deterministic receipt), else
     ``blocked`` — a blocked post returns 200 (fail-closed, NOT a 500). The action
     is appended to the §10 audit log. A simulated_sent post enters the queue.
+
+    Bet 1 (READY-TO-FLIP): an approved+validated **EMAIL** post that reaches
+    ``simulated_sent`` ALSO routes through the CRM adapter dep
+    (``crm_adapter.send_message(...)``) — a Note / trigger-property write. The
+    DEFAULT adapter is simulated (records in-memory, no network; INV-9), so nothing
+    hits the portal unless ``CRM_MODE=live`` selects the live HubSpot adapter — the
+    SAME call, the config flip. A blocked post never reaches this call (fail-closed,
+    INV-3/INV-4): the routing is gated on the terminal ``simulated_sent`` status.
     """
     # dispatch_mode is params-owned and typed shut to simulated (INV-9/OUT-2).
     dispatch_mode = DispatchMode(params.scheduler.dispatch_mode)
@@ -351,6 +458,19 @@ def post_content_schedule(
 
     if dispatched.dispatch_status is DispatchStatus.SIMULATED_SENT:
         _SCHEDULE_QUEUE.append(dispatched)
+        # Bet 1: an approved+validated EMAIL post pushes through the CRM adapter
+        # (a Note / trigger-property write). Default simulated ⇒ recorded in-memory,
+        # no network; CRM_MODE=live ⇒ the SAME call hits the portal (the flip). Only
+        # the EMAIL channel routes here; other channels stay on the simulated social
+        # queue. Reached ONLY on simulated_sent — a blocked post never calls it.
+        if request.channel is Channel.EMAIL:
+            crm_adapter.send_message(
+                {
+                    "channel": Channel.EMAIL.value,
+                    "body": f"Scheduled email post for {dispatched.scheduled_for}.",
+                    "scheduled_post_id": str(dispatched.id),
+                }
+            )
 
     return dispatched
 

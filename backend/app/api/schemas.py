@@ -10,11 +10,11 @@ from __future__ import annotations
 from datetime import datetime
 from uuid import UUID
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from app.ai.schemas.brand import LibraryAsset
 from app.ai.schemas.close_tips import CloseTipsProposal
-from app.ai.schemas.content import Channel, ContentCandidate, Decision
+from app.ai.schemas.content import AudienceTag, Channel, Decision
 from app.ai.schemas.enrollment_draft import DraftAction, EnrollmentDraftProposal
 from app.core.contact_status import ContactStatus
 from app.core.eval_gate import ValidationResult
@@ -419,31 +419,98 @@ class ContentGenerateRequest(BaseModel):
     channel: Channel = Channel.INSTAGRAM
 
 
-class SurfacedCandidateResponse(BaseModel):
-    """One surfaced (passing) candidate + its proposal_id + passing verdict (FR-3.1).
+class CandidateValidationView(BaseModel):
+    """The minimal validation verdict the client renders — just the pass bit (FR-4.3).
 
-    The proposal body surfaces ONLY for a candidate whose eval PASSED (INV-3);
-    blocked candidates never appear here (they are logged, not surfaced). The
-    ``proposal_id`` lets the client call the keep/discard decision endpoint.
+    The full :class:`ValidationResult` is logged server-side (INV-4 audit); the
+    client only needs ``passed`` to choose the keep-enabled vs blocked affordance.
     """
 
+    passed: bool
+
+
+class ContentCandidateResponse(BaseModel):
+    """One candidate in a generated batch — surfaced OR blocked (FR-3.1; INV-3/INV-4).
+
+    A FLAT projection the content workspace renders directly. ``surfaced`` is the
+    fail-closed switch: a passing candidate (``surfaced=True``, ``passed=True``)
+    renders with keep/discard controls; a BLOCKED candidate (``surfaced=False``)
+    renders its ``failed_rules`` with NO keep affordance — the gate is shown,
+    never softened (INV-4). Both carry a ``proposal_id`` (both are logged, INV-4
+    audit side), but the keep endpoint still 409s on an un-passed eval (INV-3), so
+    a blocked candidate is never keepable even if a client tried.
+    """
+
+    # §3 names the copy field `copy`; that wire name shadows `BaseModel.copy`, so
+    # the attribute is `copy_text` and `copy` is kept as the alias (mirrors
+    # ContentCandidate). FastAPI serializes the response by alias ⇒ the JSON key is
+    # `copy`; `populate_by_name` lets the handler construct with `copy=`.
+    model_config = ConfigDict(populate_by_name=True)
+
     proposal_id: UUID
-    candidate: ContentCandidate
-    validation: ValidationResult
+    copy_text: str = Field(alias="copy")
+    channel: str
+    surfaced: bool
+    degraded: bool = False
+    failed_rules: list[str] = Field(default_factory=list)
+    validation: CandidateValidationView
 
 
 class ContentGenerateResponse(BaseModel):
-    """The §5.3 batch outcome — surfaced candidates + the blocked count + degraded.
+    """The §5.3 batch outcome — surfaced + blocked candidates + the blocked count.
 
-    ``candidates`` holds only PASSING candidates (INV-3/INV-4). ``blocked_count``
-    is the number of gated-but-failing candidates that were WITHHELD yet logged
-    (the audit count). ``degraded`` is True when the kill switch / cost cap forced
-    the persistent-fallback path with no live call (INV-8).
+    ``candidates`` holds BOTH passing (``surfaced=True``) and blocked
+    (``surfaced=False``) candidates so the operator can SEE the fail-closed gate
+    at work (INV-4 visible); only passing ones are keepable. ``blocked_count`` is
+    the number of gated-but-failing candidates (the audit count, == the count of
+    ``surfaced=False`` entries). ``degraded`` is True when the kill switch / cost
+    cap / no-key path forced the persistent-fallback set with no live call (INV-8).
     """
 
-    candidates: list[SurfacedCandidateResponse] = Field(default_factory=list)
+    batch_id: str = ""
+    candidates: list[ContentCandidateResponse] = Field(default_factory=list)
     blocked_count: int = 0
     degraded: bool = False
+
+
+class CampaignGenerateRequest(BaseModel):
+    """`POST /ai/content/campaign` body — the four campaign axes + a count (Slice B).
+
+    A campaign is defined by four axes: ``theme`` (the angle to lead with, e.g.
+    ``gifted_identity`` / ``cost_tefa_esa`` / …), ``channel`` (shapes format/length),
+    ``audience`` (the :class:`AudienceTag` driving tone + CTA), and an optional
+    ``target_geo_prompt`` (an AI-search prompt the copy should be structured to win —
+    SEO/GEO). ``count`` is the requested batch size; the endpoint CLAMPS it to a module
+    cap so a batch is never silently unbounded (INV-8). ``channel`` / ``audience`` are
+    closed enums (an out-of-range value is rejected 422). ``theme`` is a free string so
+    the angle set can grow without a schema migration; it is embedded verbatim.
+    """
+
+    theme: str = Field(min_length=1)
+    channel: Channel
+    audience: AudienceTag
+    target_geo_prompt: str | None = None
+    count: int = Field(default=1, ge=1)
+
+
+class CampaignEcho(BaseModel):
+    """The campaign axes echoed back on the response so the client can show them as chips."""
+
+    theme: str
+    channel: Channel
+    audience: AudienceTag
+    target_geo_prompt: str | None = None
+
+
+class CampaignGenerateResponse(ContentGenerateResponse):
+    """The campaign batch outcome — the SAME flat batch as `/ai/content/generate` + echo.
+
+    Extends :class:`ContentGenerateResponse` (so candidates stay FLAT and the existing
+    BatchResult UI renders it unchanged) and adds the ``campaign`` echo of the axes that
+    drove the batch.
+    """
+
+    campaign: CampaignEcho
 
 
 class ContentDecisionRequest(BaseModel):

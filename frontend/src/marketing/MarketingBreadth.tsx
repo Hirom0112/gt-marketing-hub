@@ -110,6 +110,23 @@ interface PipelineResponse {
   video: PipelineStage; // status "placeholder"
 }
 
+interface RegionDemand {
+  region: string;
+  lead_count: number;
+  share: number; // 0..1
+}
+
+interface DemandMetro {
+  metro: string;
+  state: string;
+}
+
+interface GeoTargeting {
+  regions: RegionDemand[];
+  demand_metros: DemandMetro[];
+  total: number;
+}
+
 interface RecipeParameter {
   name: string;
   description?: string;
@@ -421,6 +438,62 @@ function SentimentPanel(): JSX.Element {
           />
         </div>
       )}
+      {/* OUT-5: surface the seeded placeholder records (excerpt + topic +
+          sentiment + channel) — context behind the summary tiles. The
+          placeholder source badge above says this is not a live feed. */}
+      {state.status === 'ready' && (state.data.records ?? []).length > 0 && (
+        <ul
+          className="sentiment-records"
+          data-testid="sentiment-records"
+          style={listStyle}
+        >
+          {(state.data.records ?? []).map((rec) => (
+            <li
+              key={rec.id}
+              className="sentiment-record"
+              data-testid={`sentiment-record-${rec.id}`}
+              style={{ ...rowStyle, alignItems: 'flex-start' }}
+            >
+              <div style={{ flex: 1, minWidth: 200 }}>
+                <div
+                  className="sentiment-excerpt"
+                  style={{ fontSize: 'var(--fs-sm)' }}
+                >
+                  {rec.excerpt ?? rec.topic}
+                </div>
+                <div
+                  className="sentiment-meta lab"
+                  style={{ marginTop: 2, color: 'var(--muted)' }}
+                >
+                  <span data-testid={`sentiment-record-topic-${rec.id}`}>
+                    {rec.topic}
+                  </span>
+                  {' · '}
+                  <span data-testid={`sentiment-record-channel-${rec.id}`}>
+                    {rec.channel}
+                  </span>
+                </div>
+              </div>
+              <span
+                className="sentiment-polarity"
+                data-testid={`sentiment-record-sentiment-${rec.id}`}
+              >
+                <Chip
+                  tone={
+                    rec.sentiment === 'positive'
+                      ? 'flow'
+                      : rec.sentiment === 'negative'
+                        ? 'signal'
+                        : 'neutral'
+                  }
+                >
+                  {rec.sentiment}
+                </Chip>
+              </span>
+            </li>
+          ))}
+        </ul>
+      )}
     </Panel>
   );
 }
@@ -509,8 +582,55 @@ function KpiPanel(): JSX.Element {
 }
 
 // 4. Staged-pipeline view ----------------------------------------------------
+// The cheapest-first advance gate (INV-3) is wired to a "select → advance"
+// control: it POSTs the current stage + its human-selection status + validation
+// to /content/pipeline/advance. A 200 unlocks the next (costlier) stage; a 422
+// shows the fail-closed blocked reason (the stage is NOT advanced). Image/video
+// stay placeholder-badged (OUT-1) — no live media gen.
 function PipelinePanel(): JSX.Element {
   const state = useGet<PipelineResponse>('/content/pipeline');
+  type Advance =
+    | { kind: 'idle' }
+    | { kind: 'advancing' }
+    | { kind: 'unlocked'; nextStage: string }
+    | { kind: 'blocked'; reason: string };
+  const [advance, setAdvance] = useState<Advance>({ kind: 'idle' });
+
+  function advanceConcept(): void {
+    setAdvance({ kind: 'advancing' });
+    // The §4 guard advances the concept only when it is human-selected AND holds
+    // a passing validation; the server returns 422 (fail-closed) otherwise.
+    fetch(`${apiBaseUrl}/content/pipeline/advance`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        stage: 'concept',
+        status: 'selected',
+        validation: { passed: true },
+      }),
+    })
+      .then(async (res) => {
+        const data = (await res.json()) as {
+          next_stage?: string;
+          detail?: string;
+        };
+        if (res.ok && data.next_stage) {
+          setAdvance({ kind: 'unlocked', nextStage: data.next_stage });
+        } else {
+          // 422 (or any non-200): show the fail-closed blocked reason; the stage
+          // is NOT advanced (INV-3). We never silently advance on a non-200.
+          setAdvance({
+            kind: 'blocked',
+            reason: data.detail ?? `advance refused (${res.status})`,
+          });
+        }
+      })
+      .catch((err: unknown) => {
+        const message = err instanceof Error ? err.message : 'unknown error';
+        setAdvance({ kind: 'blocked', reason: message });
+      });
+  }
+
   return (
     <Panel title="Staged pipeline" icon={Play} testid="pipeline-panel">
       {state.status === 'loading' && (
@@ -558,6 +678,51 @@ function PipelinePanel(): JSX.Element {
             testid="pipeline-video"
           />
         </ol>
+      )}
+      {state.status === 'ready' && (
+        <div
+          className="pipeline-advance"
+          style={{
+            display: 'flex',
+            flexWrap: 'wrap',
+            alignItems: 'center',
+            gap: 'var(--s-2)',
+          }}
+        >
+          <Button
+            icon={Play}
+            data-testid="pipeline-advance"
+            onClick={advanceConcept}
+            disabled={advance.kind === 'advancing'}
+          >
+            {advance.kind === 'advancing'
+              ? 'Advancing…'
+              : 'Select & advance concept'}
+          </Button>
+          {advance.kind === 'unlocked' && (
+            <span role="status" data-testid="pipeline-advance-result">
+              <Chip tone="flow">Unlocked next stage: {advance.nextStage}</Chip>
+            </span>
+          )}
+          {advance.kind === 'blocked' && (
+            // Fail-closed (INV-3): a refused advance shows the blocked reason and
+            // does NOT advance the stage. There is no override affordance.
+            <span
+              role="alert"
+              data-testid="pipeline-advance-blocked"
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: 'var(--s-1)',
+                color: 'var(--signal-ink)',
+                fontSize: 'var(--fs-sm)',
+                fontWeight: 600,
+              }}
+            >
+              <Ban size={13} aria-hidden /> Blocked — {advance.reason}
+            </span>
+          )}
+        </div>
       )}
     </Panel>
   );
@@ -613,10 +778,21 @@ function SchedulerPanel(): JSX.Element {
 
   function schedule(): void {
     setScheduling(true);
+    // The backend ScheduleRequest requires channel/scheduled_for/approval/
+    // validation; the gate decides simulated_sent vs blocked from approval +
+    // validation.passed (INV-3/INV-4). v1 schedules an approved + validated
+    // email post one day out, which simulate-sends (dispatch_mode is forced to
+    // simulated server-side, OUT-2). A channel/asset picker is a later slice.
+    const scheduledFor = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
     fetch(`${apiBaseUrl}/content/schedule`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({}),
+      body: JSON.stringify({
+        channel: 'email',
+        scheduled_for: scheduledFor,
+        approval: { decision: 'approve' },
+        validation: { passed: true },
+      }),
     })
       .then((res) => {
         if (!res.ok) throw new Error(`schedule failed: ${res.status}`);
@@ -735,10 +911,13 @@ function ScheduledPostRow({ post }: { post: ScheduledPost }): JSX.Element {
 }
 
 // 6. Geo-targeting view ------------------------------------------------------
-// FR-3.9 / INV-6: aggregate-only, no child-keyed targeting. There is no
-// dedicated endpoint that returns per-child data BY DESIGN — this panel exists
-// to make the trust property explicit. No fabricated data is rendered.
+// FR-3.9 / INV-6: aggregate-only, no child-keyed targeting. The panel now renders
+// the real AGGREGATE region rollup from GET /geo-targeting (per-region lead count
+// + share) plus the strategy's named demand metros. Every field is aggregate —
+// there is NO per-child / per-minor row by construction (INV-6). The aggregate
+// trust badge is kept so the property stays visible.
 function GeoTargetingPanel(): JSX.Element {
+  const state = useGet<GeoTargeting>('/geo-targeting');
   return (
     <Panel
       title="Geo targeting"
@@ -761,10 +940,90 @@ function GeoTargetingPanel(): JSX.Element {
           margin: 0,
         }}
       >
-        Geo segments are derived from aggregate region signals only. Per the
-        threat model (INV-6), GT never keys targeting to an individual minor and
-        never scrapes minors; only aggregate, de-identified geo data is used.
+        Demand is rolled up from aggregate region signals only. Per the threat
+        model (INV-6), GT never keys targeting to an individual minor and never
+        scrapes minors; only aggregate, de-identified geo data is used.
       </p>
+      {state.status === 'loading' && (
+        <p data-testid="geo-targeting-loading" className="lab">
+          Loading geo demand…
+        </p>
+      )}
+      {state.status === 'error' && (
+        <p data-testid="geo-targeting-error" role="alert" style={errStyle}>
+          Could not load geo demand: {state.message}
+        </p>
+      )}
+      {state.status === 'ready' && (
+        <>
+          {(state.data.regions ?? []).length === 0 ? (
+            <p data-testid="geo-targeting-empty" style={emptyStyle}>
+              No aggregate region demand yet.
+            </p>
+          ) : (
+            <ul className="geo-region-list" style={listStyle}>
+              {(state.data.regions ?? []).map((r) => (
+                <li
+                  key={r.region}
+                  className="geo-region-row"
+                  data-testid={`geo-region-${r.region}`}
+                  style={rowStyle}
+                >
+                  <span
+                    className="geo-region-name"
+                    style={{
+                      flex: 1,
+                      minWidth: 140,
+                      fontSize: 'var(--fs-body)',
+                      fontWeight: 600,
+                    }}
+                  >
+                    {r.region}
+                  </span>
+                  <span
+                    className="mono"
+                    data-testid={`geo-region-count-${r.region}`}
+                    style={{ fontSize: 'var(--fs-sm)', color: 'var(--flow)' }}
+                  >
+                    {r.lead_count} leads
+                  </span>
+                  <span
+                    className="mono"
+                    style={{ fontSize: 'var(--fs-sm)', color: 'var(--muted)' }}
+                  >
+                    {pct(r.share)}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          )}
+          {/* The strategy's named demand metros (aggregate metro labels, INV-6). */}
+          <div
+            className="geo-demand-metros"
+            data-testid="geo-demand-metros"
+            style={{
+              display: 'flex',
+              flexWrap: 'wrap',
+              gap: 'var(--s-2)',
+              alignItems: 'center',
+            }}
+          >
+            <span className="lab" style={{ color: 'var(--muted)' }}>
+              Demand metros:
+            </span>
+            {(state.data.demand_metros ?? []).map((m) => (
+              <span
+                key={`${m.metro}-${m.state}`}
+                data-testid={`geo-metro-${m.metro}`}
+              >
+                <Chip tone="neutral">
+                  {m.metro}, {m.state}
+                </Chip>
+              </span>
+            ))}
+          </div>
+        </>
+      )}
     </Panel>
   );
 }

@@ -2,9 +2,14 @@ import { useEffect, useState } from 'react';
 import {
   Ban,
   Check,
+  ChevronDown,
+  ChevronRight,
+  ExternalLink,
   FileText,
   FolderOpen,
   Image as ImageIcon,
+  Megaphone,
+  Search,
   Sparkles,
   Trash2,
 } from 'lucide-react';
@@ -49,11 +54,67 @@ interface GenerateResponse {
   degraded: boolean;
 }
 
+// The four campaign axes echoed back on POST /ai/content/campaign.
+interface CampaignEcho {
+  theme: string;
+  channel: string;
+  audience: string;
+  target_geo_prompt: string | null;
+}
+
+// POST /ai/content/campaign response — the SAME flat batch + the campaign echo.
+interface CampaignResponse extends GenerateResponse {
+  campaign: CampaignEcho;
+}
+
+// The campaign axes (kept in sync with the backend Channel / AudienceTag enums +
+// the theme set described in Slice B). Values are the wire tokens the API expects.
+const CAMPAIGN_THEMES = [
+  'gifted_identity',
+  'cost_tefa_esa',
+  'socialization',
+  'academic_outcomes',
+  'ai_platform',
+  'acceleration_pace',
+  'anti_busywork',
+  'enrollment',
+  'parent_story',
+] as const;
+
+const CAMPAIGN_CHANNELS = [
+  'instagram',
+  'x',
+  'tiktok',
+  'linkedin',
+  'email',
+  'blog',
+  'landing_page',
+  'geo',
+] as const;
+
+const CAMPAIGN_AUDIENCES = [
+  'prospective_parent',
+  'current_parent',
+  'leadership',
+  'general',
+] as const;
+
+// The count bounds the campaign creator offers (the backend clamps to its own cap;
+// these are the UI affordance, not the canonical cap).
+const CAMPAIGN_COUNT_MIN = 1;
+const CAMPAIGN_COUNT_MAX = 8;
+
 // One kept+validated asset in the content library (GET /content/library).
+// body/source_ref/tags power the expand-to-read + link-to-source affordance;
+// they are optional because a kept-from-generation asset may omit a source.
 interface LibraryAsset {
   id: string;
   title: string;
   asset_type: string;
+  channel?: string | null;
+  body?: string | null;
+  source_ref?: string | null;
+  tags?: string[];
   search_text: string;
 }
 
@@ -83,12 +144,50 @@ export default function ContentWorkspace(): JSX.Element {
   // proposal_id → recorded decision; keeps the kept/discarded affordance.
   const [decisions, setDecisions] = useState<Record<string, DecisionKind>>({});
   const [libraryNonce, setLibraryNonce] = useState(0);
+  // The library search query — re-runs the FR-3.4 search over the kept archive.
+  const [libraryQuery, setLibraryQuery] = useState('');
 
-  // Load (and refresh) the library of kept+validated assets.
+  // --- Slice B: the campaign batch creator axes -----------------------------
+  const [campaignTheme, setCampaignTheme] = useState<string>(CAMPAIGN_THEMES[0]);
+  const [campaignChannel, setCampaignChannel] = useState<string>(
+    CAMPAIGN_CHANNELS[0],
+  );
+  const [campaignAudience, setCampaignAudience] = useState<string>(
+    CAMPAIGN_AUDIENCES[0],
+  );
+  const [campaignGeoPrompt, setCampaignGeoPrompt] = useState<string>('');
+  const [campaignCount, setCampaignCount] = useState<number>(CAMPAIGN_COUNT_MIN);
+  // Target-GEO-prompt options from GET /geo prompt_set (empty if it fails).
+  const [geoPrompts, setGeoPrompts] = useState<string[]>([]);
+  // The axes of the campaign that produced the current batch (for the chips).
+  const [activeCampaign, setActiveCampaign] = useState<CampaignEcho | null>(null);
+
+  // Fetch the GEO prompt set on mount to populate the target-GEO-prompt select;
+  // a failure leaves it gracefully empty (the rest of the creator still works).
+  useEffect(() => {
+    let cancelled = false;
+    fetch(`${apiBaseUrl}/geo`)
+      .then((res) => {
+        if (!res.ok) throw new Error(`geo request failed: ${res.status}`);
+        return res.json() as Promise<{ prompt_set?: string[] }>;
+      })
+      .then((data) => {
+        if (!cancelled) setGeoPrompts(data.prompt_set ?? []);
+      })
+      .catch(() => {
+        if (!cancelled) setGeoPrompts([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  // Load (and refresh) the library of kept+validated assets, filtered by the
+  // search query (the backend searches title/body/tags via ?q=).
   useEffect(() => {
     let cancelled = false;
     setLibrary({ status: 'loading' });
-    fetch(`${apiBaseUrl}/content/library?q=`)
+    fetch(`${apiBaseUrl}/content/library?q=${encodeURIComponent(libraryQuery)}`)
       .then((res) => {
         if (!res.ok) throw new Error(`library request failed: ${res.status}`);
         return res.json() as Promise<LibraryAsset[]>;
@@ -105,7 +204,7 @@ export default function ContentWorkspace(): JSX.Element {
     return () => {
       cancelled = true;
     };
-  }, [libraryNonce]);
+  }, [libraryNonce, libraryQuery]);
 
   function generate(): void {
     setDecisions({});
@@ -126,8 +225,40 @@ export default function ContentWorkspace(): JSX.Element {
       });
   }
 
+  // Slice B: generate a BATCH for the chosen campaign axes. Feeds the returned
+  // batch into the SAME batch state the free-text generator uses, so surfaced /
+  // blocked / keep / discard all work via the existing BatchResult.
+  function generateCampaign(): void {
+    setDecisions({});
+    setBatch({ status: 'loading' });
+    const payload = {
+      theme: campaignTheme,
+      channel: campaignChannel,
+      audience: campaignAudience,
+      target_geo_prompt: campaignGeoPrompt || null,
+      count: campaignCount,
+    };
+    fetch(`${apiBaseUrl}/ai/content/campaign`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    })
+      .then((res) => {
+        if (!res.ok) throw new Error(`campaign request failed: ${res.status}`);
+        return res.json() as Promise<CampaignResponse>;
+      })
+      .then((data) => {
+        setActiveCampaign(data.campaign);
+        setBatch({ status: 'ready', data });
+      })
+      .catch((err: unknown) => {
+        const message = err instanceof Error ? err.message : 'unknown error';
+        setBatch({ status: 'error', message });
+      });
+  }
+
   function decide(proposalId: string, kind: DecisionKind): void {
-    fetch(`${apiBaseUrl}/proposals/${proposalId}/decision`, {
+    fetch(`${apiBaseUrl}/content/${proposalId}/decision`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ action: kind }),
@@ -160,6 +291,24 @@ export default function ContentWorkspace(): JSX.Element {
           Content workspace
         </h2>
       </header>
+
+      {/* Slice B: the campaign batch creator — sits ABOVE the free-text generator. */}
+      <CampaignCreator
+        theme={campaignTheme}
+        channel={campaignChannel}
+        audience={campaignAudience}
+        geoPrompt={campaignGeoPrompt}
+        count={campaignCount}
+        geoPrompts={geoPrompts}
+        activeCampaign={activeCampaign}
+        loading={batch.status === 'loading'}
+        onThemeChange={setCampaignTheme}
+        onChannelChange={setCampaignChannel}
+        onAudienceChange={setCampaignAudience}
+        onGeoPromptChange={setCampaignGeoPrompt}
+        onCountChange={setCampaignCount}
+        onGenerate={generateCampaign}
+      />
 
       {/* The generator prompt + the staged-pipeline chip row. */}
       <Card style={{ display: 'grid', gap: 'var(--s-3)' }}>
@@ -247,8 +396,218 @@ export default function ContentWorkspace(): JSX.Element {
 
       <ImageBatchPlaceholder />
 
-      <LibraryPanel state={library} />
+      <LibraryPanel
+        state={library}
+        query={libraryQuery}
+        onQueryChange={setLibraryQuery}
+      />
     </section>
+  );
+}
+
+// Shared select/input styling for the campaign axis controls.
+const AXIS_FIELD_STYLE: React.CSSProperties = {
+  fontFamily: 'var(--sans)',
+  fontSize: 'var(--fs-sm)',
+  padding: '6px 8px',
+  borderRadius: 'var(--r-sm)',
+  border: '1px solid var(--line)',
+  background: 'var(--surface-2)',
+  color: 'var(--ink)',
+};
+
+interface CampaignCreatorProps {
+  theme: string;
+  channel: string;
+  audience: string;
+  geoPrompt: string;
+  count: number;
+  geoPrompts: string[];
+  activeCampaign: CampaignEcho | null;
+  loading: boolean;
+  onThemeChange: (v: string) => void;
+  onChannelChange: (v: string) => void;
+  onAudienceChange: (v: string) => void;
+  onGeoPromptChange: (v: string) => void;
+  onCountChange: (v: number) => void;
+  onGenerate: () => void;
+}
+
+// The campaign batch creator (Slice B): generate a BATCH of on-brand captions for
+// a specific campaign defined by four axes — theme (the angle), channel (format),
+// audience (tone + CTA), and an optional target GEO prompt (SEO/GEO). The result
+// flows into the SAME batch state the free-text generator uses (reuses BatchResult,
+// so surfaced / blocked / keep / discard all work and the V-1..V-4 gate is honored).
+function CampaignCreator({
+  theme,
+  channel,
+  audience,
+  geoPrompt,
+  count,
+  geoPrompts,
+  activeCampaign,
+  loading,
+  onThemeChange,
+  onChannelChange,
+  onAudienceChange,
+  onGeoPromptChange,
+  onCountChange,
+  onGenerate,
+}: CampaignCreatorProps): JSX.Element {
+  return (
+    <Card
+      data-testid="campaign-creator"
+      style={{
+        display: 'grid',
+        gap: 'var(--s-3)',
+        borderColor: 'var(--flow)',
+      }}
+    >
+      <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--s-2)' }}>
+        <Megaphone size={15} aria-hidden style={{ color: 'var(--flow)' }} />
+        <h3 style={{ fontSize: 'var(--fs-md)', fontWeight: 600, margin: 0 }}>
+          Campaign creator
+        </h3>
+        <span className="lab" style={{ marginLeft: 'auto' }}>
+          Generate a batch of on-brand captions for one campaign
+        </span>
+      </div>
+
+      <div
+        style={{
+          display: 'grid',
+          gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))',
+          gap: 'var(--s-2)',
+        }}
+      >
+        <label style={{ display: 'grid', gap: '2px' }}>
+          <span className="lab">Theme</span>
+          <select
+            data-testid="campaign-theme"
+            aria-label="Campaign theme"
+            value={theme}
+            onChange={(e) => onThemeChange(e.target.value)}
+            style={AXIS_FIELD_STYLE}
+          >
+            {CAMPAIGN_THEMES.map((t) => (
+              <option key={t} value={t}>
+                {t}
+              </option>
+            ))}
+          </select>
+        </label>
+
+        <label style={{ display: 'grid', gap: '2px' }}>
+          <span className="lab">Channel</span>
+          <select
+            data-testid="campaign-channel"
+            aria-label="Campaign channel"
+            value={channel}
+            onChange={(e) => onChannelChange(e.target.value)}
+            style={AXIS_FIELD_STYLE}
+          >
+            {CAMPAIGN_CHANNELS.map((c) => (
+              <option key={c} value={c}>
+                {c}
+              </option>
+            ))}
+          </select>
+        </label>
+
+        <label style={{ display: 'grid', gap: '2px' }}>
+          <span className="lab">Audience</span>
+          <select
+            data-testid="campaign-audience"
+            aria-label="Campaign audience"
+            value={audience}
+            onChange={(e) => onAudienceChange(e.target.value)}
+            style={AXIS_FIELD_STYLE}
+          >
+            {CAMPAIGN_AUDIENCES.map((a) => (
+              <option key={a} value={a}>
+                {a}
+              </option>
+            ))}
+          </select>
+        </label>
+
+        <label style={{ display: 'grid', gap: '2px' }}>
+          <span className="lab">Target GEO prompt</span>
+          <select
+            data-testid="campaign-geo-prompt"
+            aria-label="Target GEO prompt"
+            value={geoPrompt}
+            onChange={(e) => onGeoPromptChange(e.target.value)}
+            style={AXIS_FIELD_STYLE}
+          >
+            <option value="">None</option>
+            {geoPrompts.map((p) => (
+              <option key={p} value={p}>
+                {p}
+              </option>
+            ))}
+          </select>
+        </label>
+
+        <label style={{ display: 'grid', gap: '2px' }}>
+          <span className="lab">Count</span>
+          <input
+            data-testid="campaign-count"
+            aria-label="Campaign count"
+            type="number"
+            min={CAMPAIGN_COUNT_MIN}
+            max={CAMPAIGN_COUNT_MAX}
+            value={count}
+            onChange={(e) =>
+              onCountChange(
+                Math.max(
+                  CAMPAIGN_COUNT_MIN,
+                  Math.min(CAMPAIGN_COUNT_MAX, Number(e.target.value) || CAMPAIGN_COUNT_MIN),
+                ),
+              )
+            }
+            style={AXIS_FIELD_STYLE}
+          />
+        </label>
+      </div>
+
+      <div
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: 'var(--s-3)',
+          flexWrap: 'wrap',
+        }}
+      >
+        <Button
+          variant="primary"
+          icon={Megaphone}
+          data-testid="campaign-generate"
+          onClick={onGenerate}
+          disabled={loading}
+        >
+          Generate campaign
+        </Button>
+        {activeCampaign && (
+          <div
+            data-testid="campaign-summary"
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: 'var(--s-1)',
+              flexWrap: 'wrap',
+            }}
+          >
+            <Chip tone="flow">{activeCampaign.theme}</Chip>
+            <Chip tone="neutral">{activeCampaign.channel}</Chip>
+            <Chip tone="neutral">{activeCampaign.audience}</Chip>
+            {activeCampaign.target_geo_prompt && (
+              <Chip tone="flow">GEO: {activeCampaign.target_geo_prompt}</Chip>
+            )}
+          </div>
+        )}
+      </div>
+    </Card>
   );
 }
 
@@ -519,25 +878,215 @@ function ImageBatchPlaceholder(): JSX.Element {
   );
 }
 
-function LibraryPanel({ state }: { state: LibraryState }): JSX.Element {
+// The three shelves the library segments into. Social = generated/proven
+// captions (asset_type copy); Blog = GT resource/blog articles; Website = the
+// plain marketing pages. Derived from asset_type + tags the ingest stamps.
+type LibrarySegment = 'social' | 'blog' | 'website';
+
+const SEGMENT_LABELS: Record<LibrarySegment, string> = {
+  social: 'Social posts',
+  blog: 'Blog & resources',
+  website: 'Website pages',
+};
+
+// Tags that are platform/meta markers — everything else on a social asset is its
+// theme (gifted_identity, cost_tefa_esa, …), so the theme/platform filters can
+// split them apart without a separate field.
+const PLATFORM_TAGS = new Set([
+  'instagram',
+  'x/twitter',
+  'youtube',
+  'facebook',
+  'tiktok',
+]);
+const META_TAGS = new Set(['social', 'proven', 'blog', 'website', 'owned']);
+
+function segmentOf(asset: LibraryAsset): LibrarySegment {
+  if (asset.asset_type === 'copy') return 'social';
+  if (asset.tags?.includes('blog')) return 'blog';
+  return 'website';
+}
+
+function assetTheme(asset: LibraryAsset): string | undefined {
+  return asset.tags?.find((t) => !PLATFORM_TAGS.has(t) && !META_TAGS.has(t));
+}
+
+function assetPlatform(asset: LibraryAsset): string | undefined {
+  return asset.tags?.find((t) => PLATFORM_TAGS.has(t));
+}
+
+function LibraryPanel({
+  state,
+  query,
+  onQueryChange,
+}: {
+  state: LibraryState;
+  query: string;
+  onQueryChange: (q: string) => void;
+}): JSX.Element {
+  // Which asset is expanded to show its full copy (one at a time).
+  const [expandedId, setExpandedId] = useState<string | null>(null);
+  // The active shelf, and the theme/platform filters within it.
+  const [segment, setSegment] = useState<LibrarySegment>('social');
+  const [themeFilter, setThemeFilter] = useState('');
+  const [platformFilter, setPlatformFilter] = useState('');
+
+  const assets = state.status === 'ready' ? state.assets : [];
+  const counts: Record<LibrarySegment, number> = { social: 0, blog: 0, website: 0 };
+  for (const a of assets) counts[segmentOf(a)] += 1;
+
+  const inSegment = assets.filter((a) => segmentOf(a) === segment);
+  const themes = Array.from(
+    new Set(inSegment.map(assetTheme).filter((t): t is string => Boolean(t))),
+  ).sort();
+  const platforms = Array.from(
+    new Set(inSegment.map(assetPlatform).filter((p): p is string => Boolean(p))),
+  ).sort();
+  const visible = inSegment.filter(
+    (a) =>
+      (!themeFilter || a.tags?.includes(themeFilter)) &&
+      (!platformFilter || a.tags?.includes(platformFilter)),
+  );
+
   return (
     <Card
       className="content-library"
       data-testid="content-library"
       style={{ display: 'grid', gap: 'var(--s-3)' }}
     >
+      <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--s-2)' }}>
+        <FolderOpen size={15} aria-hidden style={{ color: 'var(--flow)' }} />
+        <h3 style={{ fontSize: 'var(--fs-md)', fontWeight: 600, margin: 0 }}>
+          Library
+        </h3>
+        <span className="lab" style={{ marginLeft: 'auto' }}>
+          GT's proven, on-brand copy — search and reuse
+        </span>
+      </div>
+
+      {/* Search the kept archive (FR-3.4 — ?q= over title/body/tags). */}
       <div
         style={{
           display: 'flex',
           alignItems: 'center',
           gap: 'var(--s-2)',
+          border: '1px solid var(--line)',
+          borderRadius: 'var(--r-md)',
+          background: 'var(--surface-2)',
+          padding: '6px 10px',
         }}
       >
-        <FolderOpen size={15} aria-hidden style={{ color: 'var(--flow)' }} />
-        <h3 style={{ fontSize: 'var(--fs-md)', fontWeight: 600, margin: 0 }}>
-          Library
-        </h3>
+        <Search size={14} aria-hidden style={{ color: 'var(--muted)', flexShrink: 0 }} />
+        <input
+          data-testid="library-search"
+          aria-label="Search the content library"
+          value={query}
+          onChange={(e) => onQueryChange(e.target.value)}
+          placeholder="Search proven copy — e.g. gifted, TEFA, socialization…"
+          style={{
+            flex: 1,
+            border: 'none',
+            outline: 'none',
+            background: 'transparent',
+            color: 'var(--ink)',
+            fontFamily: 'var(--sans)',
+            fontSize: 'var(--fs-sm)',
+          }}
+        />
       </div>
+
+      {/* Segment control — Social posts / Blog & resources / Website pages. */}
+      <div
+        role="tablist"
+        aria-label="Library segments"
+        style={{ display: 'flex', gap: 'var(--s-2)', flexWrap: 'wrap' }}
+      >
+        {(['social', 'blog', 'website'] as LibrarySegment[]).map((seg) => {
+          const active = segment === seg;
+          return (
+            <button
+              key={seg}
+              type="button"
+              role="tab"
+              aria-selected={active}
+              data-testid={`library-segment-${seg}`}
+              onClick={() => {
+                setSegment(seg);
+                setThemeFilter('');
+                setPlatformFilter('');
+                setExpandedId(null);
+              }}
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: 'var(--s-1)',
+                padding: '6px 10px',
+                borderRadius: 'var(--r-sm)',
+                border: '1px solid var(--line)',
+                background: active ? 'var(--flow-wash)' : 'var(--surface-2)',
+                color: active ? 'var(--flow-ink)' : 'var(--ink)',
+                fontWeight: active ? 700 : 500,
+                fontSize: 'var(--fs-sm)',
+                cursor: 'pointer',
+              }}
+            >
+              {SEGMENT_LABELS[seg]}
+              <Chip tone={active ? 'flow' : 'neutral'}>{counts[seg]}</Chip>
+            </button>
+          );
+        })}
+      </div>
+
+      {/* Theme + platform filters (the social shelf is the one with both axes). */}
+      {segment === 'social' && (
+        <div style={{ display: 'flex', gap: 'var(--s-2)', flexWrap: 'wrap' }}>
+          <select
+            data-testid="library-filter-theme"
+            aria-label="Filter by theme"
+            value={themeFilter}
+            onChange={(e) => setThemeFilter(e.target.value)}
+            style={{
+              fontFamily: 'var(--sans)',
+              fontSize: 'var(--fs-sm)',
+              padding: '6px 8px',
+              borderRadius: 'var(--r-sm)',
+              border: '1px solid var(--line)',
+              background: 'var(--surface-2)',
+              color: 'var(--ink)',
+            }}
+          >
+            <option value="">All themes</option>
+            {themes.map((t) => (
+              <option key={t} value={t}>
+                {t}
+              </option>
+            ))}
+          </select>
+          <select
+            data-testid="library-filter-platform"
+            aria-label="Filter by platform"
+            value={platformFilter}
+            onChange={(e) => setPlatformFilter(e.target.value)}
+            style={{
+              fontFamily: 'var(--sans)',
+              fontSize: 'var(--fs-sm)',
+              padding: '6px 8px',
+              borderRadius: 'var(--r-sm)',
+              border: '1px solid var(--line)',
+              background: 'var(--surface-2)',
+              color: 'var(--ink)',
+            }}
+          >
+            <option value="">All platforms</option>
+            {platforms.map((p) => (
+              <option key={p} value={p}>
+                {p}
+              </option>
+            ))}
+          </select>
+        </div>
+      )}
+
       {state.status === 'loading' && (
         <p data-testid="library-loading" className="lab">
           Loading library…
@@ -553,12 +1102,14 @@ function LibraryPanel({ state }: { state: LibraryState }): JSX.Element {
         </p>
       )}
       {state.status === 'ready' &&
-        (state.assets.length === 0 ? (
+        (visible.length === 0 ? (
           <p
             data-testid="library-empty"
             style={{ fontSize: 'var(--fs-sm)', color: 'var(--muted)', margin: 0 }}
           >
-            No kept assets yet.
+            {query || themeFilter || platformFilter
+              ? 'No assets match these filters.'
+              : `No ${SEGMENT_LABELS[segment].toLowerCase()} yet.`}
           </p>
         ) : (
           <ul
@@ -568,41 +1119,135 @@ function LibraryPanel({ state }: { state: LibraryState }): JSX.Element {
               margin: 0,
               padding: 0,
               display: 'grid',
-              gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))',
               gap: 'var(--s-2)',
             }}
           >
-            {state.assets.map((asset) => (
-              <li
+            {visible.map((asset) => (
+              <LibraryRow
                 key={asset.id}
-                className="library-asset"
-                data-testid={`library-asset-${asset.id}`}
-                style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: 'var(--s-2)',
-                  padding: '8px 10px',
-                  borderRadius: 'var(--r-sm)',
-                  background: 'var(--surface-2)',
-                  border: '1px solid var(--line)',
-                }}
-              >
-                <FileText
-                  size={14}
-                  aria-hidden
-                  style={{ color: 'var(--muted)', flexShrink: 0 }}
-                />
-                <span
-                  className="library-asset-title"
-                  style={{ flex: 1, fontSize: 'var(--fs-sm)', fontWeight: 600 }}
-                >
-                  {asset.title}
-                </span>
-                <Chip tone="neutral">{asset.asset_type}</Chip>
-              </li>
+                asset={asset}
+                expanded={expandedId === asset.id}
+                onToggle={() =>
+                  setExpandedId((id) => (id === asset.id ? null : asset.id))
+                }
+              />
             ))}
           </ul>
         ))}
     </Card>
+  );
+}
+
+// One library row: a clickable header (title + channel + type) that expands to
+// reveal the full copy, its tags, and a link out to the original GT source —
+// turning the inventory into a reusable, traceable brand-asset shelf (FR-3.4).
+function LibraryRow({
+  asset,
+  expanded,
+  onToggle,
+}: {
+  asset: LibraryAsset;
+  expanded: boolean;
+  onToggle: () => void;
+}): JSX.Element {
+  return (
+    <li
+      className="library-asset"
+      data-testid={`library-asset-${asset.id}`}
+      style={{
+        borderRadius: 'var(--r-sm)',
+        background: 'var(--surface-2)',
+        border: '1px solid var(--line)',
+        overflow: 'hidden',
+      }}
+    >
+      <button
+        type="button"
+        data-testid={`library-asset-toggle-${asset.id}`}
+        aria-expanded={expanded}
+        onClick={onToggle}
+        style={{
+          width: '100%',
+          display: 'flex',
+          alignItems: 'center',
+          gap: 'var(--s-2)',
+          padding: '8px 10px',
+          background: 'transparent',
+          border: 'none',
+          cursor: 'pointer',
+          textAlign: 'left',
+          color: 'var(--ink)',
+        }}
+      >
+        {expanded ? (
+          <ChevronDown size={14} aria-hidden style={{ flexShrink: 0, color: 'var(--muted)' }} />
+        ) : (
+          <ChevronRight size={14} aria-hidden style={{ flexShrink: 0, color: 'var(--muted)' }} />
+        )}
+        <FileText size={14} aria-hidden style={{ color: 'var(--muted)', flexShrink: 0 }} />
+        <span
+          className="library-asset-title"
+          style={{ flex: 1, fontSize: 'var(--fs-sm)', fontWeight: 600 }}
+        >
+          {asset.title}
+        </span>
+        {asset.channel ? <Chip tone="flow">{asset.channel}</Chip> : null}
+        <Chip tone="neutral">{asset.asset_type}</Chip>
+      </button>
+      {expanded && (
+        <div
+          data-testid={`library-asset-detail-${asset.id}`}
+          style={{ padding: '0 10px 10px 10px', display: 'grid', gap: 'var(--s-2)' }}
+        >
+          {asset.body ? (
+            <p
+              className="library-asset-body"
+              style={{
+                fontSize: 'var(--fs-sm)',
+                color: 'var(--ink-soft)',
+                margin: 0,
+                whiteSpace: 'pre-wrap',
+                maxHeight: 220,
+                overflow: 'auto',
+                borderLeft: '2px solid var(--line-strong)',
+                paddingLeft: 'var(--s-3)',
+              }}
+            >
+              {asset.body}
+            </p>
+          ) : (
+            <p style={{ fontSize: 'var(--fs-sm)', color: 'var(--muted)', margin: 0 }}>
+              No stored copy for this asset.
+            </p>
+          )}
+          {asset.tags && asset.tags.length > 0 && (
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 'var(--s-1)' }}>
+              {asset.tags.map((tag) => (
+                <Chip key={tag} tone="neutral">
+                  {tag}
+                </Chip>
+              ))}
+            </div>
+          )}
+          {asset.source_ref && (
+            <a
+              data-testid={`library-asset-source-${asset.id}`}
+              href={asset.source_ref}
+              target="_blank"
+              rel="noreferrer"
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: 'var(--s-1)',
+                fontSize: 'var(--fs-sm)',
+                color: 'var(--flow-ink)',
+              }}
+            >
+              <ExternalLink size={13} aria-hidden /> View original GT source
+            </a>
+          )}
+        </div>
+      )}
+    </li>
   );
 }

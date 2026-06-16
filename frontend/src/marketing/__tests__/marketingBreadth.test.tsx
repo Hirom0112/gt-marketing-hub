@@ -114,13 +114,43 @@ const RECIPES = [
   },
 ];
 
+const GEO_TARGETING = {
+  regions: [
+    { region: 'Southwest', lead_count: 9, share: 0.5 },
+    { region: 'Southeast', lead_count: 6, share: 0.3333 },
+    { region: 'Midwest', lead_count: 3, share: 0.1667 },
+  ],
+  demand_metros: [
+    { metro: 'Austin', state: 'TX' },
+    { metro: 'Houston', state: 'TX' },
+    { metro: 'Dallas', state: 'TX' },
+    { metro: 'Raleigh', state: 'NC' },
+  ],
+  total: 18,
+};
+
 // Routes each GET to its payload so a single render serves every panel.
-function mockFetchRouted(routes: Record<string, unknown>): void {
+// `advanceStatus` lets a test force the pipeline-advance POST to 200 (unlocked
+// next stage) or 422 (fail-closed blocked reason), exercising INV-3.
+function mockFetchRouted(
+  routes: Record<string, unknown>,
+  advance?: { status: number; body: unknown },
+): void {
   vi.stubGlobal(
     'fetch',
-    vi.fn(async (url: string) => {
+    vi.fn(async (url: string, init?: RequestInit) => {
+      const method = init?.method ?? 'GET';
+      if (url.includes('/content/pipeline/advance') && method === 'POST') {
+        const adv = advance ?? { status: 200, body: { next_stage: 'image' } };
+        return {
+          ok: adv.status < 400,
+          status: adv.status,
+          json: async () => adv.body,
+        };
+      }
       let payload: unknown = {};
-      if (url.includes('/creators')) payload = routes.creators ?? [];
+      if (url.includes('/geo-targeting')) payload = routes.geoTargeting ?? {};
+      else if (url.includes('/creators')) payload = routes.creators ?? [];
       else if (url.includes('/sentiment')) payload = routes.sentiment ?? {};
       else if (url.includes('/kpi')) payload = routes.kpi ?? [];
       else if (url.includes('/content/pipeline')) payload = routes.pipeline ?? {};
@@ -132,15 +162,19 @@ function mockFetchRouted(routes: Record<string, unknown>): void {
   );
 }
 
-function renderAll(): void {
-  mockFetchRouted({
-    creators: CREATORS,
-    sentiment: SENTIMENT,
-    kpi: KPI,
-    pipeline: PIPELINE,
-    schedule: SCHEDULE,
-    recipes: RECIPES,
-  });
+function renderAll(advance?: { status: number; body: unknown }): void {
+  mockFetchRouted(
+    {
+      creators: CREATORS,
+      sentiment: SENTIMENT,
+      kpi: KPI,
+      pipeline: PIPELINE,
+      schedule: SCHEDULE,
+      recipes: RECIPES,
+      geoTargeting: GEO_TARGETING,
+    },
+    advance,
+  );
   render(<MarketingBreadth />);
 }
 
@@ -227,11 +261,48 @@ describe('MarketingBreadth', () => {
     ).toHaveTextContent('simulated');
   });
 
-  it('renders an aggregate-only geo-targeting panel (INV-6)', async () => {
+  it('renders an aggregate-only geo-targeting panel with region rows + metros (INV-6)', async () => {
     renderAll();
+    // The aggregate trust badge is kept.
     expect(
       await screen.findByTestId('geo-targeting-aggregate-badge'),
     ).toHaveTextContent(/aggregate-only/i);
+    // Real aggregate region rows from the endpoint render (count + share).
+    const row = await screen.findByTestId('geo-region-Southwest');
+    expect(row).toHaveTextContent('Southwest');
+    expect(row).toHaveTextContent('9');
+    // The strategy's named demand metros surface.
+    const metros = screen.getByTestId('geo-demand-metros');
+    expect(metros).toHaveTextContent('Austin');
+    expect(metros).toHaveTextContent('Houston');
+    expect(metros).toHaveTextContent('Dallas');
+    expect(metros).toHaveTextContent('Raleigh');
+  });
+
+  it('renders sentiment records (excerpt + topic + sentiment + channel) (OUT-5)', async () => {
+    renderAll();
+    const record = await screen.findByTestId('sentiment-record-s-1');
+    expect(record).toHaveTextContent('great program'); // excerpt
+    expect(record).toHaveTextContent('enrollment'); // topic
+    expect(record).toHaveTextContent('positive'); // sentiment
+    expect(record).toHaveTextContent('reddit'); // channel
+  });
+
+  it('advances the pipeline and shows the unlocked next stage on pass (INV-3)', async () => {
+    renderAll({ status: 200, body: { next_stage: 'image' } });
+    const advance = await screen.findByTestId('pipeline-advance');
+    fireEvent.click(advance);
+    const result = await screen.findByTestId('pipeline-advance-result');
+    expect(result).toHaveTextContent(/image/i);
+  });
+
+  it('shows the fail-closed blocked reason on a 422 advance (INV-3, fail-closed)', async () => {
+    renderAll({ status: 422, body: { detail: 'stage not selected/validated' } });
+    const advance = await screen.findByTestId('pipeline-advance');
+    fireEvent.click(advance);
+    const blocked = await screen.findByTestId('pipeline-advance-blocked');
+    expect(blocked).toHaveTextContent(/blocked/i);
+    expect(blocked).toHaveTextContent(/stage not selected/i);
   });
 
   it('POSTs to schedule a post and refreshes the list', async () => {
@@ -242,6 +313,7 @@ describe('MarketingBreadth', () => {
       pipeline: PIPELINE,
       schedule: SCHEDULE,
       recipes: RECIPES,
+      geoTargeting: GEO_TARGETING,
     });
     render(<MarketingBreadth />);
 
@@ -256,6 +328,19 @@ describe('MarketingBreadth', () => {
           (c[1] as RequestInit | undefined)?.method === 'POST',
       );
       expect(post).toBeTruthy();
+      // The body must be a valid ScheduleRequest — channel + approval +
+      // validation — not the empty {} that 422s server-side (B2).
+      const init = post?.[1] as RequestInit | undefined;
+      const body = JSON.parse(String(init?.body)) as {
+        channel?: string;
+        scheduled_for?: string;
+        approval?: { decision?: string };
+        validation?: { passed?: boolean };
+      };
+      expect(body.channel).toBe('email');
+      expect(body.scheduled_for).toBeTruthy();
+      expect(body.approval?.decision).toBe('approve');
+      expect(body.validation?.passed).toBe(true);
     });
   });
 });
