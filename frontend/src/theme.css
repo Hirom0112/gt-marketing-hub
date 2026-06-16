@@ -150,6 +150,11 @@
   --shadow-md: 0 4px 16px rgba(18, 33, 48, 0.08);
   --ease: cubic-bezier(0.2, 0.6, 0.2, 1);
   --dur: 140ms;
+
+  /* ---- app shell (S14: left nav rail + clean header) ---------------------- */
+  --sidebar-w: 72px; /* the thin vertical icon rail */
+  --header-h: 76px; /* the page-header zone min height */
+  --brand-mark: 40px; /* the GT rounded-square mark size */
 }
 
 /* ---- base reset ----------------------------------------------------------- */
@@ -214,6 +219,202 @@ figure {
 
 .mono {
   font-family: var(--mono);
+}
+
+/* =============================================================================
+   App shell (S14) — a left vertical nav rail + a clean page-header zone.
+
+   Layout: [sidebar fixed-width][main fluid]. The main column keeps the prior
+   fluid behaviour (full width, scaling padding, no hard max-width). The header
+   carries a mono eyebrow + a large page title on the left, and the situation
+   summary + API chip on the right.
+============================================================================= */
+.app-shell {
+  display: grid;
+  grid-template-columns: var(--sidebar-w) minmax(0, 1fr);
+  min-height: 100vh;
+  background: var(--paper);
+  color: var(--ink);
+}
+
+/* ---- the left nav rail ---------------------------------------------------- */
+.sidebar {
+  position: sticky;
+  top: 0;
+  align-self: start;
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--s-2);
+  padding: var(--s-3) 0;
+  background: var(--surface);
+  border-right: 1px solid var(--line);
+}
+
+.sidebar-brand {
+  display: flex;
+  justify-content: center;
+  padding-bottom: var(--s-2);
+  margin-bottom: var(--s-1);
+}
+
+/* The dark GT rounded-square mark — white mono "GT" on --ink. */
+.sidebar-brand .mark {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: var(--brand-mark);
+  height: var(--brand-mark);
+  border-radius: var(--r-sm);
+  background: var(--ink);
+  color: var(--on-ink);
+  font-family: var(--mono);
+  font-size: var(--fs-sm);
+  font-weight: 700;
+  letter-spacing: 0.02em;
+}
+
+.sidebar-group {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: var(--s-1);
+  width: 100%;
+  padding: 0 var(--s-2);
+}
+
+/* The secondary group (Settings / Help) is pushed toward the bottom. */
+.sidebar-group-secondary {
+  margin-top: auto;
+}
+
+/* A nav item — icon above a tiny mono label, centered, a soft rounded hit area. */
+.sidebar-item {
+  appearance: none;
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  padding: var(--s-2) 2px;
+  border-radius: var(--r-sm);
+  color: var(--muted);
+  transition:
+    background var(--dur) var(--ease),
+    color var(--dur) var(--ease);
+}
+.sidebar-item:hover {
+  background: var(--surface-2);
+}
+.sidebar-item.is-active {
+  background: var(--flow-wash);
+  color: var(--flow-ink);
+}
+.sidebar-item.is-active .sidebar-item-icon {
+  color: var(--flow);
+}
+
+.sidebar-item-icon {
+  color: inherit;
+}
+
+.sidebar-item-label {
+  font-family: var(--mono);
+  font-size: 9px;
+  letter-spacing: var(--tracking-lab);
+  text-transform: uppercase;
+  line-height: 1.1;
+  color: inherit;
+}
+
+/* ---- the fluid main column + page header ---------------------------------- */
+.app-main {
+  width: 100%;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.page-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--s-4);
+  flex-wrap: wrap;
+  min-height: var(--header-h);
+  padding: var(--s-4) clamp(16px, 1.8vw, 36px);
+  border-bottom: 1px solid var(--line);
+  background: var(--surface);
+}
+
+.page-header-lede {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.page-eyebrow {
+  color: var(--muted);
+  letter-spacing: var(--tracking-eyebrow);
+}
+
+.page-title {
+  font-size: var(--fs-lg);
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  color: var(--ink);
+  margin: 0;
+}
+
+.page-header-aside {
+  display: flex;
+  align-items: center;
+  gap: var(--s-4);
+  margin-left: auto;
+}
+
+.page-header-situation:empty {
+  display: none;
+}
+
+.page-body {
+  padding: var(--s-5) clamp(16px, 1.8vw, 36px) 64px;
+}
+
+/* The header situation summary — compact stat cells, right-aligned. */
+.situation-summary {
+  display: flex;
+  align-items: stretch;
+  gap: var(--s-4);
+}
+
+.situation-cell {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 1px;
+  line-height: 1.1;
+}
+
+.situation-cell-label {
+  color: var(--muted);
+}
+
+.situation-cell-figure {
+  font-size: var(--fs-md);
+  font-weight: 700;
+  color: var(--ink);
+  font-variant-numeric: tabular-nums;
+}
+.situation-cell-figure.is-signal {
+  color: var(--signal-ink);
+}
+.situation-cell-figure.is-money {
+  color: var(--gate-ink);
 }
 
 /* =============================================================================
@@ -286,47 +487,10 @@ figure {
   letter-spacing: var(--tracking-lab);
 }
 
-/* ---- situation strip — narrative beat 1, "money on the table" -------------- */
-.situation-bar {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: var(--s-3);
-  padding: var(--s-3) var(--s-4);
-  background: var(--signal-wash);
-  border-color: var(--signal);
-  border-left: 3px solid var(--signal);
-  font-size: var(--fs-body);
-}
-
-.situation-lead {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--s-2);
-  color: var(--signal-ink);
-  font-weight: 700;
-}
-
-.situation-item {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--s-1);
-  color: var(--ink-soft);
-}
-
-.situation-figure {
-  font-weight: 700;
-  font-size: var(--fs-md);
-  color: var(--signal-ink);
-}
-
-.situation-money {
-  color: var(--gate-ink);
-}
-
-.situation-dot {
-  color: var(--line-strong);
-}
+/* The situation summary now lives in the page header (see `.situation-summary`
+   in the app-shell block) — the workspace portals it there. When the workspace
+   mounts standalone (e.g. in a unit test) it renders inline at the top of the
+   content with the same `.situation-summary` cells. */
 
 /* ---- work-panel (act) — the self-contained right column ------------------- */
 .work-panel {
@@ -916,4 +1080,137 @@ figure {
 .history-foot {
   padding: var(--s-3) var(--s-4);
   color: var(--muted);
+}
+
+/* =============================================================================
+   Settings (S14) — a read-only config view. A definition list of real runtime
+   values + the standing "live writes are off" guarantee.
+============================================================================= */
+.settings-list {
+  display: grid;
+  gap: var(--s-3);
+}
+
+.settings-row {
+  display: grid;
+  grid-template-columns: 140px minmax(0, 1fr);
+  align-items: baseline;
+  gap: var(--s-3);
+}
+
+@media (max-width: 560px) {
+  .settings-row {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 2px;
+  }
+}
+
+.settings-row-label {
+  color: var(--muted);
+}
+
+.settings-row-value {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: var(--s-2);
+  margin: 0;
+  color: var(--ink);
+  font-size: var(--fs-sm);
+}
+
+.settings-row-note {
+  color: var(--muted);
+  font-size: var(--fs-sm);
+}
+
+.settings-guarantee {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--s-3);
+}
+
+.settings-guarantee-head {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s-1);
+  font-weight: 700;
+  color: var(--ink);
+  font-size: var(--fs-sm);
+  margin-bottom: 2px;
+}
+
+.settings-guarantee-body {
+  color: var(--ink-soft);
+  font-size: var(--fs-sm);
+}
+
+/* =============================================================================
+   Help (S14) — a short static "How this works" panel.
+============================================================================= */
+.help-block-head {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s-2);
+  font-weight: 700;
+  color: var(--ink);
+  font-size: var(--fs-md);
+  margin-bottom: var(--s-3);
+}
+
+.help-model {
+  display: grid;
+  gap: var(--s-3);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.help-model li {
+  display: grid;
+  grid-template-columns: 22px minmax(0, 1fr);
+  gap: var(--s-2);
+  align-items: start;
+  color: var(--ink-soft);
+  font-size: var(--fs-sm);
+}
+.help-model-n {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: var(--r-pill);
+  background: var(--flow-wash);
+  color: var(--flow-ink);
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.help-views {
+  display: grid;
+  gap: var(--s-4);
+}
+.help-view {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--s-3);
+}
+.help-view-name {
+  font-weight: 700;
+  color: var(--ink);
+  font-size: var(--fs-sm);
+  margin-bottom: 1px;
+}
+.help-view-body {
+  color: var(--ink-soft);
+  font-size: var(--fs-sm);
+}
+
+.help-gate {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--s-3);
+}
+.help-gate .help-block-head {
+  margin-bottom: 2px;
 }

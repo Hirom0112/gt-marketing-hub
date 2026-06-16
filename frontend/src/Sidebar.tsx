@@ -1,0 +1,69 @@
+import type { LucideIcon } from 'lucide-react';
+
+// The left vertical nav rail (S14 shell redesign). A thin icon rail: the dark
+// "GT" brand mark at the top, then a vertical stack of workspace items (icon
+// above a mono micro-label), with Settings + Help pushed to the bottom. Drives
+// the same Workspace state the old top-bar toggle did — pure presentational,
+// no fetch, token-driven. The active item gets a soft flow-wash highlight;
+// inactive items are muted; hover lifts to surface-2.
+export interface SidebarItem<K extends string> {
+  key: K;
+  label: string;
+  icon: LucideIcon;
+}
+
+export interface SidebarProps<K extends string> {
+  primary: ReadonlyArray<SidebarItem<K>>;
+  secondary: ReadonlyArray<SidebarItem<K>>;
+  active: K;
+  onSelect: (key: K) => void;
+}
+
+export default function Sidebar<K extends string>({
+  primary,
+  secondary,
+  active,
+  onSelect,
+}: SidebarProps<K>): JSX.Element {
+  function renderItem({ key, label, icon: Icon }: SidebarItem<K>): JSX.Element {
+    const on = key === active;
+    return (
+      <button
+        key={key}
+        type="button"
+        role="tab"
+        aria-selected={on}
+        title={label}
+        data-testid={`sidebar-nav-${key}`}
+        className={`sidebar-item${on ? ' is-active' : ''}`}
+        onClick={() => onSelect(key)}
+      >
+        <Icon size={20} aria-hidden className="sidebar-item-icon" />
+        <span className="sidebar-item-label">{label}</span>
+      </button>
+    );
+  }
+
+  return (
+    <nav
+      className="sidebar"
+      data-testid="sidebar"
+      role="tablist"
+      aria-label="Workspace"
+    >
+      <div className="sidebar-brand">
+        <span className="mark" aria-label="GT Growth Cockpit">
+          GT
+        </span>
+      </div>
+
+      <div className="sidebar-group sidebar-group-primary">
+        {primary.map(renderItem)}
+      </div>
+
+      <div className="sidebar-group sidebar-group-secondary">
+        {secondary.map(renderItem)}
+      </div>
+    </nav>
+  );
+}

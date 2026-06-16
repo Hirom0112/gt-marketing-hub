@@ -1,96 +1,103 @@
 import { useState } from 'react';
-import { BarChart3, LayoutGrid, Megaphone } from 'lucide-react';
+import {
+  BarChart3,
+  CircleHelp,
+  LayoutGrid,
+  Megaphone,
+  Settings,
+} from 'lucide-react';
 import './theme.css';
 import { apiBaseUrl } from './config';
-import { Chip, WorkspaceToggle, type WorkspaceOption } from './ui';
+import { Chip } from './ui';
+import Sidebar, { type SidebarItem } from './Sidebar';
 import EnrollmentWorkspace from './workspaces/EnrollmentWorkspace';
 import MarketingWorkspace from './workspaces/MarketingWorkspace';
 import LeadershipWorkspace from './workspaces/LeadershipWorkspace';
+import SettingsWorkspace from './workspaces/SettingsWorkspace';
+import HelpWorkspace from './workspaces/HelpWorkspace';
 
-// S8 Wave 1 app shell — the new three-workspace IA (Enrollment / Marketing /
-// Leadership) selected from a top-bar toggle. Exactly one workspace mounts at a
-// time. This wave delivers the dep + tokens + primitives + shell; the inner
-// real components are mounted UNCHANGED via thin workspace containers (Wave 2
-// re-skins them). The API base URL (TECH_STACK §5.1) is surfaced as a status
-// chip + a testid the acceptance test reads.
-type Workspace = 'enrollment' | 'marketing' | 'leadership';
+// S14 app shell — a LEFT vertical nav rail + a clean page-header zone. The
+// sidebar (brand mark + icon/label items) drives the same single-mount
+// Workspace state the old top-bar toggle did; Settings + Help join the union as
+// real config/help surfaces. The main area stays fully fluid (width:100%,
+// scaling padding) — no hard max-width. Each workspace gets a mono eyebrow + a
+// large page title in the header; the API base URL chip (TECH_STACK §5.1) lives
+// in the far corner. The Enrollment situation summary stays owned by its
+// workspace (least-coupled — the /work-queue fetch doesn't move) and renders as
+// a compact right-aligned summary at the top of its content.
+type Workspace =
+  | 'enrollment'
+  | 'marketing'
+  | 'leadership'
+  | 'settings'
+  | 'help';
 
-const WORKSPACES: ReadonlyArray<WorkspaceOption<Workspace>> = [
+interface WorkspaceMeta {
+  eyebrow: string;
+  title: string;
+}
+
+const META: Record<Workspace, WorkspaceMeta> = {
+  enrollment: {
+    eyebrow: 'Enrollment',
+    title: 'Enrollment Recovery Calendar',
+  },
+  marketing: { eyebrow: 'Marketing', title: 'Marketing' },
+  leadership: { eyebrow: 'Leadership', title: 'Leadership Scoreboard' },
+  settings: { eyebrow: 'Settings', title: 'Configuration' },
+  help: { eyebrow: 'Help', title: 'How This Works' },
+};
+
+const PRIMARY_NAV: ReadonlyArray<SidebarItem<Workspace>> = [
   { key: 'enrollment', label: 'Enrollment', icon: LayoutGrid },
   { key: 'marketing', label: 'Marketing', icon: Megaphone },
   { key: 'leadership', label: 'Leadership', icon: BarChart3 },
 ];
 
+const SECONDARY_NAV: ReadonlyArray<SidebarItem<Workspace>> = [
+  { key: 'settings', label: 'Settings', icon: Settings },
+  { key: 'help', label: 'Help', icon: CircleHelp },
+];
+
 export default function App(): JSX.Element {
   const [workspace, setWorkspace] = useState<Workspace>('enrollment');
+  const meta = META[workspace];
 
   return (
-    <div
-      className="app-shell"
-      style={{
-        minHeight: '100vh',
-        background: 'var(--paper)',
-        color: 'var(--ink)',
-      }}
-    >
-      <header
-        style={{
-          position: 'sticky',
-          top: 0,
-          zIndex: 10,
-          display: 'flex',
-          alignItems: 'center',
-          gap: 'var(--s-4)',
-          flexWrap: 'wrap',
-          padding: '12px 20px',
-          background: 'var(--surface)',
-          borderBottom: '1px solid var(--line)',
-        }}
-      >
-        <h1
-          style={{
-            fontSize: 'var(--fs-lg)',
-            fontWeight: 700,
-            letterSpacing: '-0.02em',
-            margin: 0,
-          }}
-        >
-          GT Growth Cockpit
-        </h1>
+    <div className="app-shell">
+      <Sidebar
+        primary={PRIMARY_NAV}
+        secondary={SECONDARY_NAV}
+        active={workspace}
+        onSelect={setWorkspace}
+      />
 
-        <WorkspaceToggle
-          options={WORKSPACES}
-          active={workspace}
-          onSelect={setWorkspace}
-          ariaLabel="Workspace"
-        />
+      <main className="app-main">
+        <header className="page-header">
+          <div className="page-header-lede">
+            <span className="lab page-eyebrow">{meta.eyebrow}</span>
+            <h1 className="page-title" data-testid="page-title">
+              {meta.title}
+            </h1>
+          </div>
+          <div className="page-header-aside">
+            {/* The Enrollment situation summary renders into this slot via the
+                workspace's own SituationBar (kept where the /work-queue fetch
+                lives); other workspaces leave it empty. */}
+            <div id="situation-slot" className="page-header-situation" />
+            <Chip tone="flow" title="Connected API base URL (TECH_STACK §5.1)">
+              <span data-testid="api-base-url">API · {apiBaseUrl}</span>
+            </Chip>
+          </div>
+        </header>
 
-        <div
-          style={{
-            marginLeft: 'auto',
-            display: 'flex',
-            alignItems: 'center',
-            gap: 'var(--s-2)',
-          }}
-        >
-          <Chip tone="flow" title="Connected API base URL (TECH_STACK §5.1)">
-            <span data-testid="api-base-url">API · {apiBaseUrl}</span>
-          </Chip>
+        <div className="page-body">
+          {workspace === 'enrollment' && <EnrollmentWorkspace />}
+          {workspace === 'marketing' && <MarketingWorkspace />}
+          {workspace === 'leadership' && <LeadershipWorkspace />}
+          {workspace === 'settings' && <SettingsWorkspace />}
+          {workspace === 'help' && <HelpWorkspace />}
         </div>
-      </header>
-
-      <main
-        style={{
-          width: '100%',
-          margin: '0 auto',
-          // Fluid: fills the window at any size, with padding that scales so the
-          // content breathes on a laptop and uses the room on a wide monitor.
-          padding: '20px clamp(16px, 1.8vw, 36px) 64px',
-        }}
-      >
-        {workspace === 'enrollment' && <EnrollmentWorkspace />}
-        {workspace === 'marketing' && <MarketingWorkspace />}
-        {workspace === 'leadership' && <LeadershipWorkspace />}
       </main>
     </div>
   );

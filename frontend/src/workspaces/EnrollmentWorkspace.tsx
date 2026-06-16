@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { AlertTriangle, CalendarDays, History, ListOrdered } from 'lucide-react';
+import { createPortal } from 'react-dom';
+import { CalendarDays, History, ListOrdered } from 'lucide-react';
 import ActionPanel from '../ActionPanel';
 import DealView from '../DealView';
 import FundingTracker from '../FundingTracker';
@@ -473,44 +474,55 @@ export default function EnrollmentWorkspace(): JSX.Element {
   );
 }
 
-// The situation strip — derived headline numbers from the /work-queue rows
-// (INV-11 spirit: nothing hardcoded). "⚠ N active stalls · N gone overdue · $X
-// at risk on the board". A-17: a fresh lead is still inside its contact window,
-// so it is NOT a stall the loop is leaving on the table.
+// The situation summary — derived headline numbers from the /work-queue rows
+// (INV-11 spirit: nothing hardcoded). A-17: a fresh lead is still inside its
+// contact window, so it is NOT a stall the loop is leaving on the table.
+//
+// In the S14 shell this renders as a compact set of stat cells in the TOP-RIGHT
+// of the page header. The workspace keeps ownership of the data (the /work-queue
+// fetch doesn't move — least-coupled), and PORTALS the summary into the shell's
+// `#situation-slot`. When that slot is absent (the workspace mounted on its own,
+// e.g. in a unit test), it falls back to rendering inline at the top of the
+// content. Either way the `situation-bar` + figure testids are stable.
 function SituationBar({ rows }: { rows: readonly RecoverableRow[] }): JSX.Element {
   const { stalled, overdue, recoverableValue } = summarizeRecovery(rows);
-  return (
-    <div data-testid="situation-bar">
-      <Card className="situation-bar">
-        <span className="situation-lead">
-          <AlertTriangle size={16} aria-hidden />
-          <span className="mono situation-figure" data-testid="situation-stalled">
-            {stalled}
-          </span>{' '}
-          active stalls
+
+  const summary = (
+    <div data-testid="situation-bar" className="situation-summary">
+      <div className="situation-cell">
+        <span className="lab situation-cell-label">Active stalls</span>
+        <span
+          className="mono situation-cell-figure"
+          data-testid="situation-stalled"
+        >
+          {stalled}
         </span>
-        <span className="situation-dot" aria-hidden>
-          ·
+      </div>
+      <div className="situation-cell">
+        <span className="lab situation-cell-label">Overdue</span>
+        <span
+          className="mono situation-cell-figure is-signal"
+          data-testid="situation-overdue"
+        >
+          {overdue}
         </span>
-        <span className="situation-item">
-          <span className="mono situation-figure" data-testid="situation-overdue">
-            {overdue}
-          </span>{' '}
-          gone overdue
+      </div>
+      <div className="situation-cell">
+        <span className="lab situation-cell-label">$ at risk</span>
+        <span
+          className="mono situation-cell-figure is-money"
+          data-testid="situation-recoverable"
+        >
+          {fmtUSD(recoverableValue)}
         </span>
-        <span className="situation-dot" aria-hidden>
-          ·
-        </span>
-        <span className="situation-item">
-          <span
-            className="mono situation-figure situation-money"
-            data-testid="situation-recoverable"
-          >
-            {fmtUSD(recoverableValue)}
-          </span>{' '}
-          at risk on the board
-        </span>
-      </Card>
+      </div>
     </div>
   );
+
+  const slot =
+    typeof document !== 'undefined'
+      ? document.getElementById('situation-slot')
+      : null;
+
+  return slot ? createPortal(summary, slot) : summary;
 }
