@@ -17,6 +17,7 @@ This is a shared contract (CLAUDE.md §7): changed here, consumed everywhere.
 from __future__ import annotations
 
 import os
+from pathlib import Path
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict
@@ -113,6 +114,17 @@ class Settings(BaseModel):
     # the local dev origins; prod sets GT_CORS_ALLOW_ORIGINS to the real host.
     cors_allow_origins: tuple[str, ...] = ("http://localhost:5173", "http://localhost:3000")
 
+    # Filesystem ROOT of GT's scraped POSTED catalog (the real public-marketing posts),
+    # read AT RUNTIME by the posted gallery (catalog at ``<root>/catalog/catalog.csv``,
+    # media under ``<root>/<media_file>``). This is the **scoped INV-1 exception**
+    # (ASSUMPTIONS): GT's own public marketing surfaced in GT's own internal cockpit —
+    # NOTHING real is ever committed; the path is machine-local (an env var, not a param).
+    # DISTINCT from ``GT_LIBRARY_PATH`` (TECH_STACK §5.1), which is DISTILL-ONLY (read
+    # offline by ``scripts/distill_library.py``, NEVER at runtime); this one IS the
+    # runtime catalog read. Empty / unset / a ``<…>`` sentinel ⇒ ``None`` ⇒ the gallery
+    # falls back to the synthetic library gallery (and the static media mount is skipped).
+    posted_catalog_root: Path | None = None
+
     @property
     def llm_available(self) -> bool:
         """True only when a live LLM call is permitted: a key is set AND no kill switch.
@@ -142,6 +154,17 @@ class Settings(BaseModel):
         if hs_token is not None and (hs_token.strip() == "" or hs_token.strip().startswith("<")):
             hs_token = None
 
+        # The posted-catalog root: empty / unset / a `<…>` sentinel ⇒ None (fall back to
+        # the library gallery + skip the static media mount). Same posture as the secrets.
+        catalog_raw = os.environ.get("GT_POSTED_CATALOG_ROOT")
+        catalog_root: Path | None = None
+        if (
+            catalog_raw is not None
+            and catalog_raw.strip()
+            and not catalog_raw.strip().startswith("<")
+        ):
+            catalog_root = Path(catalog_raw.strip()).expanduser()
+
         return cls(
             anthropic_api_key=key,
             anthropic_model_primary=os.environ.get("ANTHROPIC_MODEL_PRIMARY", "claude-opus-4-8"),
@@ -164,6 +187,7 @@ class Settings(BaseModel):
                 "GT_CORS_ALLOW_ORIGINS",
                 ("http://localhost:5173", "http://localhost:3000"),
             ),
+            posted_catalog_root=catalog_root,
         )
 
 
@@ -175,3 +199,18 @@ def get_settings() -> Settings:
     result in the dependency layer.
     """
     return Settings.from_env()
+
+
+def posted_catalog_mount_root(settings: Settings) -> Path | None:
+    """The directory to mount the posted media from, or ``None`` to skip the mount.
+
+    The static ``/posted-media`` route (``app.main``) is wired ONLY when
+    ``GT_POSTED_CATALOG_ROOT`` is set AND the directory actually exists — otherwise the
+    mount is skipped and the gallery degrades to the synthetic library placeholders
+    (graceful, never a boot failure on a missing path). A pure decision (existence check
+    only) so the wiring can be tested without real files.
+    """
+    root = settings.posted_catalog_root
+    if root is not None and root.is_dir():
+        return root
+    return None

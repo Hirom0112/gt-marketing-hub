@@ -73,7 +73,12 @@ from app.core.params import Params
 from app.core.settings import Settings
 from app.marketing.keep_discard import KeepRefused, discard, keep
 from app.marketing.library import ContentLibrary
-from app.marketing.posted_gallery import GalleryView, build_gallery
+from app.marketing.posted_catalog import read_posted_catalog
+from app.marketing.posted_gallery import (
+    GalleryView,
+    build_gallery,
+    build_gallery_from_catalog,
+)
 from app.marketing.review_queue import publishes
 from app.observability.log_store import ObservabilityLog
 
@@ -453,6 +458,7 @@ def search_library(
 def get_posted_gallery(
     library: LibraryDep,
     params: ParamsDep,
+    settings: SettingsDep,
     platform: Annotated[
         str | None, Query(description="drill into one origin platform (the click-in)")
     ] = None,
@@ -460,15 +466,28 @@ def get_posted_gallery(
         str, Query(description="most_valuable | most_recent (default)")
     ] = "most_recent",
 ) -> GalleryView:
-    """The posted-content gallery — kept posts grouped by platform (FR-3.4; §5).
+    """The posted-content gallery — posts grouped by platform (FR-3.4; §5).
 
-    Read-only over the kept + validated library (only kept+validated content surfaces —
-    §5 is NOT relaxed; the pure core re-asserts the social-platform filter). With no
-    ``platform`` it returns the per-platform tiles + counts (the gallery landing); with a
-    ``platform`` it drills into that platform's post grid, sorted by ``most_valuable`` or
-    ``most_recent``. Value + posted_at are deterministic SYNTHETIC placeholders (no real
-    engagement / publish-time feed yet, INV-1; the band/window are params-homed, INV-11).
-    Degrades cleanly to empty groups/posts on no data — never a 500.
+    Two sources, same response shape, decided by ``GT_POSTED_CATALOG_ROOT`` (INV-9 seam):
+
+    * REAL-catalog path — when the catalog root is configured AND its
+      ``catalog/catalog.csv`` exists, the gallery sources from GT's own scraped public
+      posts: real captions, real media refs (served via ``/posted-media``), and
+      engagement-based ranking (the scoped INV-1 exception, ASSUMPTIONS).
+    * LIBRARY-FALLBACK path — otherwise (unset / missing file / empty boot), the EXISTING
+      kept + validated library gallery is returned UNCHANGED, with its deterministic
+      synthetic value/posted_at placeholders.
+
+    With no ``platform`` it returns the per-platform tiles + counts (the landing); with a
+    ``platform`` it drills into that platform's grid, sorted by ``most_valuable`` (value/
+    engagement desc) or ``most_recent`` (posted_at desc). Engagement weights + the synthetic
+    band/window are params-homed (INV-11). Degrades cleanly to empty groups/posts on no
+    data — never a 500.
     """
+    root = settings.posted_catalog_root
+    if root is not None and root.joinpath("catalog", "catalog.csv").is_file():
+        items = read_posted_catalog(root, params=params)
+        return build_gallery_from_catalog(items, platform=platform, sort=sort)
+
     assets = library.search()
     return build_gallery(assets, params=params, platform=platform, sort=sort)

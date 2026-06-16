@@ -37,6 +37,7 @@ from pydantic import BaseModel, ConfigDict
 
 from app.ai.schemas.brand import LibraryAsset
 from app.core.params import Params
+from app.marketing.posted_catalog import PostedCatalogItem
 
 # The closed set of origin-platform tags the ingest stamps on a social COPY asset
 # (CONTENT_SPEC §5 ingest). The presence of one of these in `tags` is what makes a
@@ -123,10 +124,18 @@ def _image_ref(asset: LibraryAsset) -> str:
 class PostItem(BaseModel):
     """One posted-content gallery card — the picture, the words, and WHERE (frozen).
 
-    ``image_ref`` is a PLACEHOLDER (media-gen isn't wired yet); ``value`` and
-    ``posted_at`` are deterministic synthetic placeholders (no real engagement /
-    publish-time feed). ``platform`` is the origin tag (the "WHERE"), not the collapsed
-    channel.
+    Two sources share this shape:
+
+    * REAL-catalog path — ``image_ref`` is a SERVED media url
+      (``/posted-media/<media_file>``), ``value`` is a REAL engagement composite, and the
+      optional ``likes`` / ``views`` / ``comments`` / ``url`` fields carry the real
+      metrics + the original-post deep link.
+    * LIBRARY-FALLBACK path — ``image_ref`` is a placeholder ref, ``value`` / ``posted_at``
+      are deterministic synthetic placeholders, and the engagement fields stay ``None``.
+
+    ``platform`` is the origin tag (the "WHERE"), not the collapsed channel. The engagement
+    fields are optional so the same model serves both sources (the frontend omits a zero/
+    absent badge gracefully).
     """
 
     model_config = ConfigDict(frozen=True)
@@ -138,6 +147,10 @@ class PostItem(BaseModel):
     image_ref: str
     posted_at: str
     value: float
+    likes: int | None = None
+    views: int | None = None
+    comments: int | None = None
+    url: str | None = None
 
 
 class PlatformGroup(BaseModel):
@@ -223,9 +236,67 @@ def build_gallery(
 
     # Drill into one platform: only its posts, sorted by the requested key.
     drilled = [post for post in posts if post.platform == platform]
+    _sort_posts(drilled, sort)
+    return GalleryView(groups=[], posts=drilled)
+
+
+def _sort_posts(posts: list[PostItem], sort: str) -> None:
+    """Sort posts in place by the requested key (most_valuable / most_recent fallback).
+
+    ``most_valuable`` orders by value desc; anything else (incl. ``most_recent``) orders
+    by ``posted_at`` desc. Ties break on ``id`` for a stable order across both sources.
+    """
     sort_key = sort if sort in _VALID_SORTS else "most_recent"
     if sort_key == "most_valuable":
-        drilled.sort(key=lambda p: (-p.value, p.id))
+        posts.sort(key=lambda p: (-p.value, p.id))
     else:
-        drilled.sort(key=lambda p: (p.posted_at, p.id), reverse=True)
+        posts.sort(key=lambda p: (p.posted_at, p.id), reverse=True)
+
+
+def build_gallery_from_catalog(
+    items: list[PostedCatalogItem],
+    *,
+    platform: str | None = None,
+    sort: str = "most_recent",
+) -> GalleryView:
+    """Build the posted gallery from the REAL posted catalog (FR-3.4; INV-1 exception).
+
+    The catalog analog of :func:`build_gallery`: projects each :class:`PostedCatalogItem`
+    into a :class:`PostItem` carrying the REAL caption, the SERVED media ref
+    (``image_ref = media_ref``), the real posted_at + engagement value, and the optional
+    likes/views/comments/url. Same landing-tiles vs drilled-grid behaviour and the same
+    most_valuable / most_recent sort as the library path. The post ``id`` is the original
+    post url (a stable per-post key — the catalog carries no synthetic asset id).
+
+    Empty input degrades cleanly to empty groups + posts (never raises).
+    """
+    posts: list[PostItem] = [
+        PostItem(
+            id=item.url,
+            platform=item.platform,
+            asset_type=item.asset_type,
+            caption=item.caption,
+            image_ref=item.media_ref,
+            posted_at=item.posted_at,
+            value=item.value,
+            likes=item.likes,
+            views=item.views,
+            comments=item.comments,
+            url=item.url,
+        )
+        for item in items
+    ]
+
+    if platform is None:
+        counts: dict[str, int] = {}
+        for post in posts:
+            counts[post.platform] = counts.get(post.platform, 0) + 1
+        groups = [
+            PlatformGroup(platform=name, count=count)
+            for name, count in sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))
+        ]
+        return GalleryView(groups=groups, posts=[])
+
+    drilled = [post for post in posts if post.platform == platform]
+    _sort_posts(drilled, sort)
     return GalleryView(groups=[], posts=drilled)

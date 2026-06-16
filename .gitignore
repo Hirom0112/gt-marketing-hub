@@ -27,3 +27,11 @@ supabase/.temp/
 
 # Headless-capture design reference screenshots (regenerable, large)
 apply/design-ref/
+
+# REAL posted-catalog scrape + media — the scoped INV-1 exception (ASSUMPTIONS A-27)
+# is read at RUNTIME from an EXTERNAL path (GT_POSTED_CATALOG_ROOT); NOTHING real is
+# ever committed. These guard against accidentally committing the scrape if it ever
+# lands inside the tree. Tests use a synthetic fixture (tests/.../fixtures/), not these.
+/posted-media/
+gt school scrap/
+*/gt school scrap/

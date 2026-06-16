@@ -7,6 +7,7 @@ pipeline + Family Record GET endpoints, served over the in-memory repository
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 from mangum import Mangum
 
 from app.api.ai_actions import router as ai_actions_router
@@ -22,7 +23,7 @@ from app.api.notes import router as notes_router
 from app.api.publish import router as publish_router
 from app.api.scoreboard import router as scoreboard_router
 from app.api.seam import router as seam_router
-from app.core.settings import get_settings
+from app.core.settings import get_settings, posted_catalog_mount_root
 
 app = FastAPI(title="GT Pulse", version="0.1.0")
 
@@ -40,6 +41,21 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+# Posted-media static mount (FR-3.4; the scoped INV-1 exception, ASSUMPTIONS). When
+# GT_POSTED_CATALOG_ROOT is set AND the directory exists, serve the scrape root's real
+# media at /posted-media so the posted gallery's `media_ref` (/posted-media/<media_file>)
+# resolves to the real file. When unset/missing, the mount is SKIPPED (graceful) — the
+# gallery degrades to the library placeholders. Nothing real is committed; this serves an
+# EXTERNAL, machine-local path at runtime. StaticFiles ships with starlette/fastapi.
+_posted_media_root = posted_catalog_mount_root(_settings)
+if _posted_media_root is not None:
+    app.mount(
+        "/posted-media",
+        StaticFiles(directory=_posted_media_root),
+        name="posted-media",
+    )
 
 
 @app.get("/health")
