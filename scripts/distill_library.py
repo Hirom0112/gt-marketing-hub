@@ -128,6 +128,72 @@ def _clean(text: str) -> str:
     return text.strip()
 
 
+# A scraped page body leads with navigation menus + an application/form-field
+# block before the real marketing prose. These line patterns are page CHROME, not
+# reusable copy — dropped so the library body is the actual content, not the
+# header/nav/form scaffolding. Conservative: only clearly-chrome lines are removed.
+_CHROME_LINE_RE = re.compile(
+    r"^\s*[#*\-]*\s*(navigation|menu|header|footer)\b"  # nav/menu/header/footer headings
+    r"|^\s*-?\s*menu:\s"  # inline "Menu: …" rows
+    r"|begin application"  # the application CTA
+    r"|^\s*[#*\-]*\s*secure your candidacy"  # the application section header
+    r"|^\s*[#*\-]*\s*application form\b"  # "Application Form" heading
+    r"|application form fields|^\s*-?\s*form fields\b"  # form-field block intro
+    r"|income range option"  # income dropdown intro
+    r"|sms consent|sms message|i agree to receive|^\s*consent:"  # consent statements
+    r"|^\s*-?\s*sign[ -]?in\b"  # "Sign in link for existing applicants"
+    r"|^\s*-?\s*(first name|last name|email|phone|zip code|household income"
+    r"|prefer not to say)\b"  # individual form-field labels
+    r"|^\s*-?\s*(under \$|over \$|\$65,000|\$160,000)",  # income option rows
+    re.IGNORECASE,
+)
+
+# Bare top-nav menu item rows (a list item that is ONLY a known nav label).
+_NAV_LABELS = {
+    "how gt works",
+    "our advisors",
+    "academics",
+    "intensives",
+    "academic calendar",
+    "calendar",
+    "tuition & tefa",
+    "tuition and tefa",
+    "faq",
+    "register now",
+    "tracks",
+    "cities",
+    "schedule",
+    "pricing",
+    "tefa approved school",
+}
+
+
+def _strip_page_chrome(text: str) -> str:
+    """Drop nav/header/application boilerplate lines from a scraped page body.
+
+    Returns the prose with chrome lines removed. Falls back to the original text
+    if stripping would leave nothing (so a page that is all-chrome still yields a
+    body rather than an empty one).
+    """
+    kept: list[str] = []
+    for raw in text.splitlines():
+        line = raw.strip()
+        if not line:
+            continue
+        # Skip pure horizontal-rule / separator lines (---, ***, ===).
+        if line.strip("-*_= ") == "":
+            continue
+        if _CHROME_LINE_RE.search(line):
+            continue
+        # A bare nav-label list item (e.g. "- Our Advisors") is menu chrome.
+        bare = line.lstrip("-*# ").strip().lower()
+        if bare in _NAV_LABELS:
+            continue
+        kept.append(line)
+    result = "\n".join(kept).strip()
+    return result or text
+
+
 # A minimal record so we can call the REAL gate predicate (not a re-invented
 # banned-pattern list). The gate reads `.copy_text` and `.claims` structurally
 # (the `GatedRecord` Protocol) — no schema import needed.
@@ -273,7 +339,8 @@ def _read_websites(root: Path) -> list[dict[str, object]]:
                 if h1:
                     title = _clean(h1.group(1))
         # A compact, cleaned body summary for search/library (not the full page).
-        body_summary = _clean(page_body)[:600]
+        # Strip nav/header/application chrome first so the body is reusable prose.
+        body_summary = _clean(_strip_page_chrome(page_body))[:600]
         rel = md_path.relative_to(websites).as_posix()
         pages.append(
             {
