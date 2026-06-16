@@ -224,10 +224,11 @@ figure {
    viewport they stack — find first, act below. */
 .operator-grid {
   display: grid;
-  /* The work-panel (act) is pinned to a comfortable fixed band; the find surface
-     (calendar / triage) takes ALL remaining width, so on a wide screen the
-     calendar grows into the room instead of splitting it proportionally. */
-  grid-template-columns: minmax(0, 1fr) minmax(420px, 500px);
+  /* Fully fluid: the work-panel (act) is a responsive band — ~30% of the row,
+     clamped to a readable 400–560px — and the find surface (calendar / triage)
+     takes ALL remaining width. So the layout adjusts to whatever window it's on:
+     the panel stays legible, the calendar grows/shrinks to fill the rest. */
+  grid-template-columns: minmax(0, 1fr) clamp(400px, 30%, 560px);
   gap: var(--s-5);
   align-items: start;
 }

@@ -81,9 +81,11 @@ export default function App(): JSX.Element {
 
       <main
         style={{
-          maxWidth: 1640,
+          width: '100%',
           margin: '0 auto',
-          padding: '20px 20px 64px',
+          // Fluid: fills the window at any size, with padding that scales so the
+          // content breathes on a laptop and uses the room on a wide monitor.
+          padding: '20px clamp(16px, 1.8vw, 36px) 64px',
         }}
       >
         {workspace === 'enrollment' && <EnrollmentWorkspace />}
