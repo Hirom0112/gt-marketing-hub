@@ -559,6 +559,41 @@ def _build_profile(
 # byte-identical (same isolation discipline as the A-21 back-to-school cohort).
 _STUDENT_SEED_SALT = 0x5354_5544  # "STUD"
 
+# A-24 (reshape) — a child's funnel tracks its HOUSEHOLD's recovery situation
+# rather than being drawn independently. Drawing each child's stall at a flat
+# ~38% (regardless of the family) swamped the realistic cohort's ~140-active
+# shaping: it produced ~7,400 "active" children against ~118 active families, so
+# the per-child board read as 50x busier than the family board. Correlating the
+# child to its household restores believable proportions while keeping each
+# child's own funnel (A-24): a SETTLED household (no active stall — its
+# ``stalled_since`` is None) enrolled together, so its children all read
+# RECOVERED; an ACTIVE household's children are mostly still stalled, bar the
+# occasional sibling who already moved ahead.
+_SIBLING_AHEAD_PROB = 0.15  # an active household's child who has already recovered
+
+
+def _child_funnel(
+    rng: random.Random, *, recovered: bool
+) -> tuple[Stage, StallReason | None, datetime | None, FundingState]:
+    """Per-child (stage, stall_reason, stalled_since, funding_state) for a disposition.
+
+    ``recovered`` ⇒ a settled child: tuition stage, funded, no stall — the recovery
+    deriver reads RECOVERED via the §5.4 funding gate. Otherwise an ACTIVE stall: a
+    pre-tuition stage with a stall_reason whose stall-stage EQUALS the stage (via
+    :data:`_BTS_STALL_BY_STAGE`, so it never reads "advanced"), funding below the
+    first-installment floor, and a recent ``stalled_since`` — so the deriver reads
+    STALLED. All draws come from the supplied isolated ``rng`` (determinism holds).
+    """
+    if recovered:
+        return (Stage.TUITION, None, None, FundingState.FUNDED)
+    stage = rng.choice((Stage.INTEREST, Stage.APPLY, Stage.ENROLL))
+    stall_reason = rng.choice(_BTS_STALL_BY_STAGE[stage])
+    stalled_since = _timestamp(rng, max_days_ago=45)
+    funding_state = rng.choice(
+        (FundingState.NONE, FundingState.APPLIED, FundingState.AWARDED_SELFREPORT)
+    )
+    return (stage, stall_reason, stalled_since, funding_state)
+
 
 def _build_students_for_family(
     rng: random.Random,
@@ -586,17 +621,20 @@ def _build_students_for_family(
     created = family.created_at or _EPOCH
     surname = lead.synthetic_last_name
     child_names = rng.sample(_GIVEN_NAMES, k=lead.num_children)
+    # The household's disposition: a family with no active stall (stalled_since is
+    # None) has settled (enrolled / moved on), so its children read recovered; an
+    # active stall's children are mostly still in the funnel (A-24 reshape).
+    household_settled = family.stalled_since is None
 
     for child in child_names:
         student_id = _uuid(rng)
         app_form_id = _uuid(rng)
         enrollment_form_id = _uuid(rng)
 
-        stage = _weighted_choice(rng, _STAGE_WEIGHTS)
-        is_stalled = rng.random() < 0.38
-        stall_reason = rng.choice(_STALL_BY_STAGE[stage]) if is_stalled else None
-        stalled_since = _timestamp(rng, max_days_ago=45) if is_stalled else None
-        funding_state = _funding_state_for_stage(rng, stage)
+        # Settled households recover every child together; an active household's
+        # child is stalled unless it is the occasional already-ahead sibling.
+        recovered = household_settled or rng.random() < _SIBLING_AHEAD_PROB
+        stage, stall_reason, stalled_since, funding_state = _child_funnel(rng, recovered=recovered)
         grade = rng.choice(_GRADES)
 
         students.append(

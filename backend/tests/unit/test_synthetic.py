@@ -23,6 +23,7 @@ from app.data.models import (
     CommunityProfile,
     EnrollmentForms,
     FamilyRecord,
+    FundingState,
     LeadsNew,
     Stage,
     Student,
@@ -141,6 +142,42 @@ def test_students_are_deterministic_and_do_not_perturb_family_stream() -> None:
     # The four source tables stay one-row-per-family (the existing guard holds).
     assert len(a.app_forms) == 24
     assert len(a.enrollment_forms) == 24
+
+
+def test_students_track_their_household_recovery_disposition() -> None:
+    """A child's funnel correlates with its household (A-24 reshape), not flat-random.
+
+    A settled household (no active stall — ``stalled_since is None``) enrolled
+    together, so EVERY one of its children is recovered-shaped (tuition stage,
+    funded, no stall). An active household's children are MOSTLY still stalled,
+    with only the occasional already-ahead sibling — which keeps the per-child
+    active board proportional to the active families (it was ~50x larger when each
+    child's stall was drawn independently).
+    """
+    ds = generate(n=200, seed=11)
+    family_by_id = {f.family_id: f for f in ds.families}
+    settled_kids: list[Student] = []
+    active_kids: list[Student] = []
+    for student in ds.students:
+        family = family_by_id[student.family_id]
+        (settled_kids if family.stalled_since is None else active_kids).append(student)
+
+    # Both dispositions are present in a 200-family draw.
+    assert settled_kids and active_kids
+
+    # Settled households recover every child: tuition stage, funded, no stall.
+    assert all(
+        s.current_stage is Stage.TUITION
+        and s.funding_state is FundingState.FUNDED
+        and s.stalled_since is None
+        for s in settled_kids
+    )
+
+    # Active households are mostly still stalled (a minority sibling may be ahead).
+    stalled = [s for s in active_kids if s.stalled_since is not None]
+    assert len(stalled) >= 0.6 * len(active_kids)
+    # Every still-stalled child sits in the pre-tuition funnel with a stall reason.
+    assert all(s.current_stage is not Stage.TUITION and s.stall_reason is not None for s in stalled)
 
 
 def test_no_pii_shaped_values_in_output() -> None:
@@ -345,7 +382,7 @@ from pathlib import Path  # noqa: E402
 
 from app.core.params import Realistic, load_params  # noqa: E402
 from app.core.recovery_state import RecoveryState, derive_recovery_state  # noqa: E402
-from app.data.models import FundingState, StallReason  # noqa: E402
+from app.data.models import StallReason  # noqa: E402
 from app.data.repository import InMemoryFamilyRepository  # noqa: E402
 
 _EXAMPLE_PARAMS = Path(__file__).resolve().parents[3] / "params" / "params.example.yaml"
