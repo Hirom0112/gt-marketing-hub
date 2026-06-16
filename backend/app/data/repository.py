@@ -114,6 +114,10 @@ class InMemoryFamilyRepository(FamilyRepository):
 
     def __init__(self, dataset: SyntheticDataset) -> None:
         self._families: list[FamilyRecord] = list(dataset.families)
+        # family_id → spine row, so get_family is genuinely O(1) and list_joined
+        # is a single O(n) pass (not N linear scans — the O(n²) that made
+        # /work-queue + /enrollment/calendar take ~1s on the 5k cohort).
+        self._family_index: dict[UUID, FamilyRecord] = {f.family_id: f for f in self._families}
         self._leads: dict[UUID, LeadsNew] = {row.family_id: row for row in dataset.leads}
         self._app_forms: dict[UUID, AppForm] = {row.family_id: row for row in dataset.app_forms}
         self._enrollment_forms: dict[UUID, EnrollmentForms] = {
@@ -148,26 +152,27 @@ class InMemoryFamilyRepository(FamilyRepository):
             and (seam_status is None or family.crm_seam_status == seam_status)
         ]
 
-    def get_family(self, family_id: UUID) -> JoinedFamily | None:
-        family = next(
-            (f for f in self._families if f.family_id == family_id),
-            None,
-        )
-        if family is None:
-            return None
+    def _assemble(self, family: FamilyRecord) -> JoinedFamily:
+        """Join a spine row to its four source rows via the O(1) indexes."""
+        fid = family.family_id
         return JoinedFamily(
             family=family,
-            lead=self._leads.get(family_id),
-            app_form=self._app_forms.get(family_id),
-            enrollment_forms=self._enrollment_forms.get(family_id),
-            community_profile=self._community_profiles.get(family_id),
+            lead=self._leads.get(fid),
+            app_form=self._app_forms.get(fid),
+            enrollment_forms=self._enrollment_forms.get(fid),
+            community_profile=self._community_profiles.get(fid),
         )
 
+    def get_family(self, family_id: UUID) -> JoinedFamily | None:
+        family = self._family_index.get(family_id)  # O(1) — no list scan
+        if family is None:
+            return None
+        return self._assemble(family)
+
     def list_joined(self) -> list[JoinedFamily]:
-        # One JoinedFamily per spine row, in stored order. The per-id getter
-        # already assembles the join from the O(1) indexes built at construction.
-        joined = [self.get_family(family.family_id) for family in self._families]
-        return [j for j in joined if j is not None]
+        # One JoinedFamily per spine row, in stored order. A single O(n) pass —
+        # each spine row joined via the O(1) source indexes (no per-family scan).
+        return [self._assemble(family) for family in self._families]
 
     def pipeline_counts(self) -> dict[Stage, int]:
         # Delegate to the pure core counter (FR-2.1): the counting contract lives
