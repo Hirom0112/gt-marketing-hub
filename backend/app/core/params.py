@@ -307,11 +307,16 @@ class LatencyBudgetMs(_StrictModel):
 
 
 class Geo(_StrictModel):
-    """FR-3.7 GEO prompt-set + cadence + 0% baseline (§8)."""
+    """FR-3.7 GEO prompt-set + cadence + 0% baseline + generate-to-win lift (§8)."""
 
     prompt_set_size: int
     cadence: str
     baseline_coverage: float
+    # generate-to-win flywheel (FR-3.7): the GT cite-likelihood buckets (of 256)
+    # the simulated engine uses for a PROMPT THAT HAS BEEN WON (a GEO piece was
+    # generated, gate-passed, and published). The single canonical home for the
+    # lift amount (INV-11); the simulated adapter reads it, never a code literal.
+    published_cite_buckets: int
 
 
 class BrandMemory(_StrictModel):
@@ -324,6 +329,50 @@ class BrandMemory(_StrictModel):
     """
 
     weight_step: float
+
+
+class LibraryIngestNormalization(_StrictModel):
+    """library_ingest.normalization — per-platform engagement caps (INV-11).
+
+    Scraped engagement is NOT comparable across platforms: X / YouTube carry a
+    `views_plays` count in the tens-of-thousands while Instagram / Facebook /
+    TikTok carry a `likes` count in the low hundreds. The distill + loader
+    normalize each post's raw engagement by its platform cap into [0,1], so
+    `weight` ranks WITHIN a platform (an X view and an IG like are never
+    compared directly). Each cap divides that platform's raw signal; the result
+    is clamped to [0,1]. The canonical home for those caps — never a code
+    literal.
+    """
+
+    instagram_likes_max: int
+    facebook_likes_max: int
+    tiktok_likes_max: int
+    x_views_max: int
+    youtube_views_max: int
+
+
+class LibraryIngest(_StrictModel):
+    """Scraper-library ingest tunables (Phase-1 marketing; INV-11).
+
+    The distilled `brand_library.json` (GT's OWN proven public marketing) seeds
+    brand memory, GEO prompts, and the content library. `top_n_per_theme` caps
+    how many exemplars the distill keeps per INSIGHTS theme so the seed stays
+    small and deterministic; `normalization` holds the per-platform engagement
+    caps that map raw engagement into a comparable [0,1] `weight`. The library
+    ROOT path is NOT a param — it is the `GT_LIBRARY_PATH` env var (TECH_STACK
+    §5); the committed in-repo JSON path is a fixed code constant, not a tunable.
+    """
+
+    top_n_per_theme: int
+    normalization: LibraryIngestNormalization
+
+    @model_validator(mode="after")
+    def _top_n_positive(self) -> LibraryIngest:
+        if self.top_n_per_theme < 1:
+            raise ValueError(
+                f"library_ingest.top_n_per_theme must be >= 1, got {self.top_n_per_theme!r}"
+            )
+        return self
 
 
 class CreatorScoringFit(_StrictModel):
@@ -455,6 +504,7 @@ class Params(_StrictModel):
     latency_budget_ms: LatencyBudgetMs
     geo: Geo
     brand_memory: BrandMemory
+    library_ingest: LibraryIngest
     creator_scoring: CreatorScoring
     kpi: Kpi
     scheduler: Scheduler

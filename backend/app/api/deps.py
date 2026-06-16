@@ -229,14 +229,34 @@ def _build_brand_memory_store() -> BrandMemoryStore:
     import tempfile
     from pathlib import Path
 
+    from app.ai.schemas.brand import BrandMemoryKind
+    from app.data.library_ingest import load_brand_memory_exemplars
     from app.data.synthetic import generate_brand_memory
 
     db_path = Path(tempfile.gettempdir()) / "gt_cockpit_brand_memory.sqlite3"
     # Fresh file each process start so the singleton is deterministic from the seed.
     db_path.unlink(missing_ok=True)
     store = SqliteBrandMemoryStore(db_path, weight_step=_params.brand_memory.weight_step)
-    for item in generate_brand_memory():
-        store.upsert(item)
+
+    # Phase-1 marketing: seed exemplars from GT's OWN proven captions (the
+    # distilled, V-2/V-3-filtered, IMPORT-provenance library), so brand memory
+    # conditions generation on real winning hooks instead of synthetic stand-ins.
+    imported = load_brand_memory_exemplars(_params)
+    if imported:
+        for item in imported:
+            store.upsert(item)
+        # The catalog has no RULE items, but the §9 gate demo needs the two named
+        # dont_rules ("no speed multipliers" / "don't target children"). Keep just
+        # those non-exemplar rules from the synthetic seed (NOT its exemplars,
+        # which the imported real ones replace).
+        for item in generate_brand_memory():
+            if item.kind is not BrandMemoryKind.EXEMPLAR:
+                store.upsert(item)
+    else:
+        # Graceful fallback: no committed seed (default dev / fresh checkout) ⇒
+        # the synthetic generator keeps the store seeded and existing tests green.
+        for item in generate_brand_memory():
+            store.upsert(item)
     return store
 
 

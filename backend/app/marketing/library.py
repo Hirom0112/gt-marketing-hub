@@ -94,16 +94,22 @@ class InMemoryContentLibrary(ContentLibrary):
 
     @classmethod
     def seeded(cls) -> InMemoryContentLibrary:
-        """Hydrate the library from the §11.4 synthetic seed inventory (A-3).
+        """Hydrate the library, preferring distilled real assets (Phase-1 marketing).
 
-        The synthetic generator is the only seed writer (NFR-1); the seeded
-        assets are all kept + validated, so they surface in search immediately.
-        Imported lazily so this module does not import the generator at module
-        load (keeping the import graph thin).
+        Prefers the IMPORT-provenance assets distilled from GT's OWN public
+        marketing (`app.data.library_ingest.load_library_assets`) — each is
+        gate-routed at load, so it carries a real passing `ValidationResult` id
+        and `lifecycle=kept`, surfacing in search immediately. Falls back to the
+        §11.4 synthetic seed inventory when the committed seed JSON is absent
+        (default dev / fresh checkout), keeping existing tests green and the
+        store always non-empty (NFR-1). Imported lazily to keep the import graph
+        thin.
         """
+        from app.data.library_ingest import load_library_assets
         from app.data.synthetic import generate_library_assets
 
         library = cls()
-        for asset in generate_library_assets():
+        imported = load_library_assets()
+        for asset in imported if imported else generate_library_assets():
             library.add(asset)
         return library

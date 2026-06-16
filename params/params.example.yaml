@@ -96,9 +96,24 @@ geo:                        # FR-3.7 / RESEARCH.md Q5
   prompt_set_size: 30
   cadence: weekly
   baseline_coverage: 0.0            # the 0% baseline GT starts from
+  # generate-to-win flywheel (FR-3.7): once a GEO piece is published for a prompt,
+  # the simulated engine cites GT for that prompt far more often — coverage RISES.
+  # Expressed as the GT cite-likelihood buckets (out of 256) for a PUBLISHED prompt;
+  # the unpublished baseline is ~8/256 (~3%). 200/256 (~78%) makes the lift visible.
+  # NOT live behaviour (no live engine in v1, INV-9) — it shapes the simulation only.
+  published_cite_buckets: 200       # GT cite buckets (of 256) once a prompt is won
 
 brand_memory:               # FR-3.2 / CONTENT_SPEC §8.3.2 — the keep/discard learning loop
   weight_step: 1.0                  # affirm (+) / discard (-) conditioning weight delta (INV-11)
+
+library_ingest:             # Phase-1 marketing — distilled scraper-library seed (GT's own proven content)
+  top_n_per_theme: 3                # max exemplars kept per INSIGHTS theme (keeps the seed small + deterministic)
+  normalization:            # per-platform engagement caps → comparable [0,1] weight (X views ≠ IG likes)
+    instagram_likes_max: 200        # IG/FB/TikTok carry `likes`; X/YouTube carry `views_plays`
+    facebook_likes_max: 200
+    tiktok_likes_max: 200
+    x_views_max: 130000             # X tops out ~131K views on the strongest post
+    youtube_views_max: 50000        # YouTube view ceiling for normalization
 
 creator_scoring:            # FR-3.8 / CONTENT_SPEC §8.1 — creator-discovery fit + authenticity
   fit:                      # sub-weights over [0,1] sub-factors; MUST sum to 1.0
