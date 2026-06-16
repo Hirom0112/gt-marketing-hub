@@ -604,22 +604,54 @@ def get_work_queue(
     return rows
 
 
+# The per-child board scope (A-24), mirroring the work-queue's first axis.
+# ``active`` is the DEFAULT — only children still in play (recovery_state ∈
+# {stalled, working}); recovered/dismissed children belong to history, not the
+# live board (this is the fix for the recovered-child-leads-the-board oddity).
+StudentScope = Literal["active", "history", "all"]
+
+
 @router.get("/students", response_model=StudentBoardResponse)
 def get_students(
     repository: RepositoryDep,
     params: ParamsDep,
+    scope: Annotated[
+        StudentScope,
+        Query(
+            description=(
+                "Which slice of the per-child board to return, off the derived "
+                "recovery_state. **active** (default) — children still in play "
+                "({stalled, working}); a household whose children are all closed "
+                "out does not appear. **history** — {recovered, dismissed} only, "
+                "`limit`-capped. **all** — every child, `limit`-capped."
+            ),
+        ),
+    ] = "active",
+    limit: Annotated[
+        int,
+        Query(
+            ge=1,
+            le=_MAX_QUEUE_LIMIT,
+            description=(
+                "Row cap for the history/all scopes (default 200, max 500). "
+                "Ignored for the active scope."
+            ),
+        ),
+    ] = _DEFAULT_QUEUE_LIMIT,
 ) -> StudentBoardResponse:
     """The per-child board (A-24; `GET /students`) — students grouped by household.
 
     Each child runs its own funnel (one application per child), so the board ranks
     STUDENTS by ``recoverable_now_student`` (recoverability-driven; every child is
     one tuition of value). Per-child recovery state is derived from the student's
-    OWN funnel signals (:func:`derive_student_recovery_state`). Rows are grouped
-    under their household; a household's ``value_at_risk`` sums one per-child
-    tuition over its students that are still active ({stalled, working}) — the
-    per-child replacement for the old all-or-nothing family value. Households are
-    ordered by their most-recoverable child, students within a household likewise.
-    All numbers come from the pure scorer (INV-2); ``now`` is read once.
+    OWN funnel signals (:func:`derive_student_recovery_state`). Rows are gated by
+    ``scope`` (default ``active`` — the live board hides closed-out children),
+    then grouped under their household; a household's ``value_at_risk`` sums one
+    per-child tuition over its students that are still active ({stalled, working}).
+    history/all are ``limit``-capped (after ranking) so the route never streams
+    the recovered long tail. Households are ordered by their most-recoverable
+    child, students within a household likewise. All numbers come from the pure
+    scorer (INV-2); ``now`` is read once.
     """
     now = datetime.now(UTC)
     joined_students = repository.list_students()
@@ -631,10 +663,15 @@ def get_students(
         key=lambda s: (-recoverable_now_student(s, params, now=now), s.student_id),
     )
 
-    # Build ranked rows, grouped by household in first-seen (rank) order so the
-    # most-recoverable child surfaces its household first.
+    # Build ranked rows, gated by scope and grouped by household in first-seen
+    # (rank) order so the most-recoverable child surfaces its household first.
     groups: dict[UUID, HouseholdGroup] = {}
+    surfaced = 0
     for unit in ranked:
+        # history/all are bounded — stop once the requested cap is reached (active
+        # is uncapped: it is already the small in-play slice).
+        if scope != "active" and surfaced >= limit:
+            break
         js = joined_by_id[unit.student_id]
         student = js.student
         state = derive_student_recovery_state(
@@ -643,6 +680,12 @@ def get_students(
             enrollment_forms=js.enrollment_forms,
             stall_stage=_student_stall_stage(js),
         )
+        # Scope gate: drop children whose derived state is outside the slice.
+        if scope == "active" and not is_active(state):
+            continue
+        if scope == "history" and is_active(state):
+            continue
+        surfaced += 1
         row = StudentRow(
             student_id=student.student_id,
             family_id=student.family_id,
@@ -680,7 +723,7 @@ def get_students(
     households = list(groups.values())
     return StudentBoardResponse(
         households=households,
-        total_students=len(ranked),
+        total_students=surfaced,
         total_value_at_risk=sum(g.value_at_risk for g in households),
     )
 

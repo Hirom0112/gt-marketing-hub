@@ -31,8 +31,8 @@ def _seeded() -> InMemoryFamilyRepository:
 
 
 def test_students_board_contract() -> None:
-    """`GET /students` returns one row per child, grouped by household, ranked."""
-    resp = client.get("/students")
+    """`GET /students?scope=all` returns one row per child, grouped, ranked."""
+    resp = client.get("/students?scope=all")
     assert resp.status_code == 200, resp.text
     body = resp.json()
 
@@ -93,6 +93,59 @@ def test_students_ranked_by_recoverable_now_desc() -> None:
     valid = {"stalled", "working", "recovered", "dismissed"}
     flat = [row for h in body["households"] for row in h["students"]]
     assert all(row["recovery_state"] in valid for row in flat)
+
+
+_ACTIVE = {"stalled", "working"}
+_HISTORY = {"recovered", "dismissed"}
+
+
+def _flat(body: dict) -> list[dict]:
+    return [row for h in body["households"] for row in h["students"]]
+
+
+def test_students_default_scope_is_active_only() -> None:
+    """The default board is the ACTIVE slice — recovered/dismissed children are out.
+
+    Fixes the lead-row oddity (a recovered child with $0 at-risk leading the
+    board): with the default ``active`` scope every surfaced row is {stalled,
+    working}, and a household whose children are all recovered does not appear.
+    """
+    body = client.get("/students").json()
+    rows = _flat(body)
+    assert rows, "the default active board should be non-empty on the seed"
+    assert all(r["recovery_state"] in _ACTIVE for r in rows)
+    # No empty households surface.
+    assert all(h["students"] for h in body["households"])
+    # total_students echoes the surfaced (active) row count.
+    assert body["total_students"] == len(rows)
+
+
+def test_students_scope_active_is_subset_of_all() -> None:
+    """active ⊆ all, and `all` carries the closed-out children active hides."""
+    active_ids = {r["student_id"] for r in _flat(client.get("/students?scope=active").json())}
+    all_rows = _flat(client.get("/students?scope=all").json())
+    all_ids = {r["student_id"] for r in all_rows}
+
+    assert active_ids <= all_ids
+    # The seed has at least one closed-out (recovered/dismissed) child, so `all`
+    # is a strict superset — proving the active filter actually drops rows.
+    closed = [r for r in all_rows if r["recovery_state"] in _HISTORY]
+    assert closed, "seed expected to contain recovered/dismissed children"
+    assert all_ids - active_ids == {r["student_id"] for r in closed}
+
+
+def test_students_history_scope_returns_only_closed() -> None:
+    """`scope=history` returns only {recovered, dismissed} children."""
+    body = client.get("/students?scope=history").json()
+    rows = _flat(body)
+    assert rows, "the seed should have a non-empty history slice"
+    assert all(r["recovery_state"] in _HISTORY for r in rows)
+
+
+def test_students_history_scope_limit_caps_rows() -> None:
+    """`limit` caps the history/all row count (never streams the long tail)."""
+    body = client.get("/students?scope=history&limit=3").json()
+    assert len(_flat(body)) <= 3
 
 
 def test_transfer_student_to_crm_simulated_records_push() -> None:
