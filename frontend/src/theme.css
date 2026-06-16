@@ -224,7 +224,10 @@ figure {
    viewport they stack — find first, act below. */
 .operator-grid {
   display: grid;
-  grid-template-columns: minmax(0, 1.5fr) minmax(360px, 1fr);
+  /* The work-panel (act) is pinned to a comfortable fixed band; the find surface
+     (calendar / triage) takes ALL remaining width, so on a wide screen the
+     calendar grows into the room instead of splitting it proportionally. */
+  grid-template-columns: minmax(0, 1fr) minmax(420px, 500px);
   gap: var(--s-5);
   align-items: start;
 }
