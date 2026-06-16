@@ -40,7 +40,7 @@ from fastapi import APIRouter, Depends, HTTPException
 
 from app.adapters.hubspot.crm_adapter import CRMAdapter
 from app.ai.client import LLMClient
-from app.ai.cost import RunBudget
+from app.ai.cost import run_budget_for_today
 from app.ai.graphs.close_tips import generate_close_tips
 from app.ai.graphs.enrollment_draft import draft_enrollment_message
 from app.api.deps import (
@@ -144,8 +144,12 @@ def draft_enrollment(
     # passing proposal; the proposal is still produced + logged below (INV-4).
     eval_suite_red = not action_enabled(eval_state, DRAFT_GATING_EVAL)
 
-    # Per-run budget (INV-8) — built per request, never a singleton.
-    budget = RunBudget.from_config(settings=settings, params=params)
+    # Per-run budget (INV-8), PRE-TRIPPED if today's logged spend hit the cross-run
+    # DAILY cap (NFR-5): a tripped budget degrades the edge to the deterministic
+    # template with NO live call — the same fail-closed path as the per-run switch.
+    budget = run_budget_for_today(
+        settings=settings, params=params, log=log, today=datetime.now(UTC).date()
+    )
     outcome = draft_enrollment_message(
         joined,
         request.action,
@@ -157,7 +161,8 @@ def draft_enrollment(
     )
 
     # LOG before a human sees anything (ARCH §10). A new id per attempt: the
-    # observability spine is append-only and keyed once per proposal.
+    # observability spine is append-only and keyed once per proposal. Stamp the
+    # run's USD (budget.usd_spent) so the cross-run daily accumulator can sum it.
     proposal_id = uuid4()
     payload: dict[str, object] = (
         outcome.proposal.model_dump(mode="json") if outcome.proposal is not None else {}
@@ -168,6 +173,7 @@ def draft_enrollment(
         schema_version=DRAFT_SCHEMA_VERSION,
         payload=payload,
         family_id=request.family_id,
+        usd_spent=budget.usd_spent,
     )
     # Log the eval REGARDLESS of pass/fail — a blocked proposal is still logged
     # with its failing eval (INV-4 audit side). A parse failure yields no
@@ -246,6 +252,9 @@ def bulk_nudge(
     """
     batch_id = _batch_id("bulk-nudge", request.family_ids, salt=request.action.value)
     cap = params.bulk.nudge_per_run_cap
+    # Read the wall clock ONCE at the composition root (core stays clock-free); each
+    # per-family budget below is pre-tripped if today's logged spend hit the daily cap.
+    today = datetime.now(UTC).date()
 
     eval_suite_red = not action_enabled(eval_state, DRAFT_GATING_EVAL)
 
@@ -264,8 +273,10 @@ def bulk_nudge(
             blocked.append(BulkNudgeBlocked(family_id=family_id, failed_rules=["family_not_found"]))
             continue
 
-        # The SAME per-family draft pipeline as the single route (INV-3).
-        budget = RunBudget.from_config(settings=settings, params=params)
+        # The SAME per-family draft pipeline as the single route (INV-3). The budget
+        # is pre-tripped if today's logged spend hit the cross-run DAILY cap (NFR-5),
+        # so the metered edge degrades fail-closed across the whole batch.
+        budget = run_budget_for_today(settings=settings, params=params, log=log, today=today)
         outcome = draft_enrollment_message(
             joined,
             request.action,
@@ -277,6 +288,7 @@ def bulk_nudge(
         )
 
         # LOG the proposal + its eval before any human sees it (ARCH §10; INV-4).
+        # Stamp the run's USD so the cross-run daily accumulator can sum it.
         proposal_id = uuid4()
         payload: dict[str, object] = (
             outcome.proposal.model_dump(mode="json") if outcome.proposal is not None else {}
@@ -287,6 +299,7 @@ def bulk_nudge(
             schema_version=DRAFT_SCHEMA_VERSION,
             payload=payload,
             family_id=family_id,
+            usd_spent=budget.usd_spent,
         )
         validation = outcome.validation
         log.log_eval(
@@ -378,7 +391,11 @@ def close_tips(
     # otherwise-passing proposal; the proposal is still produced + logged below.
     eval_suite_red = not action_enabled(eval_state, CLOSE_TIPS_GATING_EVAL)
 
-    budget = RunBudget.from_config(settings=settings, params=params)
+    # Per-run budget pre-tripped if today's logged spend hit the cross-run DAILY cap
+    # (NFR-5) ⇒ the edge degrades fail-closed with no live call.
+    budget = run_budget_for_today(
+        settings=settings, params=params, log=log, today=datetime.now(UTC).date()
+    )
     outcome = generate_close_tips(
         joined,
         client=client,
@@ -388,7 +405,8 @@ def close_tips(
         brand_judge=brand_judge,
     )
 
-    # LOG before a human sees anything (ARCH §10) — a new id per attempt.
+    # LOG before a human sees anything (ARCH §10) — a new id per attempt. Stamp the
+    # run's USD so the cross-run daily accumulator can sum it.
     proposal_id = uuid4()
     payload: dict[str, object] = (
         outcome.proposal.model_dump(mode="json") if outcome.proposal is not None else {}
@@ -399,6 +417,7 @@ def close_tips(
         schema_version=CLOSE_TIPS_SCHEMA_VERSION,
         payload=payload,
         family_id=request.family_id,
+        usd_spent=budget.usd_spent,
     )
     # Log the eval REGARDLESS of pass/fail — a blocked proposal is still logged with
     # its failing eval (INV-4 audit side). A parse failure / degraded edge yields no

@@ -90,6 +90,13 @@ class ProposalRecord(BaseModel):
     flow: str
     schema_version: str
     payload: dict[str, object] = Field(default_factory=dict)
+    # Anthropic USD this run charged to its per-run budget (the cross-run DAILY
+    # cap accumulator reads this — NFR-5; INV-8). Additive + default-0.0 so every
+    # existing caller that omits it still validates (back-compat): a degraded /
+    # non-live / pre-stamp proposal simply carries 0.0. `core/daily_spend.py` sums
+    # this over a day; it is NEVER inferred from a per-token rate (INV-11) — the
+    # caller stamps the completed budget's `usd_spent`.
+    usd_spent: float = 0.0
     created_at: datetime
 
 
@@ -189,12 +196,15 @@ class ObservabilityLog(ABC):
         family_id: UUID | None = None,
         student_id: UUID | None = None,
         content_ref: UUID | None = None,
+        usd_spent: float = 0.0,
         created_at: datetime | None = None,
     ) -> ProposalRecord:
         """Persist an AI proposal BEFORE it reaches a human (ARCH §10). Append-only.
 
         ``student_id`` keys the proposal to one child for per-student flows (A-24);
-        omit it for family-level proposals.
+        omit it for family-level proposals. ``usd_spent`` is the run's Anthropic USD
+        for the cross-run DAILY cap accumulator (NFR-5); default 0.0 so callers that
+        omit it (degraded / non-live runs) are unchanged.
         """
         raise NotImplementedError
 
@@ -318,6 +328,7 @@ class InMemoryObservabilityLog(ObservabilityLog):
         family_id: UUID | None = None,
         student_id: UUID | None = None,
         content_ref: UUID | None = None,
+        usd_spent: float = 0.0,
         created_at: datetime | None = None,
     ) -> ProposalRecord:
         if proposal_id in self._proposals:
@@ -332,6 +343,7 @@ class InMemoryObservabilityLog(ObservabilityLog):
             flow=flow,
             schema_version=schema_version,
             payload=payload,
+            usd_spent=usd_spent,
             created_at=created_at if created_at is not None else _now(),
         )
         self._proposals[proposal_id] = record

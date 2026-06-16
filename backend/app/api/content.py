@@ -31,6 +31,7 @@ transports.
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from typing import Annotated
 from uuid import UUID, uuid4
 
@@ -38,7 +39,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import ValidationError
 
 from app.ai.client import LLMClient
-from app.ai.cost import RunBudget
+from app.ai.cost import run_budget_for_today
 from app.ai.graphs.content_generate import (
     ContentBatchOutcome,
     build_campaign_prompt,
@@ -121,8 +122,11 @@ def generate_content(
     brand_rules: BrandRulesDep,
 ) -> ContentGenerateResponse:
     """Generate a gated content batch, log each candidate, surface only on pass (§5.3)."""
-    # Per-run budget (INV-8) — built per request, never a singleton.
-    budget = RunBudget.from_config(settings=settings, params=params)
+    # Per-run budget (INV-8), PRE-TRIPPED if today's logged spend hit the cross-run
+    # DAILY cap (NFR-5): the edge then degrades to persisted exemplars with no live call.
+    budget = run_budget_for_today(
+        settings=settings, params=params, log=log, today=datetime.now(UTC).date()
+    )
     outcome = generate_content_batch(
         request.prompt,
         request.channel,
@@ -135,7 +139,7 @@ def generate_content(
         brand_rules=brand_rules,
     )
 
-    return _project_outcome(outcome, log=log)
+    return _project_outcome(outcome, log=log, usd_spent=budget.usd_spent)
 
 
 def _payload_for(
@@ -157,6 +161,7 @@ def _project_outcome(
     outcome: ContentBatchOutcome,
     *,
     log: ObservabilityLog,
+    usd_spent: float = 0.0,
     campaign_axes: dict[str, object] | None = None,
 ) -> ContentGenerateResponse:
     """Log every candidate then FLAT-project the batch into a `ContentGenerateResponse`.
@@ -171,9 +176,16 @@ def _project_outcome(
     ``campaign_axes`` (theme + target GEO prompt) is persisted into each logged proposal
     payload when the batch is a CAMPAIGN batch, so a kept candidate can be tagged with its
     campaign on the INV-2 rebuild-from-spine keep path (campaign-tagging-on-keep).
+
+    ``usd_spent`` is the WHOLE batch's per-run Anthropic USD (one budget spans all
+    candidates). It is stamped on the FIRST logged proposal only — the rest carry 0.0 —
+    so the cross-run daily accumulator (`core/daily_spend`) sums the run cost ONCE per
+    batch, never multiplied by candidate count (NFR-5).
     """
     candidates: list[ContentCandidateResponse] = []
     batch_id = ""
+    # The batch's per-run USD is stamped on the first proposal only (see docstring).
+    run_usd_remaining = usd_spent
 
     for item in outcome.surfaced:
         proposal_id = uuid4()
@@ -182,7 +194,9 @@ def _project_outcome(
             flow=CONTENT_FLOW,
             schema_version=CONTENT_SCHEMA_VERSION,
             payload=_payload_for(item.candidate, campaign_axes),
+            usd_spent=run_usd_remaining,
         )
+        run_usd_remaining = 0.0
         log.log_eval(
             proposal_id=proposal_id,
             eval_name=CONTENT_EVAL_NAME,
@@ -209,7 +223,9 @@ def _project_outcome(
             flow=CONTENT_FLOW,
             schema_version=CONTENT_SCHEMA_VERSION,
             payload=_payload_for(blocked.candidate, campaign_axes),
+            usd_spent=run_usd_remaining,
         )
+        run_usd_remaining = 0.0
         log.log_eval(
             proposal_id=proposal_id,
             eval_name=CONTENT_EVAL_NAME,
@@ -267,8 +283,11 @@ def generate_campaign(
         count=count,
     )
 
-    # Per-run budget (INV-8) — built per request, never a singleton.
-    budget = RunBudget.from_config(settings=settings, params=params)
+    # Per-run budget pre-tripped if today's logged spend hit the cross-run DAILY cap
+    # (NFR-5) ⇒ the edge degrades to persisted exemplars with no live call.
+    budget = run_budget_for_today(
+        settings=settings, params=params, log=log, today=datetime.now(UTC).date()
+    )
     outcome = generate_content_batch(
         campaign_prompt,
         request.channel,
@@ -288,7 +307,9 @@ def generate_campaign(
     campaign_axes: dict[str, object] = {"theme": request.theme}
     if request.target_geo_prompt is not None:
         campaign_axes["target_geo_prompt"] = request.target_geo_prompt
-    base = _project_outcome(outcome, log=log, campaign_axes=campaign_axes)
+    base = _project_outcome(
+        outcome, log=log, usd_spent=budget.usd_spent, campaign_axes=campaign_axes
+    )
     return CampaignGenerateResponse(
         batch_id=base.batch_id,
         candidates=base.candidates,

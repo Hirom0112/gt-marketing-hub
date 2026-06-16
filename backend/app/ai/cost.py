@@ -22,9 +22,14 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
+from app.core.daily_spend import daily_usd_spent
+
 if TYPE_CHECKING:
+    from datetime import date
+
     from app.core.params import Params
     from app.core.settings import Settings
+    from app.observability.log_store import ObservabilityLog
 
 
 class CostCapExceeded(Exception):
@@ -65,6 +70,19 @@ class RunBudget:
         """True once a charge has breached (or would have breached) a cap."""
         return self._tripped
 
+    def trip(self) -> None:
+        """Force the budget tripped WITHOUT a charge — the cross-run daily kill switch.
+
+        The per-run governor trips on a :meth:`charge` that would breach a cap. The
+        cross-run DAILY cap (NFR-5) has no per-run charge to refuse: when today's
+        cumulative spend already reached ``cost_daily_usd_cap`` the run must not make
+        a live call at all. Pre-tripping the budget routes it through the EXACT same
+        fail-closed degrade path the per-run kill switch uses (``LLMClient.complete``
+        returns the deterministic template when ``budget.tripped``) — one mechanism,
+        no second governor. Idempotent.
+        """
+        self._tripped = True
+
     def would_exceed(self, *, tokens: int, usd: float) -> bool:
         """Whether applying this charge would breach the token OR USD cap.
 
@@ -90,3 +108,31 @@ class RunBudget:
             )
         self.tokens_used += tokens
         self.usd_spent += usd
+
+
+def run_budget_for_today(
+    *,
+    settings: Settings,
+    params: Params,
+    log: ObservabilityLog,
+    today: date,
+) -> RunBudget:
+    """Build a per-run budget, PRE-TRIPPED if today's logged spend hit the daily cap.
+
+    The single shared seam the AI endpoints use instead of :meth:`RunBudget.from_config`
+    so the cross-run DAILY ceiling (``settings.cost_daily_usd_cap``; NFR-5) and the
+    per-run governor are wired CONSISTENTLY in one place. It derives today's cumulative
+    Anthropic spend from the append-only spine (:func:`app.core.daily_spend.daily_usd_spent`
+    — stateless-safe, no module counter) and, when that is at/over the cap, returns a
+    budget already :meth:`~RunBudget.trip`-ped. A tripped budget makes
+    ``LLMClient.complete`` degrade to the deterministic template with NO live call —
+    the EXACT per-run kill-switch path, fail-closed (INV-8). Under the cap it is the
+    plain per-run budget.
+
+    The cap comes from settings (INV-11 — no literal); ``today`` is injected by the
+    composition root (the core stays clock-free).
+    """
+    budget = RunBudget.from_config(settings=settings, params=params)
+    if daily_usd_spent(log, day=today) >= settings.cost_daily_usd_cap:
+        budget.trip()
+    return budget
