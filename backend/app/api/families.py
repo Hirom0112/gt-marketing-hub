@@ -18,7 +18,10 @@ from app.api.schemas import (
     CalendarEntry,
     CalendarResponse,
     FamilyDetailResponse,
+    HouseholdGroup,
     PipelineResponse,
+    StudentBoardResponse,
+    StudentRow,
     WorkQueueItem,
 )
 from app.core.contact_log import last_contact_at
@@ -29,19 +32,25 @@ from app.core.recovery_state import (
     RecoveredOutcome,
     RecoveryState,
     derive_recovery_state,
+    derive_student_recovery_state,
+    is_active,
     recovered_outcome,
 )
 from app.core.work_queue import (
     WorkQueueFamily,
+    WorkQueueStudent,
     freshness,
     recoverability,
     recoverable_now,
+    recoverable_now_student,
     responsiveness_from_engagement,
     score_family,
+    score_student,
+    student_value,
     value,
 )
 from app.data.models import FamilyRecord, FundingState, SeamStatus, Stage, StallReason
-from app.data.repository import FamilyRepository, JoinedFamily
+from app.data.repository import FamilyRepository, JoinedFamily, JoinedStudent
 from app.observability.log_store import DismissRecord, ObservabilityLog
 
 router = APIRouter(tags=["families"])
@@ -76,6 +85,41 @@ def _work_queue_family(joined: JoinedFamily, params: Params) -> WorkQueueFamily:
         responsiveness=responsiveness_from_engagement(signals, params),
         num_children=num_children,
         funding_type=joined.family.funding_type,
+    )
+
+
+def _work_queue_student(joined: JoinedStudent, params: Params) -> WorkQueueStudent:
+    """Project a joined student down to the per-child scorer's pure input (A-24).
+
+    Responsiveness is the household's aggregate engagement (A-5) — shared across a
+    family's children — exactly as for :func:`_work_queue_family`. Everything else
+    reads off the child's OWN funnel (its ``current_stage``/``stalled_since``).
+    """
+    signals = joined.community_profile.engagement_signals if joined.community_profile else {}
+    student = joined.student
+    return WorkQueueStudent(
+        student_id=student.student_id,
+        family_id=student.family_id,
+        current_stage=student.current_stage,
+        stalled_since=student.stalled_since,
+        created_at=student.created_at,
+        responsiveness=responsiveness_from_engagement(signals, params),
+        funding_type=student.funding_type,
+    )
+
+
+def _student_stall_stage(joined: JoinedStudent) -> Stage:
+    """The funnel stage a CHILD was stuck at — its recovery "advanced past" baseline.
+
+    Maps the student's own ``stall_reason`` through the §5.1 table (the same one
+    families use); a child with no ``stall_reason`` falls back to its current stage
+    (so "advanced" reads False).
+    """
+    student = joined.student
+    return (
+        _STALL_REASON_STAGE[student.stall_reason]
+        if student.stall_reason is not None
+        else student.current_stage
     )
 
 
@@ -549,6 +593,87 @@ def get_work_queue(
         if scope != "active" and len(rows) >= limit:
             break
     return rows
+
+
+@router.get("/students", response_model=StudentBoardResponse)
+def get_students(
+    repository: RepositoryDep,
+    params: ParamsDep,
+) -> StudentBoardResponse:
+    """The per-child board (A-24; `GET /students`) — students grouped by household.
+
+    Each child runs its own funnel (one application per child), so the board ranks
+    STUDENTS by ``recoverable_now_student`` (recoverability-driven; every child is
+    one tuition of value). Per-child recovery state is derived from the student's
+    OWN funnel signals (:func:`derive_student_recovery_state`). Rows are grouped
+    under their household; a household's ``value_at_risk`` sums one per-child
+    tuition over its students that are still active ({stalled, working}) — the
+    per-child replacement for the old all-or-nothing family value. Households are
+    ordered by their most-recoverable child, students within a household likewise.
+    All numbers come from the pure scorer (INV-2); ``now`` is read once.
+    """
+    now = datetime.now(UTC)
+    joined_students = repository.list_students()
+    joined_by_id = {js.student.student_id: js for js in joined_students}
+
+    units = [_work_queue_student(js, params) for js in joined_students]
+    ranked = sorted(
+        units,
+        key=lambda s: (-recoverable_now_student(s, params, now=now), s.student_id),
+    )
+
+    # Build ranked rows, grouped by household in first-seen (rank) order so the
+    # most-recoverable child surfaces its household first.
+    groups: dict[UUID, HouseholdGroup] = {}
+    for unit in ranked:
+        js = joined_by_id[unit.student_id]
+        student = js.student
+        state = derive_student_recovery_state(
+            current_stage=student.current_stage,
+            funding_state=student.funding_state,
+            enrollment_forms=js.enrollment_forms,
+            stall_stage=_student_stall_stage(js),
+        )
+        row = StudentRow(
+            student_id=student.student_id,
+            family_id=student.family_id,
+            household_name=js.family.display_name,
+            display_label=student.display_label,
+            synthetic_first_name=student.synthetic_first_name,
+            grade=student.grade,
+            current_stage=student.current_stage,
+            funding_type=student.funding_type,
+            funding_state=student.funding_state,
+            stall_reason=student.stall_reason,
+            score=score_student(unit, params, now=now),
+            recoverability=recoverability(unit, params, now=now),
+            value=student_value(params),
+            recoverable_now=recoverable_now_student(unit, params, now=now),
+            freshness=freshness(unit, params, now=now),
+            recovery_state=state,
+        )
+        group = groups.get(student.family_id)
+        if group is None:
+            group = HouseholdGroup(
+                family_id=student.family_id,
+                household_name=js.family.display_name,
+                value_at_risk=0.0,
+                students=[],
+            )
+            groups[student.family_id] = group
+        group.students.append(row)
+        # Household $-at-risk: sum one per-child tuition over STILL-ACTIVE students
+        # (a recovered/dismissed child is no longer "at risk" — A-24 fixes the old
+        # all-or-nothing family value).
+        if is_active(state):
+            group.value_at_risk += row.value
+
+    households = list(groups.values())
+    return StudentBoardResponse(
+        households=households,
+        total_students=len(ranked),
+        total_value_at_risk=sum(g.value_at_risk for g in households),
+    )
 
 
 # YYYY-MM with month 01..12 — anchors the calendar query param's 422 validation.
