@@ -25,7 +25,8 @@ The four rules (§9.2):
   child-identifying PII, no behavioral-targeting-of-minors signal ⇒ pass
   (INV-6).
 * **V-4 On-brand.** Zero active `never`-rule violations AND a brand-conformance
-  score ≥ the params threshold. The score comes from an **injected** judge
+  score ≥ the `min_brand_score` bar — a param DISTINCT from the V-2
+  `min_grounding` floor. The score comes from an **injected** judge
   (a proposal — INV-2); if the judge is unavailable the gate degrades to
   **DENY**, never a silent pass (§9.4, NFR-5 fail-closed posture).
 
@@ -360,10 +361,12 @@ def check_v4(
        import or call `anthropic` here (purity, INV-2).
     3. `score is None` ⇒ deny. `score >= threshold` ⇒ pass; else FAIL.
 
-    The brand-conformance floor REUSES
-    `eval_thresholds.message_safety_grounding.min_grounding` — there is no
-    distinct brand-threshold param, so per the scope guard we reuse it rather
-    than invent a code literal (INV-11).
+    The brand-conformance bar is
+    `eval_thresholds.message_safety_grounding.min_brand_score` — a param DISTINCT
+    from the V-2 `min_grounding` floor (INV-11). V-4 (and only V-4) reads it: the
+    LLM brand judge scores genuinely on-brand copy around 0.85, so reusing the
+    0.95 grounding floor here wrongly blocked legitimate on-brand generation. V-2
+    still owns `min_grounding` and still blocks unverifiable "4X/2X" claims (INV-4).
 
     Returns the verdict AND the score (``None`` when unavailable) so the gate
     can surface `brand_score` on the verdict.
@@ -390,7 +393,7 @@ def check_v4(
     if score is None:
         return RuleVerdict.FAIL, None
 
-    threshold = params.eval_thresholds.message_safety_grounding.min_grounding
+    threshold = params.eval_thresholds.message_safety_grounding.min_brand_score
     if score >= threshold:
         return RuleVerdict.PASS, score
     return RuleVerdict.FAIL, score
@@ -438,7 +441,8 @@ def evaluate_message(
             enrollment draft (`.body`) or a content candidate (`.copy_text`).
         settings: the env seam; `settings.llm_available` drives V-4's
             "judge unavailable ⇒ deny" (§9.4).
-        params: the loaded params; the V-4 brand floor and V-2 caps read from
+        params: the loaded params; V-4's `min_brand_score` bar and V-2's
+            `min_grounding` floor — two DISTINCT keys — read from
             `eval_thresholds.message_safety_grounding` (INV-11).
         brand_judge: an INJECTED brand-conformance judge (a proposal — INV-2);
             ``None`` ⇒ judge unavailable ⇒ V-4 deny when no key.

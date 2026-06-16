@@ -255,9 +255,20 @@ class DocExtraction(_StrictModel):
 
 
 class MessageSafetyGrounding(_StrictModel):
-    """FR-4.3 grounding/safety gate — gates §5.2 and §5.3."""
+    """FR-4.3 grounding/safety gate — gates §5.2 and §5.3.
+
+    Two DISTINCT thresholds, one canonical home each (INV-11):
+
+    * ``min_grounding`` is the V-2 grounding floor — an unverifiable "4X/2X"
+      performance claim must be BLOCKED at this bar; it is never lowered (INV-4).
+    * ``min_brand_score`` is the V-4 brand-voice bar — the LLM brand judge scores
+      genuinely on-brand copy around 0.85, so V-4 is decoupled from the V-2 floor
+      (reusing 0.95 wrongly blocked legitimate on-brand generation). REQUIRED, so
+      config drift fails the build (CLAUDE.md §4.1).
+    """
 
     min_grounding: float
+    min_brand_score: float
     max_unverifiable_claims: int
     require_coppa_safe: bool
 

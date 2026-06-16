@@ -23,7 +23,7 @@ import pytest
 from app.ai.brand_judge import BrandJudge, heuristic_brand_score
 from app.ai.client import AnthropicLLMClient, LLMResult
 from app.ai.cost import RunBudget
-from app.core.eval_gate import check_v4
+from app.core.eval_gate import RuleVerdict, check_v4, evaluate_message
 from app.core.params import Params, load_params
 from app.core.settings import Settings
 
@@ -72,14 +72,15 @@ def test_heuristic_golden_set_separates_on_off_brand(params: Params) -> None:
     off = [r for r in rows if r["expected_onbrand"] is False]
     assert on and off, "golden set must contain BOTH on-brand and off-brand rows"
 
-    floor = params.eval_thresholds.message_safety_grounding.min_grounding
+    # V-4 separates on/off-brand at the DISTINCT brand bar, not the V-2 floor.
+    bar = params.eval_thresholds.message_safety_grounding.min_brand_score
 
     for row in on:
         score = heuristic_brand_score(_Record(copy_text=row["text"]), [])
-        assert score >= floor, f"on-brand row scored below floor: {row['label']} ({score})"
+        assert score >= bar, f"on-brand row scored below brand bar: {row['label']} ({score})"
     for row in off:
         score = heuristic_brand_score(_Record(copy_text=row["text"]), [])
-        assert score < floor, f"off-brand row scored at/above floor: {row['label']} ({score})"
+        assert score < bar, f"off-brand row scored at/above brand bar: {row['label']} ({score})"
 
 
 # --------------------------------------------------------------------------- #
@@ -109,15 +110,15 @@ def test_judge_passes_good_denies_bad_via_v4(params: Params, settings_no_key: Se
 # 3. Banned never-rule phrase ⇒ heuristic penalized below the floor.
 # --------------------------------------------------------------------------- #
 def test_never_rule_phrase_sinks_score(params: Params) -> None:
-    floor = params.eval_thresholds.message_safety_grounding.min_grounding
+    bar = params.eval_thresholds.message_safety_grounding.min_brand_score
     record = _Record(
         copy_text="GT School is a mastery-based gifted K-8 program for your family and child."
     )
     clean = heuristic_brand_score(record, [])
-    assert clean >= floor  # on-brand without the banned phrase clears the floor.
+    assert clean >= bar  # on-brand without the banned phrase clears the brand bar.
     # The SAME on-brand copy, now containing an active never-phrase, sinks below.
     dirty = _Record(copy_text=record.copy_text + " act now or lose your spot")
-    assert heuristic_brand_score(dirty, ["act now or lose your spot"]) < floor
+    assert heuristic_brand_score(dirty, ["act now or lose your spot"]) < bar
 
 
 # --------------------------------------------------------------------------- #
@@ -143,12 +144,12 @@ def test_llm_degraded_falls_back_to_heuristic(params: Params, settings_with_key:
             return LLMResult(text="(unavailable)", degraded=True)
 
     judge = BrandJudge(settings=settings_with_key, params=params, client=_DegradedClient())
-    floor = params.eval_thresholds.message_safety_grounding.min_grounding
-    # Off-brand bland copy: the heuristic fallback must keep it BELOW the floor.
-    assert judge(_Record(copy_text="Hello, a quick note about next steps."), []) < floor
-    # On-brand copy: the heuristic fallback clears the floor.
+    bar = params.eval_thresholds.message_safety_grounding.min_brand_score
+    # Off-brand bland copy: the heuristic fallback must keep it BELOW the brand bar.
+    assert judge(_Record(copy_text="Hello, a quick note about next steps."), []) < bar
+    # On-brand copy: the heuristic fallback clears the brand bar.
     on = "GT School is a mastery-based gifted K-8 program for your family and child to enroll."
-    assert judge(_Record(copy_text=on), []) >= floor
+    assert judge(_Record(copy_text=on), []) >= bar
 
 
 # --------------------------------------------------------------------------- #
@@ -160,5 +161,88 @@ def test_llm_unparseable_reply_falls_back(params: Params, settings_with_key: Set
 
     client = AnthropicLLMClient(settings=settings_with_key, transport=transport)
     judge = BrandJudge(settings=settings_with_key, params=params, client=client)
+    bar = params.eval_thresholds.message_safety_grounding.min_brand_score
+    assert judge(_Record(copy_text="Hello, a quick note about next steps."), []) < bar
+
+
+# --------------------------------------------------------------------------- #
+# 7. V-4 brand bar is DECOUPLED from the V-2 grounding floor.
+#    A genuinely on-brand draft scoring ~0.85 (between the 0.80 brand bar and the
+#    0.95 grounding floor) now PASSES V-4 — under the old reused-floor it was
+#    WRONGLY BLOCKED.
+# --------------------------------------------------------------------------- #
+def test_v4_passes_onbrand_score_between_brand_bar_and_grounding_floor(
+    params: Params, settings_no_key: Settings
+) -> None:
+    bar = params.eval_thresholds.message_safety_grounding.min_brand_score
     floor = params.eval_thresholds.message_safety_grounding.min_grounding
-    assert judge(_Record(copy_text="Hello, a quick note about next steps."), []) < floor
+    # The bar must sit strictly below the grounding floor for this to be meaningful.
+    assert bar < floor
+    judged_score = 0.85  # the real LLM brand judge's typical on-brand score.
+    assert bar <= judged_score < floor  # in the band the old reused-floor blocked.
+
+    def judge(record: object, never_rules: list[str]) -> float:
+        return judged_score
+
+    verdict, score = check_v4(
+        _Record(copy_text="GT School mastery-based gifted K-8 program for your family."),
+        settings=settings_no_key,
+        params=params,
+        brand_judge=judge,
+    )
+    assert verdict == RuleVerdict.PASS  # passes the 0.80 brand bar, not the 0.95 floor.
+    assert score == pytest.approx(judged_score)
+
+
+# --------------------------------------------------------------------------- #
+# 8. A clearly off-brand draft scoring below the brand bar still FAILS V-4.
+# --------------------------------------------------------------------------- #
+def test_v4_fails_offbrand_score_below_brand_bar(params: Params, settings_no_key: Settings) -> None:
+    bar = params.eval_thresholds.message_safety_grounding.min_brand_score
+
+    def judge(record: object, never_rules: list[str]) -> float:
+        return bar - 0.01  # just under the brand bar.
+
+    verdict, score = check_v4(
+        _Record(copy_text="A perfectly clean but utterly off-voice corporate memo."),
+        settings=settings_no_key,
+        params=params,
+        brand_judge=judge,
+    )
+    assert verdict == RuleVerdict.FAIL
+    assert score == pytest.approx(bar - 0.01)
+
+
+# --------------------------------------------------------------------------- #
+# 9. Judge unavailable / score None ⇒ V-4 DENY (fail-closed UNCHANGED, §9.4).
+# --------------------------------------------------------------------------- #
+def test_v4_denies_when_judge_returns_none(params: Params, settings_no_key: Settings) -> None:
+    def judge(record: object, never_rules: list[str]) -> None:
+        return None  # judge unavailable.
+
+    verdict, score = check_v4(
+        _Record(copy_text="GT School mastery-based gifted K-8 program for your family."),
+        settings=settings_no_key,
+        params=params,
+        brand_judge=judge,
+    )
+    assert verdict == RuleVerdict.FAIL  # fail-closed: no judge ⇒ deny.
+    assert score is None
+
+
+# --------------------------------------------------------------------------- #
+# 10. V-2 was NOT softened: an unverifiable "4X speed" claim still BLOCKS at the
+#     0.95 grounding floor even when the brand judge would score it on-brand.
+# --------------------------------------------------------------------------- #
+def test_v2_still_blocks_unverifiable_multiplier(params: Params, settings_no_key: Settings) -> None:
+    def generous_judge(record: object, never_rules: list[str]) -> float:
+        return 1.0  # the judge loves it — irrelevant to V-2.
+
+    result = evaluate_message(
+        _Record(copy_text="GT School students learn at 4X speed — gifted K-8 for your family."),
+        settings=settings_no_key,
+        params=params,
+        brand_judge=generous_judge,
+    )
+    assert result.passed is False
+    assert "v2_grounding" in result.failed_rules  # V-2 blocks on the grounding floor.

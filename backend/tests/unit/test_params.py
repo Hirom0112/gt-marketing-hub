@@ -18,7 +18,12 @@ import pytest
 import yaml
 from pydantic import ValidationError
 
-from app.core.params import ContactWindows, CreatorScoringFit, load_params
+from app.core.params import (
+    ContactWindows,
+    CreatorScoringFit,
+    MessageSafetyGrounding,
+    load_params,
+)
 
 # The committed example file is the authoritative source for these tests.
 EXAMPLE_PARAMS = Path(__file__).resolve().parents[3] / "params" / "params.example.yaml"
@@ -32,6 +37,8 @@ def test_loads_work_queue_and_funding_and_thresholds() -> None:
     assert params.funding.award_amounts.tefa_standard == 10474
     assert params.funding.installment_split == [0.25, 0.25, 0.50]
     assert params.eval_thresholds.message_safety_grounding.min_grounding == 0.95
+    # V-4 brand-voice bar is a DISTINCT param from the V-2 grounding floor (INV-11).
+    assert params.eval_thresholds.message_safety_grounding.min_brand_score == 0.80
 
 
 def test_missing_required_key_raises(tmp_path: Path) -> None:
@@ -242,6 +249,34 @@ def test_enrollment_contact_wrong_type_raises() -> None:
     with pytest.raises(ValidationError) as excinfo:
         ContactWindows(grey_window_days="three", overdue_days=4)  # type: ignore[arg-type]
     assert "grey_window_days" in str(excinfo.value)
+
+
+def test_message_safety_grounding_requires_min_brand_score() -> None:
+    """`min_brand_score` is REQUIRED — dropping it fails to load (INV-11, §4.1).
+
+    The V-4 brand-voice bar is its own canonical param, distinct from the V-2
+    `min_grounding` floor. Constructing the model without it must raise so config
+    drift fails the build, never silently defaults.
+    """
+    with pytest.raises(ValidationError) as excinfo:
+        MessageSafetyGrounding(  # type: ignore[call-arg]
+            min_grounding=0.95,
+            max_unverifiable_claims=0,
+            require_coppa_safe=True,
+        )
+    assert "min_brand_score" in str(excinfo.value)
+
+
+def test_message_safety_grounding_min_brand_score_wrong_type_raises() -> None:
+    """A non-numeric `min_brand_score` fails validation (drift fails the build)."""
+    with pytest.raises(ValidationError) as excinfo:
+        MessageSafetyGrounding(
+            min_grounding=0.95,
+            min_brand_score="high",  # type: ignore[arg-type]
+            max_unverifiable_claims=0,
+            require_coppa_safe=True,
+        )
+    assert "min_brand_score" in str(excinfo.value)
 
 
 def test_creator_scoring_fit_weights_must_sum_to_one() -> None:

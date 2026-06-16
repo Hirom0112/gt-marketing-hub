@@ -74,7 +74,8 @@ eval_thresholds:            # FR-4.x — an action whose eval is below threshold
   doc_extraction:           # FR-4.2
     min_accuracy: 0.90
   message_safety_grounding: # FR-4.3 — gates §5.2 and §5.3; failing message blocked, not softened
-    min_grounding: 0.95
+    min_grounding: 0.95     # V-2 grounding floor — unverifiable "4X/2X" claims must be BLOCKED (never lowered)
+    min_brand_score: 0.80   # V-4 brand-voice bar ONLY — distinct from the V-2 grounding floor; the LLM brand judge scores genuinely on-brand copy ~0.85, so reusing 0.95 wrongly blocked it
     max_unverifiable_claims: 0
     require_coppa_safe: true
   close_tips:               # S9 W5 — "how to close" tips grounded in app_form.extracted_fields

@@ -4,8 +4,10 @@ The gate (:mod:`app.core.eval_gate`) consumes a :data:`~app.core.eval_gate.Brand
 — a ``Callable[[GatedRecord, list[str]], float | None]`` — for V-4 (on-brand). It
 returns a brand-conformance score in ``[0, 1]``, or ``None`` to signal "judge
 unavailable" (⇒ V-4 DENY, §9.4). The gate compares the score against
-``eval_thresholds.message_safety_grounding.min_grounding`` (INV-11 — no distinct
-brand-threshold param; the floor is reused).
+``eval_thresholds.message_safety_grounding.min_brand_score`` (INV-11) — the
+DISTINCT V-4 brand-voice bar, NOT the V-2 ``min_grounding`` floor: a genuinely
+on-brand draft scores around 0.85, so reusing the 0.95 grounding floor here
+wrongly blocked it.
 
 This module wires a REAL judge with two backends, chosen by the env edge:
 
@@ -15,8 +17,8 @@ This module wires a REAL judge with two backends, chosen by the env edge:
   — INV-8). The transport is injected, so no live call ever runs under test.
 * **Heuristic** (no key / kill switch): a DETERMINISTIC score (a proposal, INV-2)
   computed offline — reward on-brand GT voice signals, penalize off-brand/hype
-  tokens. Genuinely on-brand copy clears the threshold WITHOUT a live call;
-  off-brand or banned copy scores BELOW it. It NEVER silently passes everything
+  tokens. Genuinely on-brand copy clears the brand bar WITHOUT a live call;
+  off-brand, bland, or banned copy scores BELOW it. It NEVER silently passes everything
   (the gate's V-1/V-2/V-3 still block banned patterns regardless of this judge).
 
 The judge is a *proposal* (INV-2): it informs the human-gated verdict, it does not
@@ -42,8 +44,8 @@ if TYPE_CHECKING:
 #
 # These are the DATA form of the §11.1 GT voice attributes ("confident,
 # mastery-focused, parent-respectful"; "concrete over hype"; "plain language,
-# speak to the parent") — NOT scoring tunables. The numeric weights/score floor
-# are config (see `_HEURISTIC_*` below + the params threshold the GATE applies).
+# speak to the parent") — NOT scoring tunables. The numeric weights/score bar
+# are config (see `_HEURISTIC_*` below + the params `min_brand_score` the GATE applies).
 # --------------------------------------------------------------------------- #
 
 # On-brand GT vocabulary: program-led, mastery-focused, parent-respectful voice.
@@ -124,7 +126,7 @@ _ONBRAND_TERMS: frozenset[str] = frozenset(
 # copy feel like marketing hype rather than GT's plain, confident voice. (The
 # deterministic gate V-2 already BLOCKS the unverifiable "4X/2X/guaranteed" family
 # on its own; these terms broaden the heuristic's off-brand sensitivity so a
-# hype-laden message scores below the floor here too, not only at V-2.)
+# hype-laden message scores below the brand bar here too, not only at V-2.)
 _OFFBRAND_TERMS: frozenset[str] = frozenset(
     {
         "act now",
@@ -152,16 +154,19 @@ _OFFBRAND_TERMS: frozenset[str] = frozenset(
 _WORD_RE = re.compile(r"[a-z0-9][a-z0-9'-]*")
 
 # Heuristic scoring constants (config seam — NOT magic in logic, INV-11 posture:
-# the only value the SAFETY GATE compares against is the params floor; these shape
-# the proposal score the judge emits, and live in this one canonical home).
+# the only value the SAFETY GATE compares against is the params `min_brand_score`
+# bar; these shape the proposal score the judge emits, and live in this one
+# canonical home).
 #
-# On-brand copy must clear the gate floor (`min_grounding`, 0.95 in params), so a
-# clean on-brand message scores at the ceiling; each off-brand hit drops it well
-# below the floor. The base is intentionally just under the ceiling so that copy
-# with NO on-brand signal at all (bland/generic, neither on- nor off-brand) lands
-# BELOW the floor — the judge does not silently pass un-branded copy.
+# On-brand copy must clear the V-4 brand bar (`min_brand_score`, 0.80 in params).
+# The base now sits BELOW that bar — copy with NO on-brand signal at all
+# (bland/generic, neither on- nor off-brand) must land BELOW the bar so the judge
+# does not silently pass un-branded copy. The per-term on-brand bonus lifts a
+# genuinely on-brand message (the weakest golden on-brand row carries ~6 distinct
+# GT-voice terms ⇒ base + 6·bonus = 0.90 ≥ 0.80) over the bar, while each off-brand
+# hit drops it well below. (Base + onbrand_bonus_count is clamped to the ceiling.)
 _HEURISTIC_CEILING = 1.0
-_HEURISTIC_BASE = 0.80  # no-signal baseline — below the 0.95 floor on purpose.
+_HEURISTIC_BASE = 0.60  # no-signal baseline — strictly below the 0.80 brand bar.
 _HEURISTIC_ONBRAND_BONUS = 0.05  # per distinct on-brand term, capped at ceiling.
 _HEURISTIC_OFFBRAND_PENALTY = 0.50  # per off-brand hit — one hit sinks the score.
 
@@ -172,8 +177,8 @@ def heuristic_brand_score(record: GatedRecord, never_rules: list[str]) -> float:
     No LLM, no I/O — a pure function of the record text and the active never-rule
     phrases. Rewards distinct on-brand GT voice terms; penalizes off-brand/hype
     tokens and any active never-rule phrase appearing in the copy. Bland copy with
-    no on-brand signal stays BELOW the gate floor (the judge never silently passes
-    un-branded copy); genuinely on-brand GT copy clears it.
+    no on-brand signal stays BELOW the V-4 brand bar (the judge never silently
+    passes un-branded copy); genuinely on-brand GT copy clears it.
 
     Args:
         record: the gated record (enrollment draft ``.body`` or content
