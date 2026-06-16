@@ -73,6 +73,7 @@ from app.core.params import Params
 from app.core.settings import Settings
 from app.marketing.keep_discard import KeepRefused, discard, keep
 from app.marketing.library import ContentLibrary
+from app.marketing.posted_gallery import GalleryView, build_gallery
 from app.marketing.review_queue import publishes
 from app.observability.log_store import ObservabilityLog
 
@@ -446,3 +447,28 @@ def search_library(
 ) -> list[LibraryAsset]:
     """Search the content library — only kept + validated assets (FR-3.4; §5)."""
     return library.search(search_text=q, tags=tag)
+
+
+@router.get("/content/gallery", response_model=GalleryView)
+def get_posted_gallery(
+    library: LibraryDep,
+    params: ParamsDep,
+    platform: Annotated[
+        str | None, Query(description="drill into one origin platform (the click-in)")
+    ] = None,
+    sort: Annotated[
+        str, Query(description="most_valuable | most_recent (default)")
+    ] = "most_recent",
+) -> GalleryView:
+    """The posted-content gallery — kept posts grouped by platform (FR-3.4; §5).
+
+    Read-only over the kept + validated library (only kept+validated content surfaces —
+    §5 is NOT relaxed; the pure core re-asserts the social-platform filter). With no
+    ``platform`` it returns the per-platform tiles + counts (the gallery landing); with a
+    ``platform`` it drills into that platform's post grid, sorted by ``most_valuable`` or
+    ``most_recent``. Value + posted_at are deterministic SYNTHETIC placeholders (no real
+    engagement / publish-time feed yet, INV-1; the band/window are params-homed, INV-11).
+    Degrades cleanly to empty groups/posts on no data — never a 500.
+    """
+    assets = library.search()
+    return build_gallery(assets, params=params, platform=platform, sort=sort)

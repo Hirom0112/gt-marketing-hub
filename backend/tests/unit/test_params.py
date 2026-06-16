@@ -22,6 +22,7 @@ from app.core.params import (
     ContactWindows,
     CreatorScoringFit,
     MessageSafetyGrounding,
+    PostedGallery,
     load_params,
 )
 
@@ -277,6 +278,33 @@ def test_message_safety_grounding_min_brand_score_wrong_type_raises() -> None:
             require_coppa_safe=True,
         )
     assert "min_brand_score" in str(excinfo.value)
+
+
+def test_params_loads_posted_gallery_block() -> None:
+    """The `posted_gallery` block parses from the committed example (FR-3.4; INV-11).
+
+    The posted-content gallery's synthetic per-post value band (`value_min` /
+    `value_max`) and the deterministic-posted_at window (`posted_within_days`) are
+    the single home for those tunables; the gallery reads them from here, never a
+    code literal. This asserts the committed band/window load.
+    """
+    params = load_params(EXAMPLE_PARAMS)
+
+    assert params.posted_gallery.value_min == 1.0
+    assert params.posted_gallery.value_max == 100.0
+    assert params.posted_gallery.posted_within_days == 365
+
+
+def test_posted_gallery_band_must_be_ordered() -> None:
+    """A value band whose max <= min fails to load (drift fails the build, INV-11)."""
+    with pytest.raises(ValidationError):
+        PostedGallery(value_min=100.0, value_max=1.0, posted_within_days=365)
+
+
+def test_posted_gallery_window_must_be_positive() -> None:
+    """A non-positive posted_within_days fails to load (drift fails the build, INV-11)."""
+    with pytest.raises(ValidationError):
+        PostedGallery(value_min=1.0, value_max=100.0, posted_within_days=0)
 
 
 def test_creator_scoring_fit_weights_must_sum_to_one() -> None:

@@ -128,6 +128,18 @@ library_ingest:             # Phase-1 marketing — distilled scraper-library se
     x_views_max: 130000             # X tops out ~131K views on the strongest post
     youtube_views_max: 50000        # YouTube view ceiling for normalization
 
+posted_gallery:             # FR-3.4 — posted-content gallery: per-post value + a deterministic posted_at
+  # No per-post engagement feed is tracked yet (a real feed is a future wire-up), so each
+  # post carries a DETERMINISTIC SYNTHETIC value: a stable hash of the asset id mapped into
+  # [value_min, value_max]. Same posture as the work-queue value-variance pattern — placeholder,
+  # not a real metric. The range is params-homed so it is never a code literal (INV-11).
+  value_min: 1.0                    # floor of the synthetic value band (most_valuable sort key)
+  value_max: 100.0                  # ceiling of the synthetic value band
+  # The import provenance ts is fixed, so posted_at is also a deterministic synthetic placeholder:
+  # a stable hash backdates each post into the [1, posted_within_days] window before the import epoch,
+  # giving the "most recent" sort a believable spread without a real publish-time feed.
+  posted_within_days: 365           # widest backdate from the import epoch for the synthetic posted_at
+
 creator_scoring:            # FR-3.8 / CONTENT_SPEC §8.1 — creator-discovery fit + authenticity
   fit:                      # sub-weights over [0,1] sub-factors; MUST sum to 1.0
     topic_match_weight: 0.5

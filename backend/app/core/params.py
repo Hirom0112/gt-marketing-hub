@@ -412,6 +412,36 @@ class LibraryIngest(_StrictModel):
         return self
 
 
+class PostedGallery(_StrictModel):
+    """FR-3.4 posted-content gallery — synthetic per-post value + posted_at (INV-11).
+
+    No per-post engagement feed is tracked yet (a real feed is a future wire-up), so the
+    gallery's "most valuable" sort key is a DETERMINISTIC SYNTHETIC value: a stable hash of
+    the asset id mapped into ``[value_min, value_max]`` (the same placeholder posture as the
+    work-queue value spread — never a real metric). ``posted_within_days`` bounds the
+    matching deterministic synthetic ``posted_at`` (the import provenance ts is fixed, so a
+    stable hash backdates each post into the window before the import epoch for the "most
+    recent" sort). Every value is params-homed so none is a code literal.
+    """
+
+    value_min: float
+    value_max: float
+    posted_within_days: int
+
+    @model_validator(mode="after")
+    def _band_and_window_valid(self) -> PostedGallery:
+        if self.value_max <= self.value_min:
+            raise ValueError(
+                "posted_gallery.value_max must be > value_min, got "
+                f"{self.value_max!r} <= {self.value_min!r}"
+            )
+        if self.posted_within_days < 1:
+            raise ValueError(
+                f"posted_gallery.posted_within_days must be >= 1, got {self.posted_within_days!r}"
+            )
+        return self
+
+
 class CreatorScoringFit(_StrictModel):
     """FR-3.8 creator-discovery fit sub-weights (CONTENT_SPEC §8.1).
 
@@ -615,6 +645,7 @@ class Params(_StrictModel):
     geo: Geo
     brand_memory: BrandMemory
     library_ingest: LibraryIngest
+    posted_gallery: PostedGallery
     creator_scoring: CreatorScoring
     kpi: Kpi
     scheduler: Scheduler
