@@ -86,9 +86,7 @@ class _FakeHubSpot:
             for f in g.get("filters", [])
         ]
         operators = [
-            f.get("operator")
-            for g in body.get("filterGroups", [])
-            for f in g.get("filters", [])
+            f.get("operator") for g in body.get("filterGroups", []) for f in g.get("filters", [])
         ]
         assert names == ["gt_synthetic_id"], f"teardown must search gt_synthetic_id, got {names}"
         assert operators == ["HAS_PROPERTY"], f"must use HAS_PROPERTY, got {operators}"

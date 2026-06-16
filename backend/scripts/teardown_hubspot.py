@@ -141,9 +141,7 @@ def _search_synthetic_ids(budgeted: _BudgetedClient, object_type: str) -> list[s
             return ids
 
 
-def _teardown_object_type(
-    budgeted: _BudgetedClient, object_type: str, *, confirm: bool
-) -> int:
+def _teardown_object_type(budgeted: _BudgetedClient, object_type: str, *, confirm: bool) -> int:
     """Search + (optionally) DELETE every synthetic object of one type.
 
     Returns the count of objects deleted (confirm) or that WOULD be deleted
@@ -161,9 +159,7 @@ def _teardown_object_type(
     return len(ids)
 
 
-def teardown_synthetic_objects(
-    client: httpx.Client, *, cap: int, confirm: bool
-) -> TeardownSummary:
+def teardown_synthetic_objects(client: httpx.Client, *, cap: int, confirm: bool) -> TeardownSummary:
     """Tear down every synthetic object (contacts, deals, notes) in the portal.
 
     Args:

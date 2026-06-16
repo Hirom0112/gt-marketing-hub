@@ -33,8 +33,9 @@ from app.main import app
 client = TestClient(app)
 
 # A synthetic, NON-secret token value used only to assert it is NEVER echoed back in
-# the response body. Not a real credential (NFR-1; no live call is ever made).
-_FAKE_TOKEN = "pat-na1-synthetic-not-a-real-secret-0000"
+# the response body. Deliberately NOT shaped like a real HubSpot `pat-na…` token so
+# the PII/secret scanner doesn't flag the fixture (NFR-1; no live call is ever made).
+_FAKE_TOKEN = "synthetic-crm-token-not-a-real-secret-0000"
 
 
 @pytest.fixture(autouse=True)

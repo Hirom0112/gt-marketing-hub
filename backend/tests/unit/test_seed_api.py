@@ -102,6 +102,11 @@ class _RecordingAdapter(CRMAdapter):
     def send_message(self, message: dict[str, Any]) -> SendResult:
         return SendResult(simulated=False, recorded_id="note-1", channel="email")
 
+    def mirror_social_post(self, dispatch: object, *, request: object) -> str | None:
+        # Not exercised on the enrollment-seed path (marketing's W3 social mirror);
+        # present only so this CRMAdapter double is instantiable after the merge.
+        return None
+
 
 def test_seed_pushes_family_and_returns_live_deal_id() -> None:
     """Seed calls push_family on the deterministic path and returns the live deal id."""
