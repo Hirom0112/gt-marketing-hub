@@ -153,9 +153,17 @@
   --dur: 140ms;
 
   /* ---- app shell (GT Pulse: full-height left nav rail + per-page header) --- */
-  --sidebar-w: 84px; /* the vertical nav rail — widened so the brand tile + labels breathe */
+  --sidebar-w: 120px; /* the vertical nav rail — wide enough for the big brand logo + labels */
   --header-h: 76px; /* the page-header zone min height */
-  --brand-tile: 56px; /* the sidebar GT Pulse logo width inside its dark tile */
+  --brand-tile: 100px; /* the sidebar GT Pulse logo width (the logo carries the wordmark) */
+  /* GT Pulse blue nav rail — the transparent logo sits CLEAR on this dark blue. */
+  --sidebar-bg: #0c2236; /* dark navy-blue rail */
+  --sidebar-edge: #17385a; /* the rail's right border */
+  --sidebar-fg: #93a8be; /* muted nav text/icon on blue */
+  --sidebar-fg-active: #f2f8ff; /* active nav text/icon */
+  --sidebar-hover: #14324b; /* hover backdrop */
+  --sidebar-active: #1d456a; /* active item backdrop */
+  --sidebar-accent: #36a9e6; /* the logo cyan — active icon tint */
 }
 
 /* ---- base reset ----------------------------------------------------------- */
@@ -250,29 +258,25 @@ figure {
   flex-direction: column;
   align-items: center;
   gap: var(--s-2);
-  padding: var(--s-3) 0;
-  background: var(--surface);
-  border-right: 1px solid var(--line);
+  padding: var(--s-4) 0 var(--s-3);
+  background: var(--sidebar-bg);
+  border-right: 1px solid var(--sidebar-edge);
 }
 
 /* ---- the GT Pulse brand block at the top of the rail ---------------------- */
-/* The logo art is dark/glowing-blue, designed for dark backgrounds — so it sits
-   inside a small dark rounded tile to read well on the light rail. */
+/* The logo is transparent and glowing-blue — it sits CLEAR (no tile) directly on
+   the dark blue rail, where its white "GT" + cyan mark read well. */
 .sidebar-brand {
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: var(--s-1);
-  padding: 0 var(--s-2) var(--s-1);
+  padding: 0 var(--s-2) var(--s-3);
 }
 
 .sidebar-brand-tile {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  background: var(--ink);
-  border-radius: var(--r-md);
-  padding: var(--s-2);
 }
 
 .sidebar-brand-logo {
@@ -316,20 +320,21 @@ figure {
   gap: 4px;
   padding: var(--s-2) 2px;
   border-radius: var(--r-sm);
-  color: var(--muted);
+  color: var(--sidebar-fg);
   transition:
     background var(--dur) var(--ease),
     color var(--dur) var(--ease);
 }
 .sidebar-item:hover {
-  background: var(--surface-2);
+  background: var(--sidebar-hover);
+  color: var(--sidebar-fg-active);
 }
 .sidebar-item.is-active {
-  background: var(--flow-wash);
-  color: var(--flow-ink);
+  background: var(--sidebar-active);
+  color: var(--sidebar-fg-active);
 }
 .sidebar-item.is-active .sidebar-item-icon {
-  color: var(--flow);
+  color: var(--sidebar-accent);
 }
 
 .sidebar-item-icon {

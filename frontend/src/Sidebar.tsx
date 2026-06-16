@@ -60,7 +60,6 @@ export default function Sidebar<K extends string>({
             alt="GT Pulse"
           />
         </span>
-        <span className="sidebar-brand-label">GT Pulse</span>
       </div>
 
       <div className="sidebar-group sidebar-group-primary">
