@@ -478,43 +478,50 @@ export default function EnrollmentWorkspace(): JSX.Element {
 // (INV-11 spirit: nothing hardcoded). A-17: a fresh lead is still inside its
 // contact window, so it is NOT a stall the loop is leaving on the table.
 //
-// In the S14 shell this renders as a compact set of stat cells in the TOP-RIGHT
-// of the page header. The workspace keeps ownership of the data (the /work-queue
-// fetch doesn't move — least-coupled), and PORTALS the summary into the shell's
-// `#situation-slot`. When that slot is absent (the workspace mounted on its own,
-// e.g. in a unit test), it falls back to rendering inline at the top of the
-// content. Either way the `situation-bar` + figure testids are stable.
+// In the S14 shell this renders as a SINGLE bordered pill in the TOP-RIGHT of
+// the full-width brand bar: the three figures inline, separated by thin vertical
+// dividers (⚠ N ACTIVE STALLS │ N OVERDUE │ $X AT RISK). The workspace keeps
+// ownership of the data (the /work-queue fetch doesn't move — least-coupled),
+// and PORTALS the pill into the shell's `#situation-slot`. When that slot is
+// absent (the workspace mounted on its own, e.g. in a unit test), it falls back
+// to rendering inline. Either way the `situation-bar` + figure testids are
+// stable.
 function SituationBar({ rows }: { rows: readonly RecoverableRow[] }): JSX.Element {
   const { stalled, overdue, recoverableValue } = summarizeRecovery(rows);
 
   const summary = (
-    <div data-testid="situation-bar" className="situation-summary">
-      <div className="situation-cell">
-        <span className="lab situation-cell-label">Active stalls</span>
+    <div data-testid="situation-bar" className="situation-pill">
+      <div className="situation-pill-cell">
+        <span className="situation-pill-glyph" aria-hidden>
+          ⚠
+        </span>
         <span
-          className="mono situation-cell-figure"
+          className="mono situation-pill-figure is-signal"
           data-testid="situation-stalled"
         >
           {stalled}
         </span>
+        <span className="lab situation-pill-label">Active stalls</span>
       </div>
-      <div className="situation-cell">
-        <span className="lab situation-cell-label">Overdue</span>
+      <span className="situation-pill-divider" aria-hidden />
+      <div className="situation-pill-cell">
         <span
-          className="mono situation-cell-figure is-signal"
+          className="mono situation-pill-figure is-signal"
           data-testid="situation-overdue"
         >
           {overdue}
         </span>
+        <span className="lab situation-pill-label">Overdue</span>
       </div>
-      <div className="situation-cell">
-        <span className="lab situation-cell-label">$ at risk</span>
+      <span className="situation-pill-divider" aria-hidden />
+      <div className="situation-pill-cell">
         <span
-          className="mono situation-cell-figure is-money"
+          className="mono situation-pill-figure is-money"
           data-testid="situation-recoverable"
         >
           {fmtUSD(recoverableValue)}
         </span>
+        <span className="lab situation-pill-label">At risk</span>
       </div>
     </div>
   );

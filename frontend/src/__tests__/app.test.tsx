@@ -9,6 +9,23 @@ import { DEFAULT_API_BASE_URL } from '../config';
 // corner). These tests assert the sidebar nav IA and the per-workspace page
 // title rather than the retired "GT Growth Cockpit" top heading.
 describe('App shell', () => {
+  it('renders the full-width brand bar with the GT wordmark', () => {
+    render(<App />);
+    const topbar = screen.getByTestId('app-topbar');
+    expect(topbar).toBeInTheDocument();
+    expect(within(topbar).getByTestId('app-wordmark')).toHaveTextContent(
+      /GT Growth Cockpit/i,
+    );
+    // The API chip lives in the brand bar's far corner.
+    expect(within(topbar).getByTestId('api-base-url')).toBeInTheDocument();
+  });
+
+  it('keeps the sidebar nav-only (no brand mark — it moved to the brand bar)', () => {
+    render(<App />);
+    const sidebar = screen.getByTestId('sidebar');
+    expect(within(sidebar).queryByTestId('app-wordmark')).toBeNull();
+  });
+
   it('renders the left sidebar with the five nav items', () => {
     render(<App />);
     const sidebar = screen.getByTestId('sidebar');

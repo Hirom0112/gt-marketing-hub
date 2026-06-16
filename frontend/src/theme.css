@@ -151,10 +151,12 @@
   --ease: cubic-bezier(0.2, 0.6, 0.2, 1);
   --dur: 140ms;
 
-  /* ---- app shell (S14: left nav rail + clean header) ---------------------- */
+  /* ---- app shell (S14: full-width brand bar + left nav rail + header) ------ */
+  --topbar-h: 58px; /* the full-width brand bar height (sticky top) */
   --sidebar-w: 72px; /* the thin vertical icon rail */
   --header-h: 76px; /* the page-header zone min height */
-  --brand-mark: 40px; /* the GT rounded-square mark size */
+  --brand-mark: 40px; /* the sidebar GT rounded-square mark size (retired) */
+  --topbar-mark: 30px; /* the brand-bar GT rounded-square mark size */
 }
 
 /* ---- base reset ----------------------------------------------------------- */
@@ -222,50 +224,52 @@ figure {
 }
 
 /* =============================================================================
-   App shell (S14) — a left vertical nav rail + a clean page-header zone.
+   App shell (S14) — a full-width brand bar over a [nav rail][main] row.
 
-   Layout: [sidebar fixed-width][main fluid]. The main column keeps the prior
-   fluid behaviour (full width, scaling padding, no hard max-width). The header
-   carries a mono eyebrow + a large page title on the left, and the situation
-   summary + API chip on the right.
+   Layout: a column — a sticky full-width brand bar (GT mark + wordmark left;
+   situation pill + API chip right), then a [sidebar fixed-width][main fluid]
+   row beneath it. The main column keeps the prior fluid behaviour (full width,
+   scaling padding, no hard max-width). Each page-header carries a large page
+   title with a mono eyebrow below it.
 ============================================================================= */
 .app-shell {
-  display: grid;
-  grid-template-columns: var(--sidebar-w) minmax(0, 1fr);
+  display: flex;
+  flex-direction: column;
   min-height: 100vh;
   background: var(--paper);
   color: var(--ink);
 }
 
-/* ---- the left nav rail ---------------------------------------------------- */
-.sidebar {
+/* ---- the full-width top brand bar ----------------------------------------- */
+.app-topbar {
   position: sticky;
   top: 0;
-  align-self: start;
-  height: 100vh;
+  z-index: 20;
   display: flex;
-  flex-direction: column;
   align-items: center;
-  gap: var(--s-2);
-  padding: var(--s-3) 0;
+  justify-content: space-between;
+  gap: var(--s-4);
+  height: var(--topbar-h);
+  padding: 0 clamp(12px, 1.4vw, 24px);
   background: var(--surface);
-  border-right: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
 }
 
-.sidebar-brand {
+.app-topbar-brand {
   display: flex;
-  justify-content: center;
-  padding-bottom: var(--s-2);
-  margin-bottom: var(--s-1);
+  align-items: center;
+  gap: var(--s-2);
+  min-width: 0;
 }
 
 /* The dark GT rounded-square mark — white mono "GT" on --ink. */
-.sidebar-brand .mark {
+.app-topbar-mark {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: var(--brand-mark);
-  height: var(--brand-mark);
+  flex: none;
+  width: var(--topbar-mark);
+  height: var(--topbar-mark);
   border-radius: var(--r-sm);
   background: var(--ink);
   color: var(--on-ink);
@@ -273,6 +277,50 @@ figure {
   font-size: var(--fs-sm);
   font-weight: 700;
   letter-spacing: 0.02em;
+}
+
+.app-topbar-wordmark {
+  font-family: var(--sans);
+  font-size: var(--fs-md);
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  color: var(--ink);
+  white-space: nowrap;
+}
+
+.app-topbar-aside {
+  display: flex;
+  align-items: center;
+  gap: var(--s-3);
+  margin-left: auto;
+  min-width: 0;
+}
+
+.app-topbar-situation:empty {
+  display: none;
+}
+
+/* ---- the [sidebar][main] row beneath the brand bar ------------------------ */
+.app-row {
+  display: grid;
+  grid-template-columns: var(--sidebar-w) minmax(0, 1fr);
+  flex: 1;
+  min-height: 0;
+}
+
+/* ---- the left nav rail ---------------------------------------------------- */
+.sidebar {
+  position: sticky;
+  top: var(--topbar-h);
+  align-self: start;
+  height: calc(100vh - var(--topbar-h));
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--s-2);
+  padding: var(--s-3) 0;
+  background: var(--surface);
+  border-right: 1px solid var(--line);
 }
 
 .sidebar-group {
@@ -370,51 +418,57 @@ figure {
   margin: 0;
 }
 
-.page-header-aside {
-  display: flex;
-  align-items: center;
-  gap: var(--s-4);
-  margin-left: auto;
-}
-
-.page-header-situation:empty {
-  display: none;
-}
-
 .page-body {
   padding: var(--s-5) clamp(16px, 1.8vw, 36px) 64px;
 }
 
-/* The header situation summary — compact stat cells, right-aligned. */
-.situation-summary {
-  display: flex;
-  align-items: stretch;
-  gap: var(--s-4);
+/* The situation summary — ONE bordered white pill holding the three figures
+   inline, separated by thin vertical dividers. Lives in the brand bar's right
+   side (portaled into #situation-slot from the Enrollment workspace). */
+.situation-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s-3);
+  padding: 6px var(--s-3);
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  white-space: nowrap;
 }
 
-.situation-cell {
-  display: flex;
-  flex-direction: column;
-  align-items: flex-end;
-  gap: 1px;
-  line-height: 1.1;
+.situation-pill-cell {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
 }
 
-.situation-cell-label {
-  color: var(--muted);
+.situation-pill-divider {
+  align-self: stretch;
+  width: 1px;
+  background: var(--line-2);
 }
 
-.situation-cell-figure {
+.situation-pill-glyph {
+  color: var(--signal);
+  font-weight: 700;
+  line-height: 1;
+}
+
+.situation-pill-figure {
   font-size: var(--fs-md);
   font-weight: 700;
   color: var(--ink);
   font-variant-numeric: tabular-nums;
 }
-.situation-cell-figure.is-signal {
-  color: var(--signal-ink);
+.situation-pill-figure.is-signal {
+  color: var(--signal);
 }
-.situation-cell-figure.is-money {
+.situation-pill-figure.is-money {
   color: var(--gate-ink);
+}
+
+.situation-pill-label {
+  color: var(--muted);
 }
 
 /* =============================================================================

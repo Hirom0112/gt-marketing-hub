@@ -1,10 +1,11 @@
 import type { LucideIcon } from 'lucide-react';
 
-// The left vertical nav rail (S14 shell redesign). A thin icon rail: the dark
-// "GT" brand mark at the top, then a vertical stack of workspace items (icon
-// above a mono micro-label), with Settings + Help pushed to the bottom. Drives
-// the same Workspace state the old top-bar toggle did — pure presentational,
-// no fetch, token-driven. The active item gets a soft flow-wash highlight;
+// The left vertical nav rail (S14 shell redesign). A thin icon rail sitting
+// BELOW the full-width brand bar: a vertical stack of workspace items (icon
+// above a mono micro-label), with Settings + Help pushed to the bottom. The GT
+// brand mark now lives in the top brand bar, so the rail is nav-only. Drives the
+// same Workspace state the old top-bar toggle did — pure presentational, no
+// fetch, token-driven. The active item gets a soft flow-wash highlight;
 // inactive items are muted; hover lifts to surface-2.
 export interface SidebarItem<K extends string> {
   key: K;
@@ -51,12 +52,6 @@ export default function Sidebar<K extends string>({
       role="tablist"
       aria-label="Workspace"
     >
-      <div className="sidebar-brand">
-        <span className="mark" aria-label="GT Growth Cockpit">
-          GT
-        </span>
-      </div>
-
       <div className="sidebar-group sidebar-group-primary">
         {primary.map(renderItem)}
       </div>

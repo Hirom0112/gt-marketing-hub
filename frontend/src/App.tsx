@@ -16,15 +16,17 @@ import LeadershipWorkspace from './workspaces/LeadershipWorkspace';
 import SettingsWorkspace from './workspaces/SettingsWorkspace';
 import HelpWorkspace from './workspaces/HelpWorkspace';
 
-// S14 app shell — a LEFT vertical nav rail + a clean page-header zone. The
-// sidebar (brand mark + icon/label items) drives the same single-mount
-// Workspace state the old top-bar toggle did; Settings + Help join the union as
-// real config/help surfaces. The main area stays fully fluid (width:100%,
-// scaling padding) — no hard max-width. Each workspace gets a mono eyebrow + a
-// large page title in the header; the API base URL chip (TECH_STACK §5.1) lives
-// in the far corner. The Enrollment situation summary stays owned by its
-// workspace (least-coupled — the /work-queue fetch doesn't move) and renders as
-// a compact right-aligned summary at the top of its content.
+// S14 app shell — a full-width top BRAND BAR over a [LEFT nav rail][main] row.
+// The brand bar carries the GT mark + "GT Growth Cockpit" wordmark on the left,
+// and on the right the Enrollment situation summary (a single bordered pill)
+// plus the API base URL chip (TECH_STACK §5.1) in the far corner. Below it, the
+// sidebar is nav-only (icon/label items) and drives the single-mount Workspace
+// state; Settings + Help join the union as real config/help surfaces. The main
+// area stays fully fluid (width:100%, scaling padding) — no hard max-width. Each
+// workspace's page-header carries a large page title with a mono eyebrow below
+// it. The Enrollment situation summary stays owned by its workspace (least-
+// coupled — the /work-queue fetch doesn't move) and PORTALS into the brand bar's
+// `#situation-slot`.
 type Workspace =
   | 'enrollment'
   | 'marketing'
@@ -65,40 +67,51 @@ export default function App(): JSX.Element {
 
   return (
     <div className="app-shell">
-      <Sidebar
-        primary={PRIMARY_NAV}
-        secondary={SECONDARY_NAV}
-        active={workspace}
-        onSelect={setWorkspace}
-      />
-
-      <main className="app-main">
-        <header className="page-header">
-          <div className="page-header-lede">
-            <span className="lab page-eyebrow">{meta.eyebrow}</span>
-            <h1 className="page-title" data-testid="page-title">
-              {meta.title}
-            </h1>
-          </div>
-          <div className="page-header-aside">
-            {/* The Enrollment situation summary renders into this slot via the
-                workspace's own SituationBar (kept where the /work-queue fetch
-                lives); other workspaces leave it empty. */}
-            <div id="situation-slot" className="page-header-situation" />
-            <Chip tone="flow" title="Connected API base URL (TECH_STACK §5.1)">
-              <span data-testid="api-base-url">API · {apiBaseUrl}</span>
-            </Chip>
-          </div>
-        </header>
-
-        <div className="page-body">
-          {workspace === 'enrollment' && <EnrollmentWorkspace />}
-          {workspace === 'marketing' && <MarketingWorkspace />}
-          {workspace === 'leadership' && <LeadershipWorkspace />}
-          {workspace === 'settings' && <SettingsWorkspace />}
-          {workspace === 'help' && <HelpWorkspace />}
+      <header className="app-topbar" data-testid="app-topbar">
+        <div className="app-topbar-brand" data-testid="app-wordmark">
+          <span className="app-topbar-mark" aria-hidden>
+            GT
+          </span>
+          <span className="app-topbar-wordmark">GT Growth Cockpit</span>
         </div>
-      </main>
+        <div className="app-topbar-aside">
+          {/* The Enrollment situation summary renders into this slot via the
+              workspace's own SituationBar (kept where the /work-queue fetch
+              lives); other workspaces leave it empty. */}
+          <div id="situation-slot" className="app-topbar-situation" />
+          <Chip tone="flow" title="Connected API base URL (TECH_STACK §5.1)">
+            <span data-testid="api-base-url">API · {apiBaseUrl}</span>
+          </Chip>
+        </div>
+      </header>
+
+      <div className="app-row">
+        <Sidebar
+          primary={PRIMARY_NAV}
+          secondary={SECONDARY_NAV}
+          active={workspace}
+          onSelect={setWorkspace}
+        />
+
+        <main className="app-main">
+          <header className="page-header">
+            <div className="page-header-lede">
+              <h1 className="page-title" data-testid="page-title">
+                {meta.title}
+              </h1>
+              <span className="lab page-eyebrow">{meta.eyebrow}</span>
+            </div>
+          </header>
+
+          <div className="page-body">
+            {workspace === 'enrollment' && <EnrollmentWorkspace />}
+            {workspace === 'marketing' && <MarketingWorkspace />}
+            {workspace === 'leadership' && <LeadershipWorkspace />}
+            {workspace === 'settings' && <SettingsWorkspace />}
+            {workspace === 'help' && <HelpWorkspace />}
+          </div>
+        </main>
+      </div>
     </div>
   );
 }
