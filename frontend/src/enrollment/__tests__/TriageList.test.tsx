@@ -330,4 +330,61 @@ describe('TriageList (S13 redesign)', () => {
     const sortSelect = screen.getByTestId('list-sort') as HTMLSelectElement;
     expect(sortSelect.value).toBe('likely');
   });
+
+  it('paginates the all scope at 15 rows/page with a pager', async () => {
+    // 38 stalled rows → 3 pages of 15/15/8. recoverability descends with the
+    // index so the ranked order (likely-sort) is the build order — page 0 holds
+    // rows 0–14, page 1 holds 15–29.
+    const many = Array.from({ length: 38 }, (_, i) => ({
+      family_id: `00000000-0000-4000-8000-${String(i).padStart(12, '0')}`,
+      display_name: `Family ${i}`,
+      current_stage: 'enroll',
+      score: 0.5,
+      recoverability: 1 - i / 100,
+      value: 10000,
+      num_children: 1,
+      funding_type: 'self_pay',
+      stall_date: '2026-06-13T09:00:00Z',
+      recoverable_now: 1000 - i,
+      freshness: 0.5,
+      contact_status: 'overdue',
+      last_contact_at: null,
+      recovery_state: 'stalled',
+    }));
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => ({ ok: true, status: 200, json: async () => many })),
+    );
+    renderList({ scope: 'all' });
+    await screen.findByTestId('triage-list');
+
+    // Only one page (15) of the 38 rows renders, and the pager reports the total.
+    expect(screen.getAllByTestId(/^drill-row-[a-f0-9-]+$/)).toHaveLength(15);
+    expect(screen.getByTestId('triage-pager')).toBeInTheDocument();
+    expect(screen.getByTestId('triage-pager-count')).toHaveTextContent('38 stalled');
+    // Page 0 holds row 0, not row 15.
+    expect(
+      screen.getByTestId('drill-row-00000000-0000-4000-8000-000000000000'),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByTestId('drill-row-00000000-0000-4000-8000-000000000015'),
+    ).not.toBeInTheDocument();
+
+    // Advancing a page swaps in the next 15 (row 15 appears, row 0 leaves).
+    fireEvent.click(screen.getByTestId('triage-page-next'));
+    expect(
+      screen.getByTestId('drill-row-00000000-0000-4000-8000-000000000015'),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByTestId('drill-row-00000000-0000-4000-8000-000000000000'),
+    ).not.toBeInTheDocument();
+    expect(screen.getAllByTestId(/^drill-row-[a-f0-9-]+$/)).toHaveLength(15);
+  });
+
+  it('shows no pager when the list fits one page', async () => {
+    vi.stubGlobal('fetch', activeFetch()); // 3 rows
+    renderList({ scope: 'all' });
+    await screen.findByTestId('triage-list');
+    expect(screen.queryByTestId('triage-pager')).not.toBeInTheDocument();
+  });
 });
