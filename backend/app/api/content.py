@@ -89,6 +89,15 @@ CONTENT_EVAL_NAME = "message_safety_grounding"
 # above it is clamped down, never errored.
 CAMPAIGN_COUNT_MAX = 8
 
+# campaign-tagging-on-keep: the namespaced key under which a campaign batch persists
+# its axes (theme + target GEO prompt) into the logged proposal payload at GENERATE
+# time, so the INV-2 keep path can read them back from the spine (the candidate is
+# rebuilt from the log, never client-trusted). It is NOT a ContentCandidate field
+# (that schema is frozen + extra="forbid"); it rides ALONGSIDE the candidate dump in
+# the proposal payload and is STRIPPED before the candidate is reconstructed. A
+# non-campaign proposal has no such key ⇒ no campaign tags on keep (graceful).
+CAMPAIGN_AXES_KEY = "_campaign"
+
 # --- dependency aliases (Annotated keeps the call in the type, not a default arg) ---
 ParamsDep = Annotated[Params, Depends(get_params)]
 SettingsDep = Annotated[Settings, Depends(get_settings_dep)]
@@ -129,8 +138,26 @@ def generate_content(
     return _project_outcome(outcome, log=log)
 
 
+def _payload_for(
+    candidate: ContentCandidate, campaign_axes: dict[str, object] | None
+) -> dict[str, object]:
+    """The logged proposal payload: the candidate dump + (optional) campaign axes.
+
+    campaign-tagging-on-keep / INV-2: the campaign axes are persisted ALONGSIDE the
+    candidate dump under :data:`CAMPAIGN_AXES_KEY` so the keep path can read them back
+    from the spine. A non-campaign batch passes ``None`` ⇒ a plain candidate dump.
+    """
+    payload: dict[str, object] = candidate.model_dump(mode="json")
+    if campaign_axes is not None:
+        payload[CAMPAIGN_AXES_KEY] = campaign_axes
+    return payload
+
+
 def _project_outcome(
-    outcome: ContentBatchOutcome, *, log: ObservabilityLog
+    outcome: ContentBatchOutcome,
+    *,
+    log: ObservabilityLog,
+    campaign_axes: dict[str, object] | None = None,
 ) -> ContentGenerateResponse:
     """Log every candidate then FLAT-project the batch into a `ContentGenerateResponse`.
 
@@ -140,6 +167,10 @@ def _project_outcome(
     ``passed=True`` (keepable); a withheld candidate carries ``surfaced=False`` + its
     ``failed_rules`` so the operator SEES the gate block it — it has a ``proposal_id`` but
     is never keepable (the keep endpoint 409s on an un-passed eval, INV-3).
+
+    ``campaign_axes`` (theme + target GEO prompt) is persisted into each logged proposal
+    payload when the batch is a CAMPAIGN batch, so a kept candidate can be tagged with its
+    campaign on the INV-2 rebuild-from-spine keep path (campaign-tagging-on-keep).
     """
     candidates: list[ContentCandidateResponse] = []
     batch_id = ""
@@ -150,7 +181,7 @@ def _project_outcome(
             proposal_id=proposal_id,
             flow=CONTENT_FLOW,
             schema_version=CONTENT_SCHEMA_VERSION,
-            payload=item.candidate.model_dump(mode="json"),
+            payload=_payload_for(item.candidate, campaign_axes),
         )
         log.log_eval(
             proposal_id=proposal_id,
@@ -177,7 +208,7 @@ def _project_outcome(
             proposal_id=proposal_id,
             flow=CONTENT_FLOW,
             schema_version=CONTENT_SCHEMA_VERSION,
-            payload=blocked.candidate.model_dump(mode="json"),
+            payload=_payload_for(blocked.candidate, campaign_axes),
         )
         log.log_eval(
             proposal_id=proposal_id,
@@ -250,10 +281,14 @@ def generate_campaign(
         brand_rules=brand_rules,
     )
 
-    base = _project_outcome(outcome, log=log)
-    # TODO(campaign-tag): when campaign-tagging-on-keep lands, thread these axes into the
-    # keep/library write path so a kept candidate is tagged with its campaign theme +
-    # target GEO prompt. OUT OF SCOPE for this slice — generate + render only.
+    # Persist the campaign axes into each logged proposal payload (INV-2 spine) so the
+    # keep path can read them back and tag the kept asset with its campaign theme +
+    # target GEO prompt (campaign-tagging-on-keep). theme is always present; the GEO
+    # prompt is optional (None ⇒ no geo tag on keep).
+    campaign_axes: dict[str, object] = {"theme": request.theme}
+    if request.target_geo_prompt is not None:
+        campaign_axes["target_geo_prompt"] = request.target_geo_prompt
+    base = _project_outcome(outcome, log=log, campaign_axes=campaign_axes)
     return CampaignGenerateResponse(
         batch_id=base.batch_id,
         candidates=base.candidates,
@@ -271,13 +306,35 @@ def generate_campaign(
 def _candidate_from_payload(payload: dict[str, object]) -> ContentCandidate | None:
     """Reconstruct the surfaced candidate from its logged proposal payload (INV-2).
 
-    Returns ``None`` if the payload does not parse as a content candidate (a
-    non-content proposal id was addressed to this route) — the caller 404s.
+    Strips the optional :data:`CAMPAIGN_AXES_KEY` side-channel (campaign axes ride
+    ALONGSIDE the candidate dump, not inside it — :class:`ContentCandidate` is frozen +
+    extra="forbid") before validating. Returns ``None`` if the remainder does not parse
+    as a content candidate (a non-content proposal id was addressed to this route) — the
+    caller 404s.
     """
+    candidate_payload = {k: v for k, v in payload.items() if k != CAMPAIGN_AXES_KEY}
     try:
-        return ContentCandidate.model_validate(payload)
+        return ContentCandidate.model_validate(candidate_payload)
     except ValidationError:
         return None
+
+
+def _campaign_axes_from_payload(payload: dict[str, object]) -> tuple[str | None, str | None]:
+    """Read the persisted campaign axes (theme, target GEO prompt) back from the spine.
+
+    Returns ``(None, None)`` for a non-campaign proposal (no :data:`CAMPAIGN_AXES_KEY`),
+    so keep produces no campaign/geo tags (graceful). INV-2: the axes come from the
+    logged proposal, never from client input at keep time.
+    """
+    axes = payload.get(CAMPAIGN_AXES_KEY)
+    if not isinstance(axes, dict):
+        return (None, None)
+    theme = axes.get("theme")
+    geo = axes.get("target_geo_prompt")
+    return (
+        theme if isinstance(theme, str) else None,
+        geo if isinstance(geo, str) else None,
+    )
 
 
 def _verdict_from_eval(passed: bool) -> ValidationResult:
@@ -337,6 +394,9 @@ def decide_content(
     # KEEP/APPROVE — the publishing path. Require a PASSED eval (INV-3 / FR-4.3).
     eval_passed = bool(audit.evals and audit.evals[-1].passed)
     validation = _verdict_from_eval(eval_passed)
+    # Read the campaign axes back from the logged proposal (INV-2 spine; never client
+    # input). A non-campaign proposal yields (None, None) ⇒ no campaign/geo tags.
+    campaign_theme, target_geo_prompt = _campaign_axes_from_payload(audit.proposal.payload)
     try:
         asset: LibraryAsset = keep(
             proposal_id,
@@ -346,6 +406,8 @@ def decide_content(
             library=library,
             log=log,
             params=params,
+            campaign_theme=campaign_theme,
+            target_geo_prompt=target_geo_prompt,
         )
     except KeepRefused as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc

@@ -44,6 +44,16 @@ if TYPE_CHECKING:
 # The audited reviewer identity. v1 has no auth; the operator is a fixed seam (A-3).
 DEFAULT_HUMAN = "operator"
 
+# Namespaced tag prefixes for the campaign axes a kept candidate carries
+# (campaign-tagging-on-keep). These are LABELS, not tunables — they identify a
+# kept asset's campaign theme and target GEO prompt so it is unambiguous and
+# searchable in the library (FR-3.4). They are module constants, NOT params-file
+# entries (CLAUDE §1 INV-11 / the task's tagging convention: label strings have no
+# canonical params home). A candidate from the non-campaign route carries neither
+# axis ⇒ neither tag is added (graceful).
+CAMPAIGN_TAG_PREFIX = "campaign:"
+GEO_TAG_PREFIX = "geo:"
+
 # Map a content channel/format to a library asset type (§5). Falls back to COPY
 # for any channel/format not in the explicit map — copy is the safe default unit.
 _FORMAT_TO_ASSET_TYPE: dict[ContentFormat, LibraryAssetType] = {
@@ -63,11 +73,28 @@ class KeepRefused(Exception):
     """
 
 
-def _search_text_for(candidate: ContentCandidate) -> str:
+def _campaign_tags(campaign_theme: str | None, target_geo_prompt: str | None) -> list[str]:
+    """The namespaced campaign-axis tags for a kept candidate (campaign-tagging-on-keep).
+
+    Returns ``campaign:<theme>`` and/or ``geo:<prompt>`` for whichever axes are
+    present. A candidate from the non-campaign route passes neither ⇒ an empty
+    list (no campaign/geo tags — graceful, no crash).
+    """
+    tags: list[str] = []
+    if campaign_theme:
+        tags.append(f"{CAMPAIGN_TAG_PREFIX}{campaign_theme}")
+    if target_geo_prompt:
+        tags.append(f"{GEO_TAG_PREFIX}{target_geo_prompt}")
+    return tags
+
+
+def _search_text_for(candidate: ContentCandidate, campaign_tags: list[str]) -> str:
     """Denormalize a lower-cased search index from a candidate (FR-3.4 promotion).
 
     The library searches over this single field, so we build it once on promotion
-    from the human-meaningful text: concept + copy + audience + channel + format.
+    from the human-meaningful text: concept + copy + audience + channel + format,
+    PLUS any campaign-axis tags so a kept campaign asset is findable by its theme /
+    target GEO prompt (campaign-tagging-on-keep).
     """
     parts = [
         candidate.concept,
@@ -75,13 +102,28 @@ def _search_text_for(candidate: ContentCandidate) -> str:
         candidate.audience_tag.value,
         candidate.channel.value,
         candidate.format.value,
+        *campaign_tags,
     ]
     return " ".join(part for part in parts if part).lower()
 
 
-def _asset_from_candidate(candidate: ContentCandidate, validation_id: str) -> LibraryAsset:
-    """Build the kept + validated :class:`LibraryAsset` promoted on keep (§5/FR-3.4)."""
+def _asset_from_candidate(
+    candidate: ContentCandidate,
+    validation_id: str,
+    *,
+    campaign_theme: str | None = None,
+    target_geo_prompt: str | None = None,
+) -> LibraryAsset:
+    """Build the kept + validated :class:`LibraryAsset` promoted on keep (§5/FR-3.4).
+
+    When the candidate originated from a CAMPAIGN batch, its campaign theme and
+    target GEO prompt are threaded in as namespaced tags (``campaign:<theme>`` /
+    ``geo:<prompt>``) and folded into ``search_text`` so the kept asset is findable
+    by them (campaign-tagging-on-keep). A non-campaign candidate passes neither and
+    gets only the existing audience/channel tags.
+    """
     asset_type = _FORMAT_TO_ASSET_TYPE.get(candidate.format, LibraryAssetType.COPY)
+    campaign_tags = _campaign_tags(campaign_theme, target_geo_prompt)
     return LibraryAsset(
         id=f"lib-{candidate.id}",
         title=candidate.concept,
@@ -90,8 +132,8 @@ def _asset_from_candidate(candidate: ContentCandidate, validation_id: str) -> Li
         format=candidate.format,
         body=candidate.copy_text,
         source_ref=candidate.id,
-        tags=[candidate.audience_tag.value, candidate.channel.value],
-        search_text=_search_text_for(candidate),
+        tags=[candidate.audience_tag.value, candidate.channel.value, *campaign_tags],
+        search_text=_search_text_for(candidate, campaign_tags),
         validation=validation_id,
         lifecycle=LifecycleStage.KEPT,
         provenance=candidate.provenance,
@@ -107,6 +149,8 @@ def keep(
     library: ContentLibrary,
     log: ObservabilityLog,
     params: Params,
+    campaign_theme: str | None = None,
+    target_geo_prompt: str | None = None,
 ) -> LibraryAsset:
     """Keep ``candidate`` — promote to library + brand memory + log approve (FR-3.4/3.5).
 
@@ -126,6 +170,12 @@ def keep(
         library: the content library the kept asset is promoted to.
         log: the observability log (the approve decision is recorded here).
         params: the loaded params (the brand weight step, INV-11).
+        campaign_theme: when the candidate came from a CAMPAIGN batch, its theme —
+            tagged as ``campaign:<theme>`` (campaign-tagging-on-keep). Read back from
+            the logged proposal (INV-2), never client-trusted. ``None`` for the
+            non-campaign route ⇒ no campaign tag.
+        target_geo_prompt: when set, the campaign's target GEO prompt — tagged as
+            ``geo:<prompt>``. ``None`` ⇒ no geo tag.
 
     Returns:
         The promoted :class:`LibraryAsset`.
@@ -142,7 +192,12 @@ def keep(
     # The library asset references the passing verdict; use the verdict's subject
     # ref / a stable id derived from the proposal so the audit chain links up.
     validation_id = validation.subject_ref or f"vr-{proposal_id}"
-    asset = _asset_from_candidate(candidate, validation_id)
+    asset = _asset_from_candidate(
+        candidate,
+        validation_id,
+        campaign_theme=campaign_theme,
+        target_geo_prompt=target_geo_prompt,
+    )
     library.add(asset)
 
     # Affirm brand memory — the kept item conditions the NEXT batch (FR-3.2).
