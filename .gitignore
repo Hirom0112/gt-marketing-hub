@@ -24,3 +24,6 @@ hubspot.config.*.yml
 
 # Supabase CLI scratch (linked-project ref + version cache; not source)
 supabase/.temp/
+
+# Headless-capture design reference screenshots (regenerable, large)
+apply/design-ref/

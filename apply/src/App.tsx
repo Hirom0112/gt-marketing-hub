@@ -77,7 +77,10 @@ export function App({ supabase }: { supabase: MinimalSupabase }) {
     <div className="shell">
       <div className="brand">
         <div className="mark">GT</div>
-        <h1>Apply to GT School</h1>
+        <div className="wordmark">
+          <span className="gt">GT</span>
+          <span className="suffix"> anywhere</span>
+        </div>
       </div>
       <div className="synthetic-banner">
         Synthetic demo — no real personal information is collected or stored. Every

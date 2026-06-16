@@ -32,6 +32,7 @@ export function Dropdown<T extends string>({
       <select
         id={fieldKey}
         aria-label={label}
+        data-error={error ? 'true' : undefined}
         value={value}
         onFocus={() => telemetry.fieldFocused(fieldKey)}
         onBlur={() => {
