@@ -278,21 +278,33 @@ def _build_brand_memory_store() -> BrandMemoryStore:
 _brand_memory_store: list[BrandMemoryStore] = [_build_brand_memory_store()]
 
 
-def _build_content_library() -> ContentLibrary:
+def _build_content_library(*, fresh: bool = False) -> ContentLibrary:
     """Construct the seeded PERSISTENT content library (FR-3.4, D-8, A-11).
 
-    Mirrors :func:`_build_brand_memory_store`: the library is server-side
-    persistent (a kept asset survives a restart, D-8), not in-memory — so the v1
-    impl is the stdlib-``sqlite3``-backed :class:`SqliteContentLibrary` over a
-    temp-file path (no Postgres in this env, A-3/A-11; Postgres in prod). The file
-    is removed on each process start so the singleton is deterministic from the
-    seed (imported real assets, falling back to the §11.4 synthetic inventory).
+    The library is server-side persistent — a kept asset survives a restart (D-8)
+    — so the v1 impl is the stdlib-``sqlite3``-backed :class:`SqliteContentLibrary`
+    over a temp-file path (no Postgres in this env, A-3/A-11; Postgres in prod).
+
+    Unlike :func:`_build_brand_memory_store` (which is re-seeded deterministically
+    each boot and holds no operator-authored state, so it unlinks its file), the
+    library MUST NOT delete its backing file on a normal start: the operator's PAST
+    kept assets live there and have to survive a cockpit restart (D-8). The seed is
+    re-applied on top via :meth:`SqliteContentLibrary.seeded`, whose ``add`` is an
+    idempotent upsert on ``id`` — so re-seeding a populated file is a no-op in
+    shape (the deterministic seed rows are unchanged) while previously-kept rows
+    are preserved. This is the fix for the "nor past content" defect: the prior
+    unconditional ``unlink`` wiped every kept asset on every boot.
+
+    ``fresh=True`` is the TEST-ONLY path (:func:`reset_content_library`): it
+    unlinks the backing file first so each test starts from a clean seed with no
+    cross-test leakage; production always uses the persistent default.
     """
     import tempfile
     from pathlib import Path
 
     db_path = Path(tempfile.gettempdir()) / "gt_cockpit_content_library.sqlite3"
-    db_path.unlink(missing_ok=True)
+    if fresh:
+        db_path.unlink(missing_ok=True)
     return SqliteContentLibrary.seeded(db_path)
 
 
@@ -499,7 +511,9 @@ def reset_brand_memory_store() -> None:
 def reset_content_library() -> None:
     """Rebind the content-library singleton to a fresh seeded library (test isolation).
 
-    Rebuilds the PERSISTENT sqlite library (a fresh temp-file from the seed), the
-    same seam pattern as :func:`reset_brand_memory_store`.
+    Rebuilds the PERSISTENT sqlite library from a CLEAN file (``fresh=True``
+    unlinks first) so tests get an isolated seed with no cross-test leakage — the
+    same seam pattern as :func:`reset_brand_memory_store`. Production never calls
+    this; the boot path keeps the file so past kept assets survive (D-8).
     """
-    _content_library[0] = _build_content_library()
+    _content_library[0] = _build_content_library(fresh=True)

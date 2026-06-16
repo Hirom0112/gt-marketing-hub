@@ -11,6 +11,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from app.ai.schemas.brand import LibraryAsset, LibraryAssetType
 from app.ai.schemas.content import Channel, ContentFormat, GeneratedBy, LifecycleStage, Provenance
 from app.marketing.library import SqliteContentLibrary
@@ -128,3 +130,48 @@ def test_seeded_loads_inventory(tmp_path: Path) -> None:
     db_path = tmp_path / "content_library_seeded.sqlite3"
     store = SqliteContentLibrary.seeded(db_path)
     assert len(store.search()) > 0
+
+
+def test_composition_root_rebuild_preserves_past_kept_assets(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The wired singleton (`_build_content_library`) keeps PAST content (D-8; FR-3.4).
+
+    The composition root must mirror the persistence guarantee the
+    :class:`SqliteContentLibrary` class already gives: an operator who keeps an
+    asset in one session must still see it after the cockpit restarts. This drives
+    the actual wiring in `app.api.deps._build_content_library` (not just the class),
+    which previously deleted the backing sqlite file on every process start —
+    wiping every previously-kept row ("nor past content"). It points the fixed temp
+    path at an isolated tmp file so the test is hermetic, builds the library, keeps
+    a fresh asset, then rebuilds (simulating a restart) and asserts the kept asset
+    survives AND the deterministic seed is still present.
+    """
+    import tempfile
+
+    from app.api import deps
+
+    # `_build_content_library` calls `tempfile.gettempdir()` (a local import), so
+    # patching the stdlib function redirects the fixed db path into our tmp dir.
+    monkeypatch.setattr(tempfile, "gettempdir", lambda: str(tmp_path))
+
+    first = deps._build_content_library()
+    seeded_count = len(first.search())
+    assert seeded_count > 0  # the seed shows on a fresh boot
+
+    kept = _asset(
+        asset_id="lib-operator-kept-001",
+        title="Operator kept this last session",
+        search_text="operator kept gifted mastery caption",
+        tags=["mastery"],
+    )
+    first.add(kept)
+
+    # Simulate a cockpit restart: rebuild the singleton against the SAME temp path.
+    second = deps._build_content_library()
+    survived = second.get("lib-operator-kept-001")
+    assert survived is not None, "a previously-kept asset must survive a restart (D-8)"
+    assert survived.title == "Operator kept this last session"
+    # The deterministic seed is still present too (re-seed is idempotent on id).
+    assert any(a.id == "lib-operator-kept-001" for a in second.search())
+    assert len(second.search()) == seeded_count + 1
