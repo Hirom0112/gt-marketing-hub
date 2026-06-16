@@ -1,12 +1,11 @@
 import { fireEvent, render, screen } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
-import DrillRow, { DRILL_GRID, DrillRowHead } from '../DrillRow';
-import { recencyLabel } from '../recency';
+import DrillRow, { DRILL_GRID, DrillRowHead, railClass } from '../DrillRow';
 
-// Acceptance test (CLAUDE §4.2). A dense drill row: zero-padded rank, name +
-// stuck-step subline, mono value, a recency Chip (reused primitive, tone from
-// recencyTone), and a teal-when-on checkbox whose toggle does NOT select the
-// row. Header + row share the DRILL_GRID template.
+// Acceptance test (CLAUDE §4.2) for the redesigned triage row. The pill-wall is
+// gone: recoverable_now is the HERO cell, recency is a left-edge RAIL (not a
+// Chip), the rank + score columns are gone, and an age cell ("12d") + a magnitude
+// bar carry priority. Header + row share the DRILL_GRID template.
 
 const FID = 'fam-1';
 
@@ -14,36 +13,67 @@ function row(props = {}) {
   return (
     <DrillRow
       familyId={FID}
-      rank={3}
       name="The Alvarez Family"
       stuckStep="enrollment agreement"
       stallDate="Jun 13"
-      value="$10,474"
-      score="0.91"
+      age="12d"
+      recoverable="$50,000"
+      value="$60,000"
+      magnitude={0.8}
       contactStatus="overdue"
       {...props}
     />
   );
 }
 
-describe('DrillRow', () => {
-  it('renders rank zero-padded, name, stuck step, stall date, value, score', () => {
+describe('DrillRow (redesign)', () => {
+  it('renders the recoverable-now HERO cell, secondary value, age + stall date', () => {
     render(row());
     const r = screen.getByTestId(`drill-row-${FID}`);
-    expect(r).toHaveTextContent('03');
     expect(r).toHaveTextContent('The Alvarez Family');
     expect(r).toHaveTextContent('enrollment agreement');
-    expect(r).toHaveTextContent('$10,474');
-    expect(r).toHaveTextContent('0.91');
-    // The always-present stall-date column.
+    // The loud hero is recoverable_now (not the face value).
+    expect(screen.getByTestId(`drill-row-recoverable-${FID}`)).toHaveTextContent(
+      '$50,000',
+    );
+    // Secondary face value stays for the sanity-check ("$50k of a $60k deal").
+    expect(r).toHaveTextContent('$60,000');
+    expect(screen.getByTestId(`drill-row-age-${FID}`)).toHaveTextContent('12d');
     expect(screen.getByTestId(`drill-row-date-${FID}`)).toHaveTextContent('Jun 13');
   });
 
-  it('renders the recency label via the reused Chip', () => {
+  it('shows NO rank and NO score column', () => {
+    render(row());
+    const r = screen.getByTestId(`drill-row-${FID}`);
+    // The score readout ("0.91") is gone (it's not even a prop anymore).
+    expect(r).not.toHaveTextContent('0.91');
+    // The grid has 6 cells (ck, name+bar, hero, value, age, date) — the rail is a
+    // border, and there is no 7th rank/score column.
+    expect(DRILL_GRID.split(' ')).toHaveLength(6);
+  });
+
+  it('renders recency as a left-edge RAIL, not a Chip/pill', () => {
     render(row({ contactStatus: 'overdue' }));
-    expect(screen.getByTestId(`drill-row-${FID}`)).toHaveTextContent(
-      recencyLabel('overdue'),
-    );
+    const r = screen.getByTestId(`drill-row-${FID}`);
+    // The rail is the saturated signal rail for overdue.
+    expect(r).toHaveClass('rail-overdue');
+    expect(r).toHaveAttribute('data-rail', 'rail-overdue');
+    // No "Overdue" pill text on the row (the rail replaced the word).
+    expect(r).not.toHaveTextContent('Overdue');
+  });
+
+  it('railClass maps recency: overdue→signal, working→teal, fresh→neutral', () => {
+    expect(railClass('overdue')).toBe('rail-overdue');
+    expect(railClass('followed_up')).toBe('rail-working');
+    expect(railClass('working')).toBe('rail-working');
+    expect(railClass('fresh')).toBe('rail-fresh');
+  });
+
+  it('renders the magnitude bar (recoverable-now / max-in-scope width)', () => {
+    render(row({ magnitude: 0.5 }));
+    const bar = screen.getByTestId(`drill-row-bar-${FID}`);
+    const fill = bar.firstElementChild as HTMLElement;
+    expect(fill.style.width).toBe('50%');
   });
 
   it('selecting the row fires onSelect but ticking the checkbox does not', () => {

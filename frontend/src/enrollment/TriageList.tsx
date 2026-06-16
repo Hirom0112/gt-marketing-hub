@@ -1,40 +1,33 @@
 import { useEffect, useMemo, useState } from 'react';
 import { apiBaseUrl } from '../config';
-import { Card } from '../ui';
+import { Card, Button } from '../ui';
 import DrillRow, { DrillRowHead } from './DrillRow';
 import BulkBar from './BulkBar';
 import {
-  DrillToolbar,
   ROW_CAP,
+  recoverableNow,
   type CalendarEntry,
   type SortKey,
   sortEntries,
 } from './EnrollmentCalendar';
-import { fmtDay, fmtUSD } from './format';
+import { fmtAge, fmtDay, fmtUSD } from './format';
 import type { DrillBulk } from './EnrollmentCalendar';
 
-// TriageList (S13 W1, decision A-22) — the OVERFLOW CONSOLE. This is NOT a second
-// surface: it is the unscoped end of the calendar's own drill. ONE list, ONE
-// ranking (recoverable-now everywhere), bulk ALWAYS attached, with a SCOPE DIAL —
-// Day / Week / All — that just changes the stall-date WINDOW of the same active
-// set. The wave doesn't respect day boundaries; neither does this — you pull the
-// best-to-recover families from across every day and batch the top-N by value.
+// TriageList (S13 redesign) — the active worklist, money-first. This is the
+// unscoped end of the calendar's own drill: ONE list, recoverable-now ranking
+// everywhere, bulk always attached, with a SCOPE DIAL (Day / Week / All) that
+// only WIDENS/NARROWS the inherited drill in place. The calendar OWNS which date
+// (it seeds the anchor); the dial never re-picks a date.
 //
-// The active set (the live recovery queue {stalled,working}) is fetched ONCE via
-// GET /work-queue?scope=active (small/fast, ~hundreds). Scope is a PURE CLIENT
-// FILTER over a stall_date window — there are NO per-scope backend calls:
-//   · Day  — a single UTC day (the calendar drill: click a heat cell/chip).
-//   · Week — the 7-day window containing the anchor (or the current week).
-//   · All  — the whole active board.
+// The active set ({stalled,working}) is fetched ONCE via GET
+// /work-queue?scope=active and scoped CLIENT-SIDE by a stall_date window — no
+// per-scope endpoints. Read-only GET (INV-2); bulk writes delegate to the shared
+// workspace handlers.
 //
-// Date-sort and the S12 day-grouping are GONE: organizing by date is the
-// calendar's job one level up; rebuilding it inside the list just rebuilt the
-// calendar. The stall_date stays as an informational column on every row.
-// History (recovered/dismissed) is NOT a scope here — it lives in its own tab.
-// Read-only GET (INV-2); bulk writes delegate to the shared workspace handlers.
+// Day-scope bug fix: a Day/Week scope with NO anchor anchors to the MOST-RECENT
+// active stall_date in the loaded set (not the wall clock), so opening Triage on
+// any clock can never fall outside the synthetic stall range and show 0 rows.
 
-// One /work-queue row (backend WorkQueueItem, W1 shape). Adapted to the
-// CalendarEntry-shaped object the shared sort + DrillRow read.
 interface WorkQueueItem {
   family_id: string;
   display_name: string;
@@ -54,13 +47,11 @@ interface WorkQueueItem {
 export type TriageScope = 'day' | 'week' | 'all';
 type Recency = 'all' | 'overdue' | 'fresh' | 'followed_up';
 
-// The list-only sorts (date-sort REMOVED — A-22; the calendar owns "by date").
-type TriageSort = Exclude<SortKey, 'date'>;
+// The list-only sorts (date-sort + score-sort REMOVED — the calendar owns date;
+// score is a model internal the redesign hides).
+type TriageSort = 'recoverable' | 'value' | 'recency';
 
 interface TriageListProps {
-  // The active scope dial value + its anchor day (an ISO string within the
-  // Day/Week window). Controlled by the workspace so the calendar can open the
-  // list at Day scope for a specific day and the dial reflects it.
   scope: TriageScope;
   anchorDate?: string;
   onScopeChange: (scope: TriageScope, anchorDate?: string) => void;
@@ -69,8 +60,6 @@ interface TriageListProps {
   bulk: DrillBulk;
   sort: SortKey;
   onSort: (sort: SortKey) => void;
-  // Bumped by the workspace after a bulk write so the list re-pulls the queue
-  // and the moved families reflect their new recovery_state (no client write).
   refreshKey?: number;
 }
 
@@ -79,7 +68,6 @@ type LoadState =
   | { status: 'error'; message: string }
   | { status: 'ready'; items: WorkQueueItem[] };
 
-// Adapt a queue row to the shared CalendarEntry shape (the sort + rows read it).
 function toEntry(item: WorkQueueItem): CalendarEntry & { recovery_state: string } {
   return {
     family_id: item.family_id,
@@ -103,29 +91,60 @@ function dayStartMs(iso: string): number | null {
   return Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate());
 }
 
+const DAY_MS = 86_400_000;
+
+// The most-recent active stall day in the loaded set (max dayStartMs). NULL when
+// the set is empty / has no parseable dates. This is the Day/Week fallback anchor
+// — NOT the wall clock (the Day-scope bug fix: anchor to DATA, never Date.now()).
+function latestStallDay(items: readonly WorkQueueItem[]): number | null {
+  let max: number | null = null;
+  for (const it of items) {
+    const ms = dayStartMs(it.stall_date);
+    if (ms !== null && (max === null || ms > max)) max = ms;
+  }
+  return max;
+}
+
 // The [start, end) UTC-ms window for a scope around an anchor. Day = one UTC day;
-// Week = the 7-day window starting Sunday of the anchor's week; All = unbounded.
-// A missing anchor (no day picked) → the current week / day relative to `now`.
+// Week = the Sunday-anchored 7-day window containing the anchor. A missing anchor
+// resolves to `fallbackAnchorMs` (the latest stall day in the set), NEVER the
+// clock. All-scope → null (unbounded). Returns null too when there is no anchor
+// and no fallback (an empty set) so the caller shows the right empty state.
 function scopeWindow(
   scope: TriageScope,
   anchorDate: string | undefined,
-  now: number,
+  fallbackAnchorMs: number | null,
 ): { start: number; end: number } | null {
   if (scope === 'all') return null;
-  const DAY = 86_400_000;
   const baseMs = anchorDate ? dayStartMs(anchorDate) : null;
-  const anchorMs =
-    baseMs ??
-    (() => {
-      const d = new Date(now);
-      return Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate());
-    })();
-  if (scope === 'day') return { start: anchorMs, end: anchorMs + DAY };
-  // Week: Sunday-anchored 7-day window containing the anchor day.
+  const anchorMs = baseMs ?? fallbackAnchorMs;
+  if (anchorMs === null) return null;
+  if (scope === 'day') return { start: anchorMs, end: anchorMs + DAY_MS };
   const weekday = new Date(anchorMs).getUTCDay();
-  const start = anchorMs - weekday * DAY;
-  return { start, end: start + 7 * DAY };
+  const start = anchorMs - weekday * DAY_MS;
+  return { start, end: start + 7 * DAY_MS };
 }
+
+// The day the list is windowed around (anchor or the latest-stall fallback) — for
+// the scope echo + the empty-state remedy copy ("No stalls in {real date}").
+function resolvedAnchorMs(
+  anchorDate: string | undefined,
+  fallbackAnchorMs: number | null,
+): number | null {
+  const base = anchorDate ? dayStartMs(anchorDate) : null;
+  return base ?? fallbackAnchorMs;
+}
+
+function fmtMs(ms: number): string {
+  return fmtDay(new Date(ms).toISOString());
+}
+
+const RECENCY_FACETS: readonly { key: Recency; label: string }[] = [
+  { key: 'all', label: 'all' },
+  { key: 'overdue', label: 'overdue' },
+  { key: 'fresh', label: 'fresh' },
+  { key: 'followed_up', label: 'working' },
+];
 
 export default function TriageList({
   scope,
@@ -141,8 +160,6 @@ export default function TriageList({
   const [state, setState] = useState<LoadState>({ status: 'loading' });
   const [recency, setRecency] = useState<Recency>('all');
 
-  // Fetch the active set ONCE (and on a bulk write). Scoping is client-side over
-  // this one pull — no per-scope endpoints (A-22).
   useEffect(() => {
     let cancelled = false;
     setState({ status: 'loading' });
@@ -165,35 +182,62 @@ export default function TriageList({
     };
   }, [refreshKey]);
 
-  // The date-sort is removed — coerce any stray 'date' to the recoverable-now
-  // default so the dropdown never date-sorts inside the list (A-22).
-  const effectiveSort: TriageSort = sort === 'date' ? 'recoverable' : sort;
+  // Drop score/date from the live sort — coerce anything stray to recoverable.
+  const effectiveSort: TriageSort =
+    sort === 'value' || sort === 'recency' ? sort : 'recoverable';
 
-  // Scope filter (a stall_date window) THEN the recency filter, computed before
-  // the early returns so the hook order is stable across loading/error/ready.
-  const scoped = useMemo<WorkQueueItem[]>(() => {
-    const items = state.status === 'ready' ? state.items : [];
-    const win = scopeWindow(scope, anchorDate, Date.now());
-    let out = items;
-    if (win) {
-      out = out.filter((it) => {
-        const ms = dayStartMs(it.stall_date);
-        return ms !== null && ms >= win.start && ms < win.end;
-      });
-    }
-    if (recency !== 'all') out = out.filter((it) => it.contact_status === recency);
-    return out;
-  }, [state, scope, anchorDate, recency]);
+  const allItems = useMemo<WorkQueueItem[]>(
+    () => (state.status === 'ready' ? state.items : []),
+    [state],
+  );
+  const fallbackAnchorMs = useMemo(
+    () => latestStallDay(allItems),
+    [allItems],
+  );
+
+  // Scope filter (a stall_date window) — anchored to DATA, not the clock.
+  const scopedAll = useMemo<WorkQueueItem[]>(() => {
+    const win = scopeWindow(scope, anchorDate, fallbackAnchorMs);
+    if (!win) return scope === 'all' ? allItems : [];
+    return allItems.filter((it) => {
+      const ms = dayStartMs(it.stall_date);
+      return ms !== null && ms >= win.start && ms < win.end;
+    });
+  }, [allItems, scope, anchorDate, fallbackAnchorMs]);
+
+  // THEN the recency facet (kept separate so we can tell "scope empty" from
+  // "filter empty" and offer the right one-tap remedy).
+  const scoped = useMemo<WorkQueueItem[]>(
+    () =>
+      recency === 'all'
+        ? scopedAll
+        : scopedAll.filter((it) => it.contact_status === recency),
+    [scopedAll, recency],
+  );
 
   const ranked = useMemo(
     () => sortEntries(scoped.map(toEntry), effectiveSort),
     [scoped, effectiveSort],
   );
   const shown = useMemo(() => ranked.slice(0, ROW_CAP), [ranked]);
-  const atRisk = useMemo(
-    () => ranked.reduce((a, e) => a + e.value, 0),
+
+  // Tier-1 readout: SUM recoverable_now (not value — the fix), and the max in the
+  // shown set drives the magnitude bars.
+  const recoverableSum = useMemo(
+    () => ranked.reduce((a, e) => a + recoverableNow(e), 0),
     [ranked],
   );
+  const maxRecoverable = useMemo(
+    () => shown.reduce((m, e) => Math.max(m, recoverableNow(e)), 0),
+    [shown],
+  );
+  const selectedRecoverable = useMemo(() => {
+    if (bulk.selected.size === 0) return 0;
+    return ranked.reduce(
+      (a, e) => (bulk.selected.has(e.family_id) ? a + recoverableNow(e) : a),
+      0,
+    );
+  }, [ranked, bulk.selected]);
 
   if (state.status === 'loading') {
     return (
@@ -215,130 +259,203 @@ export default function TriageList({
   }
 
   function switchScope(next: TriageScope): void {
-    // Widen All → drop the anchor; Day/Week keep the current anchor (or default
-    // to the current period via scopeWindow's now-fallback).
     onScopeChange(next, next === 'all' ? undefined : anchorDate);
     setRecency('all');
     bulk.onClear();
   }
 
-  const scopeControls = (
-    <div
-      data-testid="triage-scope"
-      style={{ display: 'inline-flex', gap: 'var(--s-2)', alignItems: 'center' }}
-    >
-      <ScopePill
-        label="Day"
-        on={scope === 'day'}
-        onClick={() => switchScope('day')}
-        testId="scope-day"
-      />
-      <ScopePill
-        label="Week"
-        on={scope === 'week'}
-        onClick={() => switchScope('week')}
-        testId="scope-week"
-      />
-      <ScopePill
-        label="All"
-        on={scope === 'all'}
-        onClick={() => switchScope('all')}
-        testId="scope-all"
-      />
-      <span style={{ display: 'inline-flex', gap: 4, marginLeft: 'var(--s-2)' }}>
-        {(['all', 'overdue', 'fresh', 'followed_up'] as const).map((r) => (
-          <ScopePill
-            key={r}
-            label={r === 'followed_up' ? 'working' : r}
-            on={recency === r}
-            onClick={() => setRecency(r)}
-            testId={`recency-${r}`}
-          />
-        ))}
-      </span>
-    </div>
-  );
-
-  const scopeNote =
+  const anchorMs = resolvedAnchorMs(anchorDate, fallbackAnchorMs);
+  const scopeEcho =
     scope === 'all'
-      ? 'the whole active board'
+      ? 'across the whole board'
       : scope === 'week'
-        ? 'this week'
-        : anchorDate
-          ? fmtDay(anchorDate)
-          : 'today';
+        ? anchorMs !== null
+          ? `the week of ${fmtMs(anchorMs)}`
+          : 'this week'
+        : anchorMs !== null
+          ? `on ${fmtMs(anchorMs)}`
+          : 'this day';
+
+  // ── Empty states — never a blank panel; distinguish scope-empty / filter-empty.
+  function renderEmpty(): JSX.Element {
+    // Filter empty: the scope has rows but the recency facet filtered them all.
+    if (recency !== 'all' && scopedAll.length > 0) {
+      return (
+        <div className="worklist-empty" data-testid="triage-empty">
+          <span className="worklist-empty-line" data-testid="triage-empty-filter">
+            No {recency === 'followed_up' ? 'working' : recency} stalls {scopeEcho}.
+          </span>
+          <span className="worklist-empty-remedies">
+            <Button
+              data-testid="triage-clear-filter"
+              onClick={() => setRecency('all')}
+            >
+              Clear filter
+            </Button>
+          </span>
+        </div>
+      );
+    }
+    // All-scope genuinely empty → the calm rest state.
+    if (scope === 'all') {
+      return (
+        <div className="worklist-empty rest" data-testid="triage-empty">
+          <span className="lab">The wave is clear</span>
+          <span className="worklist-empty-line" data-testid="triage-empty-rest">
+            No active recovery work on the board right now.
+          </span>
+        </div>
+      );
+    }
+    // Scope empty (a Day/Week with no stalls) → widen remedies.
+    return (
+      <div className="worklist-empty" data-testid="triage-empty">
+        <span className="worklist-empty-line" data-testid="triage-empty-scope">
+          {anchorMs !== null
+            ? `No stalls ${scope === 'week' ? `in ${scopeEcho}` : scopeEcho}.`
+            : 'No stalls in this scope.'}
+        </span>
+        <span className="worklist-empty-remedies">
+          {scope === 'day' && (
+            <Button
+              data-testid="triage-widen-week"
+              onClick={() => switchScope('week')}
+            >
+              Widen to week
+            </Button>
+          )}
+          <Button data-testid="triage-show-all" onClick={() => switchScope('all')}>
+            Show all
+          </Button>
+        </span>
+      </div>
+    );
+  }
 
   return (
     <section aria-label="Triage list" data-testid="triage-list">
       <Card pad={false}>
-        <div
-          data-testid="triage-banner"
-          className="lab"
-          style={{
-            display: 'flex',
-            alignItems: 'baseline',
-            gap: 'var(--s-2)',
-            padding: 'var(--s-2) var(--s-4)',
-            borderBottom: '1px solid var(--line-2)',
-            color: 'var(--muted)',
-          }}
-        >
-          <span style={{ color: 'var(--ink)', fontWeight: 600 }}>
-            Recover in priority order — the order to attack the wave
-          </span>
-          <span style={{ marginLeft: 'auto' }} className="mono">
-            {ranked.length} in {scopeNote} · {fmtUSD(atRisk)} at risk
-          </span>
+        <div className="triage-head" data-testid="triage-head">
+          {/* Tier 1 — the loud readout. */}
+          <div className="triage-head-readout" data-testid="triage-banner">
+            <span
+              className="triage-readout-money"
+              data-testid="triage-readout-money"
+            >
+              {fmtUSD(recoverableSum)}
+            </span>
+            <span className="triage-readout-sub">recoverable now</span>
+            <span className="triage-readout-sub">
+              · <b data-testid="triage-stalled-count">{ranked.length}</b> stalled
+            </span>
+            <span className="triage-readout-scope lab" data-testid="triage-scope-echo">
+              {scopeEcho}
+            </span>
+          </div>
+
+          {/* Tier 2 — the quiet control cluster. */}
+          <div className="triage-controls">
+            <div
+              className="scope-dial"
+              data-testid="triage-scope"
+              role="group"
+              aria-label="Scope"
+            >
+              {(['day', 'week', 'all'] as const).map((s) => (
+                <button
+                  key={s}
+                  type="button"
+                  className="scope-dial-seg"
+                  data-testid={`scope-${s}`}
+                  aria-pressed={scope === s}
+                  onClick={() => switchScope(s)}
+                >
+                  {s}
+                </button>
+              ))}
+            </div>
+            <span className="triage-controls-divider" aria-hidden />
+            <div
+              style={{ display: 'inline-flex', gap: 'var(--s-1)' }}
+              data-testid="triage-recency"
+            >
+              {RECENCY_FACETS.map((f) => (
+                <button
+                  key={f.key}
+                  type="button"
+                  className="facet-pill"
+                  data-testid={`recency-${f.key}`}
+                  aria-pressed={recency === f.key}
+                  onClick={() => setRecency(f.key)}
+                >
+                  {f.label}
+                </button>
+              ))}
+            </div>
+            <label
+              style={{
+                marginLeft: 'auto',
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: 'var(--s-1)',
+                fontFamily: 'var(--mono)',
+                fontSize: 11,
+                color: 'var(--muted)',
+              }}
+            >
+              sort
+              <select
+                data-testid="list-sort"
+                value={effectiveSort}
+                onChange={(ev) => onSort(ev.target.value as SortKey)}
+                className="history-sort"
+              >
+                <option value="recoverable">recoverable</option>
+                <option value="value">value</option>
+                <option value="recency">recency</option>
+              </select>
+            </label>
+          </div>
         </div>
-        <DrillToolbar
-          count={shown.length}
-          sort={effectiveSort}
-          onSort={onSort}
-          onSelectAll={() => bulk.onSelectAll(shown.map((e) => e.family_id))}
-          scopeControls={scopeControls}
-        />
+
         <DrillRowHead />
-        {shown.length === 0 ? (
-          <p
-            data-testid="triage-empty"
-            className="lab"
-            style={{ padding: 'var(--s-4)', color: 'var(--muted)' }}
-          >
-            {scope === 'all'
-              ? 'No active recovery work — the queue is clear.'
-              : `No stalls in ${scopeNote} — widen the scope to see more.`}
-          </p>
-        ) : (
-          shown.map((e, i) => (
-            <DrillRow
-              key={e.family_id}
-              familyId={e.family_id}
-              rank={i + 1}
-              name={e.display_name}
-              stuckStep={e.current_stage}
-              stallDate={fmtDay(e.stall_date)}
-              value={fmtUSD(e.value)}
-              score={e.score.toFixed(2)}
-              contactStatus={e.contact_status}
-              selected={bulk.selected.has(e.family_id)}
-              active={e.family_id === selectedFamilyId}
-              onToggle={bulk.onToggle}
-              onSelect={onSelectFamily}
-            />
-          ))
-        )}
+        {shown.length === 0
+          ? renderEmpty()
+          : shown.map((e) => (
+              <DrillRow
+                key={e.family_id}
+                familyId={e.family_id}
+                name={e.display_name}
+                stuckStep={e.current_stage}
+                stallDate={fmtDay(e.stall_date)}
+                age={fmtAge(e.stall_date)}
+                recoverable={fmtUSD(recoverableNow(e))}
+                value={fmtUSD(e.value)}
+                magnitude={maxRecoverable > 0 ? recoverableNow(e) / maxRecoverable : 0}
+                contactStatus={e.contact_status}
+                selected={bulk.selected.has(e.family_id)}
+                active={e.family_id === selectedFamilyId}
+                onToggle={bulk.onToggle}
+                onSelect={onSelectFamily}
+              />
+            ))}
         {ranked.length > ROW_CAP && (
           <div
             className="lab"
             data-testid="triage-cap-footer"
             style={{ padding: 'var(--s-3) var(--s-4)', color: 'var(--muted)' }}
           >
-            Showing top {ROW_CAP} of {ranked.length} by this sort — batch the top
-            of the wave first.
+            Showing the top {ROW_CAP} of {ranked.length} by recoverable — batch the
+            top of the wave first.
           </div>
         )}
         <BulkBar
           count={bulk.selected.size}
+          viewCount={shown.length}
+          recoverableLabel={
+            selectedRecoverable > 0 ? fmtUSD(selectedRecoverable) : undefined
+          }
+          onSelectAll={() => bulk.onSelectAll(shown.map((e) => e.family_id))}
           partition={bulk.partition}
           onNudge={bulk.onNudge}
           onCapture={bulk.onCapture}
@@ -351,40 +468,5 @@ export default function TriageList({
         />
       </Card>
     </section>
-  );
-}
-
-// A small scope/recency filter pill (aria-pressed for the acceptance test).
-function ScopePill({
-  label,
-  on,
-  onClick,
-  testId,
-}: {
-  label: string;
-  on: boolean;
-  onClick: () => void;
-  testId: string;
-}): JSX.Element {
-  return (
-    <button
-      type="button"
-      data-testid={testId}
-      aria-pressed={on}
-      onClick={onClick}
-      style={{
-        border: `1px solid ${on ? 'var(--ink)' : 'var(--line)'}`,
-        background: on ? 'var(--ink)' : 'var(--surface)',
-        color: on ? 'var(--on-ink)' : 'var(--ink)',
-        borderRadius: 'var(--r-pill)',
-        padding: '4px 11px',
-        fontSize: 11,
-        fontWeight: 600,
-        cursor: 'pointer',
-        fontFamily: 'inherit',
-      }}
-    >
-      {label}
-    </button>
   );
 }

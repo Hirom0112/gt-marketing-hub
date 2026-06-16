@@ -21,8 +21,16 @@ export interface SendPartition {
 }
 
 interface BulkBarProps {
-  // Number of selected families. Renders nothing when 0.
+  // Number of selected families. 0 → the thin select-all rail (the dock absorbs
+  // select-all); ≥1 → the dark action dock.
   count: number;
+  // How many families are in view (for the "Select all N in view" rail).
+  viewCount?: number;
+  // Pre-formatted total recoverable-now of the selection (e.g. "$50,000"),
+  // shown in the dock line ("N selected · $X recoverable").
+  recoverableLabel?: string;
+  // Select all rows in view (the rail's only action).
+  onSelectAll?: () => void;
   // Default-mode actions.
   onNudge?: () => void;
   onCapture?: () => void;
@@ -43,6 +51,9 @@ interface BulkBarProps {
 
 export default function BulkBar({
   count,
+  viewCount = 0,
+  recoverableLabel,
+  onSelectAll,
   onNudge,
   onCapture,
   onClear,
@@ -53,7 +64,23 @@ export default function BulkBar({
   onCancelDismiss,
   partition,
 }: BulkBarProps): JSX.Element | null {
-  if (count === 0) return null;
+  // 0 selected → a thin select-all rail (the footer absorbs select-all). It only
+  // appears when there are rows to select, never on a genuinely empty list.
+  if (count === 0) {
+    if (viewCount <= 0 || !onSelectAll) return null;
+    return (
+      <div className="bulk-rail" data-testid="bulk-rail">
+        <button
+          type="button"
+          data-testid="bulk-rail-select-all"
+          className="bulk-rail-btn"
+          onClick={onSelectAll}
+        >
+          Select all {viewCount} in view
+        </button>
+      </div>
+    );
+  }
 
   if (pendingDismiss) {
     return (
@@ -146,6 +173,18 @@ export default function BulkBar({
         style={{ fontWeight: 700, fontSize: 13 }}
       >
         <b style={{ color: 'var(--on-ink-accent)' }}>{count}</b> selected
+        {recoverableLabel ? (
+          <span
+            data-testid="bulk-bar-recoverable"
+            style={{
+              fontWeight: 600,
+              color: 'rgba(255, 255, 255, 0.85)',
+            }}
+          >
+            {' · '}
+            {recoverableLabel} recoverable
+          </span>
+        ) : null}
       </span>
       {partition ? (
         <span
@@ -158,10 +197,10 @@ export default function BulkBar({
         </span>
       ) : null}
       <Button variant="on-ink" onClick={onNudge} data-testid="bulk-nudge">
-        Send nudge to all
+        Nudge
       </Button>
       <Button variant="flow" onClick={onCapture} data-testid="bulk-capture">
-        Capture all to HubSpot
+        Capture
       </Button>
       <Button
         variant="on-ink"

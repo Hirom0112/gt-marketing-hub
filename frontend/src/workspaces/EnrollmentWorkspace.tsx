@@ -420,6 +420,14 @@ export default function EnrollmentWorkspace(): JSX.Element {
                 options={viewOptions}
                 active={leftView}
                 onSelect={(v) => {
+                  // A1 (Day-scope bug fix): opening Triage from the TOP TOGGLE
+                  // defaults to ALL scope with no anchor — never an anchorless
+                  // Day (which would window on the wall clock and show 0 rows).
+                  // The calendar is the ONLY thing that opens Triage at Day/Week.
+                  if (v === 'triage') {
+                    setTriageScope('all');
+                    setTriageAnchor(undefined);
+                  }
                   setLeftView(v);
                   clearSel();
                 }}

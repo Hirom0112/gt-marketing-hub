@@ -94,6 +94,15 @@
   --ring-track: var(--line);
   --ring-fill: var(--flow);
 
+  /* ---- worklist / triage rows (S13 W-redesign) ---------------------------- */
+  /* The "where's the money" magnitude bar under a family name: a neutral fill on
+     a faint track. Deliberately NOT red — a red money bar reads as loss; this is
+     a recoverable-now magnitude, a quantity cue, so it stays ink-soft. */
+  --bar-track: var(--line-2);
+  --bar-fill: var(--ink-soft);
+  --bar-h: 2px; /* the magnitude bar thickness */
+  --rail-w: 3px; /* the recency / outcome left-edge rail thickness */
+
   /* ---- focus ring --------------------------------------------------------- */
   --focus: #2f6df0;
   --focus-ring: 0 0 0 2px var(--surface), 0 0 0 4px var(--focus);
@@ -108,6 +117,7 @@
   --fs-sm: 12px;
   --fs-body: 13px;
   --fs-md: 15px;
+  --fs-readout: 15px; /* the loud mono data readout (recoverable-now hero cell) — alias of --fs-md so the worklist's money column has its own named home */
   --fs-lg: 17px;
   --fs-stat: 28px; /* KPI / big mono metrics  */
   --fs-stat-lg: 34px;
@@ -464,4 +474,446 @@ figure {
 }
 .scroll::-webkit-scrollbar-track {
   background: transparent;
+}
+
+/* =============================================================================
+   Worklist surfaces (S13 redesign) — the Triage active list + the History
+   archive. Two DELIBERATELY different surfaces: Triage is the loud, dense, money-
+   first worklist (a magnitude bar, a saturated overdue rail, a bulk dock); History
+   is recessed, calm, control-less (no red, no checkbox, no bulk) — its absence of
+   affordances IS the "nothing to do here" cue.
+============================================================================= */
+
+/* ---- the two-tier sticky triage header ----------------------------------- */
+.triage-head {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  background: var(--surface);
+  border-bottom: 1px solid var(--line-2);
+}
+
+/* Tier 1 — the loud readout: $X recoverable now · N stalled · scope echo. */
+.triage-head-readout {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: var(--s-2) var(--s-3);
+  padding: var(--s-3) var(--s-4) var(--s-2);
+}
+
+.triage-readout-money {
+  font-family: var(--mono);
+  font-size: var(--fs-stat);
+  font-weight: 700;
+  line-height: 1;
+  color: var(--gate-ink);
+  font-variant-numeric: tabular-nums;
+}
+
+.triage-readout-sub {
+  color: var(--ink-soft);
+  font-size: var(--fs-sm);
+}
+
+.triage-readout-scope {
+  margin-left: auto;
+  align-self: center;
+}
+
+/* Tier 2 — the quiet control cluster: scope dial · facets · sort. */
+.triage-controls {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--s-3);
+  padding: var(--s-2) var(--s-4);
+}
+
+.triage-controls-divider {
+  width: 1px;
+  align-self: stretch;
+  background: var(--line-2);
+}
+
+/* The segmented scope dial — Day / Week / All as ONE bordered control, no gaps. */
+.scope-dial {
+  display: inline-flex;
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  overflow: hidden;
+  background: var(--surface-2);
+}
+
+.scope-dial-seg {
+  appearance: none;
+  border: 0;
+  border-left: 1px solid var(--line);
+  background: transparent;
+  color: var(--ink-soft);
+  font-family: var(--mono);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: var(--tracking-lab);
+  text-transform: uppercase;
+  padding: 5px 12px;
+  cursor: pointer;
+}
+.scope-dial-seg:first-child {
+  border-left: 0;
+}
+.scope-dial-seg[aria-pressed='true'] {
+  background: var(--ink);
+  color: var(--on-ink);
+}
+
+/* The recency facet pills (quiet — only the active one fills). */
+.facet-pill {
+  appearance: none;
+  border: 1px solid var(--line);
+  background: var(--surface);
+  color: var(--ink-soft);
+  border-radius: var(--r-pill);
+  font-family: var(--mono);
+  font-size: 11px;
+  font-weight: 600;
+  padding: 4px 11px;
+  cursor: pointer;
+}
+.facet-pill[aria-pressed='true'] {
+  background: var(--ink);
+  border-color: var(--ink);
+  color: var(--on-ink);
+}
+
+/* ---- a worklist row (Triage) --------------------------------------------- */
+.drill-row {
+  display: grid;
+  align-items: center;
+  gap: var(--s-2);
+  width: 100%;
+  text-align: left;
+  border: 0;
+  border-left: var(--rail-w) solid transparent;
+  border-bottom: 1px solid var(--line-2);
+  padding: var(--s-2) var(--s-4);
+  background: var(--surface);
+  cursor: pointer;
+  font: inherit;
+}
+.drill-row:hover {
+  background: var(--surface-2);
+}
+.drill-row.is-active {
+  background: var(--flow-wash);
+}
+/* The recency rail — only OVERDUE is saturated (signal); fresh is sharp neutral,
+   working/followed_up is teal. The single loud rail draws the eye to the cold. */
+.drill-row.rail-overdue {
+  border-left-color: var(--signal);
+}
+.drill-row.rail-fresh {
+  border-left-color: var(--ink);
+}
+.drill-row.rail-working {
+  border-left-color: var(--flow);
+}
+
+/* The hero cell — recoverable-now, the loudest data on the row. */
+.drill-hero {
+  font-family: var(--mono);
+  font-size: var(--fs-readout);
+  font-weight: 700;
+  color: var(--ink);
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+/* The secondary face-value cell — operators sanity-check "$4k of an $18k deal". */
+.drill-value {
+  font-family: var(--mono);
+  font-size: var(--fs-sm);
+  color: var(--ink-soft);
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.drill-age,
+.drill-date {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--muted);
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+.drill-date {
+  text-align: right;
+}
+
+.drill-name {
+  font-weight: 700;
+  color: var(--ink);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* The stuck-step subline — a mono uppercase SYSTEM TAG, not prose. */
+.drill-step {
+  display: block;
+  font-family: var(--mono);
+  font-size: var(--fs-micro);
+  letter-spacing: var(--tracking-lab);
+  text-transform: uppercase;
+  color: var(--muted);
+  margin-top: 1px;
+}
+
+/* The magnitude bar — recoverable_now / max-in-scope, a neutral quantity cue. */
+.drill-bar-track {
+  height: var(--bar-h);
+  background: var(--bar-track);
+  border-radius: var(--r-pill);
+  margin-top: 5px;
+  overflow: hidden;
+}
+.drill-bar-fill {
+  height: 100%;
+  background: var(--bar-fill);
+  border-radius: var(--r-pill);
+}
+
+/* The dense list header. */
+.drill-head {
+  display: grid;
+  gap: var(--s-2);
+  padding: var(--s-2) var(--s-4);
+  border-bottom: 1px solid var(--line-2);
+  border-left: var(--rail-w) solid transparent;
+  color: var(--muted);
+}
+
+/* The sticky bottom select-all rail (0 selected) — absorbed by the bulk dock. */
+.bulk-rail {
+  position: sticky;
+  bottom: 0;
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+  padding: var(--s-2) var(--s-4);
+  background: var(--surface-2);
+  border-top: 1px solid var(--line-2);
+  border-radius: 0 0 var(--r-lg) var(--r-lg);
+}
+.bulk-rail-btn {
+  appearance: none;
+  border: 0;
+  background: none;
+  color: var(--ink-soft);
+  font-family: var(--mono);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: var(--tracking-lab);
+  text-transform: uppercase;
+  cursor: pointer;
+  padding: 2px 0;
+}
+
+/* ---- the triage empty-state panel (one-tap remedies, never blank) -------- */
+.worklist-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--s-3);
+  padding: var(--s-6) var(--s-4);
+  color: var(--ink-soft);
+}
+.worklist-empty-line {
+  font-size: var(--fs-sm);
+  color: var(--ink-soft);
+}
+.worklist-empty-remedies {
+  display: inline-flex;
+  gap: var(--s-2);
+  flex-wrap: wrap;
+}
+.worklist-empty.rest {
+  align-items: center;
+  text-align: center;
+  color: var(--muted);
+  padding: var(--s-8) var(--s-4);
+}
+
+/* =============================================================================
+   History archive — a recessed, control-less surface (NO red, NO checkbox, NO
+   bulk). The calm "what we closed" lookback.
+============================================================================= */
+.history-surface {
+  background: var(--surface-2);
+}
+
+.history-head {
+  padding: var(--s-3) var(--s-4) var(--s-2);
+  border-bottom: 1px solid var(--line-2);
+  display: grid;
+  gap: var(--s-2);
+}
+
+.history-stat-line {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s-3);
+  color: var(--ink-soft);
+  font-size: var(--fs-sm);
+}
+.history-stat {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s-1);
+  font-variant-numeric: tabular-nums;
+}
+.history-stat .mono {
+  font-weight: 700;
+}
+.history-diamond-recovered {
+  color: var(--flow);
+}
+.history-diamond-dismissed {
+  color: var(--line-strong);
+}
+
+.history-tools {
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+  flex-wrap: wrap;
+}
+.history-search {
+  flex: 1;
+  min-width: 160px;
+  font-family: var(--sans);
+  font-size: var(--fs-sm);
+  padding: 6px 10px;
+  border-radius: var(--r-sm);
+  border: 1px solid var(--line);
+  background: var(--surface);
+  color: var(--ink);
+}
+.history-sort {
+  font-family: var(--mono);
+  font-size: 11px;
+  padding: 5px 6px;
+  border-radius: var(--r-sm);
+  border: 1px solid var(--line);
+  background: var(--surface);
+  color: var(--ink);
+}
+
+/* The sub-tabs — All / Recovered / Dismissed with counts. */
+.history-subtabs {
+  display: inline-flex;
+  gap: var(--s-1);
+}
+.history-subtab {
+  appearance: none;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: var(--tracking-lab);
+  text-transform: uppercase;
+  padding: 4px 10px;
+  border-radius: var(--r-pill);
+  cursor: pointer;
+}
+.history-subtab[aria-selected='true'] {
+  background: var(--surface);
+  border-color: var(--line);
+  color: var(--ink);
+}
+.history-subtab.recovered[aria-selected='true'] {
+  color: var(--flow-ink);
+  border-color: var(--flow);
+}
+.history-subtab.dismissed[aria-selected='true'] {
+  color: var(--ink);
+  border-color: var(--line-strong);
+}
+
+/* A history row — recessed, calmer, with an outcome rail (teal/neutral, no red). */
+.history-row {
+  display: grid;
+  align-items: center;
+  gap: var(--s-2);
+  width: 100%;
+  text-align: left;
+  border: 0;
+  border-left: var(--rail-w) solid var(--line-strong);
+  border-bottom: 1px solid var(--line-2);
+  padding: var(--s-3) var(--s-4);
+  background: var(--surface-2);
+  cursor: pointer;
+  font: inherit;
+}
+.history-row:hover {
+  background: var(--surface);
+}
+.history-row.is-active {
+  background: var(--flow-wash);
+}
+.history-row.outcome-recovered {
+  border-left-color: var(--flow);
+}
+.history-row.outcome-dismissed {
+  border-left-color: var(--line-strong);
+}
+
+.history-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.history-name.recovered {
+  font-weight: 600;
+  color: var(--ink);
+}
+.history-name.dismissed {
+  color: var(--ink-soft);
+}
+
+.history-sub {
+  display: block;
+  font-family: var(--mono);
+  font-size: var(--fs-micro);
+  letter-spacing: var(--tracking-lab);
+  text-transform: uppercase;
+  color: var(--muted);
+  margin-top: 1px;
+}
+
+.history-amount {
+  font-family: var(--mono);
+  font-size: var(--fs-sm);
+  color: var(--flow-ink);
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.history-operator,
+.history-when {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--muted);
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+.history-when {
+  text-align: right;
+}
+
+.history-foot {
+  padding: var(--s-3) var(--s-4);
+  color: var(--muted);
 }

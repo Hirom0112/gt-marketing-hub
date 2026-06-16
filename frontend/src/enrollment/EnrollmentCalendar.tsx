@@ -126,9 +126,12 @@ function monthLabel(month: string): string {
   });
 }
 
-// The recoverable-now magnitude used for the default ranking. Prefers the
-// backend's value (W1) and falls back to value×score when absent (older server).
-function recoverableNow(e: CalendarEntry): number {
+// The recoverable-now magnitude used for the default ranking + the triage hero
+// cell / magnitude bar. Prefers the backend's value (W1) and falls back to
+// value×score when absent (older server). Exported so the triage list reads the
+// SAME recoverable-now everywhere (one canonical home).
+// eslint-disable-next-line react-refresh/only-export-components
+export function recoverableNow(e: CalendarEntry): number {
   if (typeof e.recoverable_now === 'number') return e.recoverable_now;
   return e.value * e.score;
 }
@@ -466,7 +469,6 @@ export function DrillToolbar({
         >
           <option value="recoverable">recoverable now</option>
           <option value="value">value</option>
-          <option value="score">score</option>
           <option value="recency">recency</option>
         </select>
       </label>

@@ -1,35 +1,48 @@
-// DrillRow (S12 W3) — one dense tabular row in the ranked drill / show-all list.
-// Seven columns on a fixed grid: a teal-when-on checkbox, a zero-padded rank, the
-// family name + stuck-step subline, a mono stall-date column (always present so
-// the date is never lost in a flat sort), the mono recovery value (right-aligned),
-// the recency Chip (REUSED primitive, tone from recencyTone), and the mono score.
-// Selected rows wash teal (--flow-wash); hover lifts to --surface-2. The grid
-// template is shared with the header via DRILL_GRID so the two stay aligned.
+// DrillRow (S13 redesign) — one dense row in the TRIAGE worklist. The redesign
+// kills the "AI slop" pill-wall: the recency Chip column is GONE (it's a 3px
+// left-edge RAIL now), the rank column and the score column are GONE (the ordered
+// list + the magnitude bar convey priority; score is a model internal). What's
+// loud is the MONEY: recoverable_now is the hero cell (mono, 15px, weight 700,
+// tabular nums), with a neutral magnitude bar under the family name showing where
+// the recoverable dollars sit relative to the rest of the scope. Face value stays
+// as a quieter secondary cell so an operator can sanity-check "$4k of an $18k
+// deal". A mono age cell ("12d") differentiates overdue rows by how long they've
+// sat, not an identical word. The grid template is shared with the header via
+// DRILL_GRID. History does NOT use this row — it has its own grammar (HistoryRow).
 
-import type { CSSProperties } from 'react';
-import { Chip } from '../ui';
-import { isContactStatus, recencyLabel, recencyTone } from './recency';
+// The shared grid: rail(via border, not a col) · checkbox · name+bar · hero
+// recoverable · secondary value · age · stall-date.
+export const DRILL_GRID = '26px 1fr 120px 84px 56px 72px';
 
-// The shared 7-col grid template — header + every row read from this one place.
-export const DRILL_GRID = '26px 22px 1fr 78px 96px 64px 52px';
+// Map a raw contact_status onto the recency rail class. Only OVERDUE is the loud
+// saturated rail; fresh is a sharp neutral rail; working/followed_up is teal.
+// eslint-disable-next-line react-refresh/only-export-components
+export function railClass(contactStatus: string): string {
+  if (contactStatus === 'overdue') return 'rail-overdue';
+  if (contactStatus === 'followed_up' || contactStatus === 'working')
+    return 'rail-working';
+  // fresh (and any unknown) → the sharp neutral rail.
+  return 'rail-fresh';
+}
 
 interface DrillRowProps {
   // Stable id (used by selection callbacks + testids).
   familyId: string;
-  // 1-based rank within the current sort (rendered zero-padded).
-  rank: number;
-  // Display name (e.g. "The Alvarez Family").
+  // Display name (e.g. "The Alvarez Family") — the ONLY sans element on the row.
   name: string;
-  // The stuck step, human-readable (e.g. "enrollment agreement").
+  // The stuck step, human-readable — rendered as a mono uppercase system tag.
   stuckStep: string;
   // Pre-formatted mono stall-date (e.g. "Jun 13") — caller owns date formatting.
-  // Always rendered so a flat (non-date) sort still shows each family's date.
   stallDate: string;
-  // Pre-formatted mono value (e.g. "$10,474") — caller owns money formatting.
+  // Pre-formatted mono age (e.g. "12d") — caller owns the age formatting.
+  age: string;
+  // Pre-formatted HERO recoverable-now (e.g. "$50,000") — the loudest cell.
+  recoverable: string;
+  // Pre-formatted secondary face value (e.g. "$60,000") — the sanity-check cell.
   value: string;
-  // Pre-formatted mono score (e.g. "0.91").
-  score: string;
-  // Raw contact_status string (narrowed internally for the recency Chip tone).
+  // The magnitude fraction (0..1) = recoverable_now / max-in-scope → bar width.
+  magnitude: number;
+  // Raw contact_status string (→ the recency rail class).
   contactStatus: string;
   // Whether this row's checkbox is ticked.
   selected?: boolean;
@@ -41,81 +54,49 @@ interface DrillRowProps {
   onSelect?: (familyId: string) => void;
 }
 
-// Header helper — a `qhead` row whose columns line up with every DrillRow.
+// Header helper — a `qhead` row whose columns line up with every DrillRow (the
+// rail is a border, so the header carries a transparent rail border too).
 export function DrillRowHead(): JSX.Element {
-  const cell: CSSProperties = { whiteSpace: 'nowrap' };
   return (
     <div
       data-testid="drill-head"
-      className="lab"
-      style={{
-        display: 'grid',
-        gridTemplateColumns: DRILL_GRID,
-        gap: 'var(--s-2)',
-        padding: 'var(--s-2) var(--s-4)',
-        borderBottom: '1px solid var(--line-2)',
-        color: 'var(--muted)',
-      }}
+      className="lab drill-head"
+      style={{ gridTemplateColumns: DRILL_GRID }}
     >
-      <span style={cell}>sel</span>
-      <span style={cell}>#</span>
-      <span style={cell}>family · stuck on</span>
-      <span style={cell}>stalled</span>
-      <span style={{ ...cell, textAlign: 'right' }}>value</span>
-      <span style={{ ...cell, textAlign: 'center' }}>recency</span>
-      <span style={{ ...cell, textAlign: 'right' }}>score</span>
+      <span>sel</span>
+      <span>family · stuck on</span>
+      <span style={{ textAlign: 'right' }}>recoverable</span>
+      <span style={{ textAlign: 'right' }}>value</span>
+      <span>age</span>
+      <span style={{ textAlign: 'right' }}>stalled</span>
     </div>
   );
 }
 
 export default function DrillRow({
   familyId,
-  rank,
   name,
   stuckStep,
   stallDate,
+  age,
+  recoverable,
   value,
-  score,
+  magnitude,
   contactStatus,
   selected = false,
   active = false,
   onToggle,
   onSelect,
 }: DrillRowProps): JSX.Element {
-  const tone = isContactStatus(contactStatus)
-    ? recencyTone(contactStatus)
-    : 'neutral';
-  const label = isContactStatus(contactStatus)
-    ? recencyLabel(contactStatus)
-    : contactStatus;
-
+  const pct = Math.max(0, Math.min(1, magnitude)) * 100;
   return (
     <button
       type="button"
       data-testid={`drill-row-${familyId}`}
+      data-rail={railClass(contactStatus)}
       onClick={() => onSelect?.(familyId)}
-      style={{
-        display: 'grid',
-        gridTemplateColumns: DRILL_GRID,
-        gap: 'var(--s-2)',
-        alignItems: 'center',
-        width: '100%',
-        textAlign: 'left',
-        border: 0,
-        borderBottom: '1px solid var(--line-2)',
-        padding: 'var(--s-3) var(--s-4)',
-        background: active ? 'var(--flow-wash)' : 'var(--surface)',
-        cursor: 'pointer',
-        font: 'inherit',
-      }}
-      onMouseEnter={(e) => {
-        if (!active) e.currentTarget.style.background = 'var(--surface-2)';
-      }}
-      onMouseLeave={(e) => {
-        e.currentTarget.style.background = active
-          ? 'var(--flow-wash)'
-          : 'var(--surface)';
-      }}
+      className={`drill-row ${railClass(contactStatus)}${active ? ' is-active' : ''}`}
+      style={{ gridTemplateColumns: DRILL_GRID }}
     >
       <span
         role="checkbox"
@@ -150,53 +131,29 @@ export default function DrillRow({
       >
         {selected ? '✓' : ''}
       </span>
-      <span
-        className="mono"
-        style={{ fontSize: 11, color: 'var(--muted)' }}
-      >
-        {String(rank).padStart(2, '0')}
-      </span>
-      <span
-        style={{
-          fontWeight: 600,
-          overflow: 'hidden',
-          textOverflow: 'ellipsis',
-          whiteSpace: 'nowrap',
-        }}
-      >
-        {name}
-        <small
-          style={{
-            display: 'block',
-            color: 'var(--muted)',
-            fontWeight: 500,
-            fontSize: 11,
-          }}
+
+      <span style={{ minWidth: 0 }}>
+        <span className="drill-name">{name}</span>
+        <small className="drill-step">{stuckStep}</small>
+        {/* The magnitude bar — where the recoverable money sits (neutral, not red). */}
+        <span
+          className="drill-bar-track"
+          data-testid={`drill-row-bar-${familyId}`}
+          aria-hidden
         >
-          {stuckStep}
-        </small>
+          <span className="drill-bar-fill" style={{ width: `${pct}%` }} />
+        </span>
       </span>
-      <span
-        className="mono"
-        data-testid={`drill-row-date-${familyId}`}
-        style={{ fontSize: 11, color: 'var(--muted)', whiteSpace: 'nowrap' }}
-      >
+
+      <span className="drill-hero" data-testid={`drill-row-recoverable-${familyId}`}>
+        {recoverable}
+      </span>
+      <span className="drill-value">{value}</span>
+      <span className="drill-age" data-testid={`drill-row-age-${familyId}`}>
+        {age}
+      </span>
+      <span className="drill-date" data-testid={`drill-row-date-${familyId}`}>
         {stallDate}
-      </span>
-      <span
-        className="mono"
-        style={{ fontSize: 12, fontWeight: 600, textAlign: 'right' }}
-      >
-        {value}
-      </span>
-      <span style={{ display: 'flex', justifyContent: 'center' }}>
-        <Chip tone={tone}>{label}</Chip>
-      </span>
-      <span
-        className="mono"
-        style={{ fontSize: 12, color: 'var(--ink-soft)', textAlign: 'right' }}
-      >
-        {score}
       </span>
     </button>
   );

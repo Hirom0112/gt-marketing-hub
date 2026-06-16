@@ -7,9 +7,27 @@ import BulkBar from '../BulkBar';
 // gate trust signal), and swaps to a reason-picker rail in dismiss mode.
 
 describe('BulkBar', () => {
-  it('renders nothing when nothing is selected', () => {
+  it('renders nothing when nothing is selected and there is no view to select', () => {
     const { container } = render(<BulkBar count={0} />);
     expect(container).toBeEmptyDOMElement();
+  });
+
+  it('renders the thin select-all rail when 0 selected but rows are in view', () => {
+    const onSelectAll = vi.fn();
+    render(<BulkBar count={0} viewCount={42} onSelectAll={onSelectAll} />);
+    const rail = screen.getByTestId('bulk-rail');
+    expect(rail).toHaveTextContent('Select all 42 in view');
+    fireEvent.click(screen.getByTestId('bulk-rail-select-all'));
+    expect(onSelectAll).toHaveBeenCalledTimes(1);
+    // The dark dock is NOT shown at 0 selected.
+    expect(screen.queryByTestId('bulk-bar')).toBeNull();
+  });
+
+  it('shows the selection recoverable total in the dock when provided', () => {
+    render(<BulkBar count={3} recoverableLabel="$88,000" />);
+    expect(screen.getByTestId('bulk-bar-recoverable')).toHaveTextContent(
+      '$88,000 recoverable',
+    );
   });
 
   it('shows the selected count and fires the batch actions', () => {

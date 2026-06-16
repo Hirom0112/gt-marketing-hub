@@ -1,23 +1,21 @@
 import { useEffect, useMemo, useState } from 'react';
 import { apiBaseUrl } from '../config';
 import { Card } from '../ui';
-import DrillRow, { DrillRowHead } from './DrillRow';
-import {
-  ROW_CAP,
-  type CalendarEntry,
-  sortEntries,
-} from './EnrollmentCalendar';
+import HistoryRow, { recoveredOutcomeLabel } from './HistoryRow';
 import { fmtDay, fmtUSD } from './format';
 
-// HistoryList (S13 W1, decision A-22) — recovered/dismissed families, EVICTED out
-// of the triage list into their OWN clearly-separate view. This is an audit /
-// lookback dataset, NOT the triage worklist at any scope — letting it ride along
-// muddied the purpose. It reads GET /work-queue?scope=history&limit=200 (the
-// closed-out tail, server-capped) and is strictly READ-ONLY: no scope dial, no
-// bulk, no select-all, no recover/capture/dismiss — just a browsable list ranked
-// by value so the biggest closed-out families are easy to find. Read-only GET
-// (INV-2). The IA separation is the point: this is "what we closed", not "what to
-// work next".
+// HistoryList (S13 redesign) — the read-only ARCHIVE, rebuilt as a DELIBERATELY
+// DIFFERENT surface from Triage: recessed --surface-2 ground, no red, no checkbox,
+// no rank/score, no recoverable hero, no bulk, no scope dial. Its visual absence
+// of controls is the "nothing to do here" cue. Sub-tabs (All / Recovered /
+// Dismissed, with counts) swap the columns; a name search filters the loaded
+// page; sort is most-recent-first by default. Read-only GET (INV-2).
+//
+// Backend contract (W-redesign): rows carry recovered_outcome / resolved_at /
+// dismiss_reason / dismissed_by / dismissed_at. Active rows have these null. We
+// DEGRADE GRACEFULLY: if a field is null (backend not merged yet) we fall back to
+// the recovery_state enum for the outcome and stall_date for the date, so History
+// still renders + is differentiated.
 
 interface WorkQueueItem {
   family_id: string;
@@ -32,15 +30,26 @@ interface WorkQueueItem {
   contact_status: string;
   recovery_state: string;
   last_contact_at?: string | null;
+  // The W-redesign history fields (null on active rows / older server).
+  recovered_outcome?:
+    | 'stage_advanced'
+    | 'forms_cleared'
+    | 'deposit_received'
+    | null;
+  resolved_at?: string | null;
+  dismiss_reason?: string | null;
+  dismissed_by?: string | null;
+  dismissed_at?: string | null;
 }
 
-// The history scope's server-side row cap (never stream the recovered tail).
 const HISTORY_LIMIT = 200;
+
+type HistoryTab = 'all' | 'recovered' | 'dismissed';
+type HistorySort = 'recent' | 'value';
 
 interface HistoryListProps {
   selectedFamilyId?: string;
   onSelectFamily?: (familyId: string) => void;
-  // Bumped after a write moves a family into history so this view re-pulls.
   refreshKey?: number;
 }
 
@@ -49,19 +58,24 @@ type LoadState =
   | { status: 'error'; message: string }
   | { status: 'ready'; items: WorkQueueItem[] };
 
-function toEntry(item: WorkQueueItem): CalendarEntry & { recovery_state: string } {
-  return {
-    family_id: item.family_id,
-    display_name: item.display_name,
-    stall_date: item.stall_date,
-    current_stage: item.current_stage,
-    contact_status: item.contact_status,
-    value: item.value,
-    score: item.score,
-    recoverable_now: item.recoverable_now,
-    freshness: item.freshness,
-    recovery_state: item.recovery_state,
-  };
+// The closed-out kind for a row — prefers an explicit recovery_state, then the
+// presence of a dismiss field, defaulting to recovered.
+function kindOf(it: WorkQueueItem): 'recovered' | 'dismissed' {
+  if (it.recovery_state === 'dismissed') return 'dismissed';
+  if (it.recovery_state === 'recovered') return 'recovered';
+  if (it.dismiss_reason || it.dismissed_at || it.dismissed_by) return 'dismissed';
+  return 'recovered';
+}
+
+// The resolved/dismissed instant for a row (graceful fallback to stall_date).
+function whenMs(it: WorkQueueItem): number {
+  const iso = it.resolved_at ?? it.dismissed_at ?? it.stall_date;
+  const ms = Date.parse(iso ?? '');
+  return Number.isNaN(ms) ? 0 : ms;
+}
+
+function whenIso(it: WorkQueueItem): string {
+  return it.resolved_at ?? it.dismissed_at ?? it.stall_date ?? '';
 }
 
 export default function HistoryList({
@@ -70,6 +84,9 @@ export default function HistoryList({
   refreshKey = 0,
 }: HistoryListProps): JSX.Element {
   const [state, setState] = useState<LoadState>({ status: 'loading' });
+  const [tab, setTab] = useState<HistoryTab>('all');
+  const [sort, setSort] = useState<HistorySort>('recent');
+  const [query, setQuery] = useState('');
 
   useEffect(() => {
     let cancelled = false;
@@ -93,15 +110,31 @@ export default function HistoryList({
     };
   }, [refreshKey]);
 
-  const ranked = useMemo(
-    () =>
-      sortEntries(
-        (state.status === 'ready' ? state.items : []).map(toEntry),
-        'value',
-      ),
+  const items = useMemo<WorkQueueItem[]>(
+    () => (state.status === 'ready' ? state.items : []),
     [state],
   );
-  const shown = useMemo(() => ranked.slice(0, ROW_CAP), [ranked]);
+
+  const counts = useMemo(() => {
+    let recovered = 0;
+    let dismissed = 0;
+    for (const it of items) {
+      if (kindOf(it) === 'recovered') recovered += 1;
+      else dismissed += 1;
+    }
+    return { recovered, dismissed, all: items.length };
+  }, [items]);
+
+  const rows = useMemo(() => {
+    let out = items;
+    if (tab !== 'all') out = out.filter((it) => kindOf(it) === tab);
+    const q = query.trim().toLowerCase();
+    if (q) out = out.filter((it) => it.display_name.toLowerCase().includes(q));
+    const copy = [...out];
+    if (sort === 'value') copy.sort((a, b) => b.value - a.value);
+    else copy.sort((a, b) => whenMs(b) - whenMs(a)); // most-recent first
+    return copy;
+  }, [items, tab, query, sort]);
 
   if (state.status === 'loading') {
     return (
@@ -122,64 +155,128 @@ export default function HistoryList({
     );
   }
 
+  const subtabs: readonly { key: HistoryTab; label: string; n: number }[] = [
+    { key: 'all', label: 'all', n: counts.all },
+    { key: 'recovered', label: 'recovered', n: counts.recovered },
+    { key: 'dismissed', label: 'dismissed', n: counts.dismissed },
+  ];
+
   return (
     <section aria-label="History" data-testid="history-list">
-      <Card pad={false}>
-        <div
-          data-testid="history-banner"
-          className="lab"
-          style={{
-            display: 'flex',
-            alignItems: 'baseline',
-            gap: 'var(--s-2)',
-            padding: 'var(--s-2) var(--s-4)',
-            borderBottom: '1px solid var(--line-2)',
-            color: 'var(--muted)',
-          }}
-        >
-          <span style={{ color: 'var(--ink)', fontWeight: 600 }}>
-            Closed out — recovered &amp; dismissed
+      <Card pad={false} className="history-surface">
+        <div className="history-head" data-testid="history-banner">
+          <span className="lab">History · closed out this season</span>
+          <span className="history-stat-line" data-testid="history-stat-line">
+            <span className="history-stat">
+              <span className="history-diamond-recovered" aria-hidden>
+                ◆
+              </span>
+              <span className="mono" data-testid="history-recovered-count">
+                {counts.recovered.toLocaleString('en-US')}
+              </span>{' '}
+              recovered
+            </span>
+            <span className="history-stat">
+              <span className="history-diamond-dismissed" aria-hidden>
+                ◆
+              </span>
+              <span className="mono" data-testid="history-dismissed-count">
+                {counts.dismissed.toLocaleString('en-US')}
+              </span>{' '}
+              dismissed
+            </span>
           </span>
-          <span style={{ marginLeft: 'auto' }} className="mono">
-            {ranked.length} in history · read-only audit
-          </span>
+
+          <div
+            className="history-subtabs"
+            role="tablist"
+            data-testid="history-subtabs"
+          >
+            {subtabs.map((t) => (
+              <button
+                key={t.key}
+                type="button"
+                role="tab"
+                aria-selected={tab === t.key}
+                data-testid={`history-tab-${t.key}`}
+                className={`history-subtab ${t.key}`}
+                onClick={() => setTab(t.key)}
+              >
+                {t.label} · {t.n.toLocaleString('en-US')}
+              </button>
+            ))}
+          </div>
+
+          <div className="history-tools">
+            <input
+              type="search"
+              className="history-search"
+              data-testid="history-search"
+              placeholder="find a family…"
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              aria-label="Find a family"
+            />
+            <label
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: 'var(--s-1)',
+                fontFamily: 'var(--mono)',
+                fontSize: 11,
+                color: 'var(--muted)',
+              }}
+            >
+              sort
+              <select
+                className="history-sort"
+                data-testid="history-sort"
+                value={sort}
+                onChange={(e) => setSort(e.target.value as HistorySort)}
+              >
+                <option value="recent">most recent</option>
+                <option value="value">recovered value</option>
+              </select>
+            </label>
+          </div>
         </div>
-        <DrillRowHead />
-        {shown.length === 0 ? (
+
+        {rows.length === 0 ? (
           <p
             data-testid="history-empty"
             className="lab"
             style={{ padding: 'var(--s-4)', color: 'var(--muted)' }}
           >
-            No closed-out families in history yet.
+            {query.trim()
+              ? 'No families match that search.'
+              : 'No closed-out families in history yet.'}
           </p>
         ) : (
-          shown.map((e, i) => (
-            <DrillRow
-              key={e.family_id}
-              familyId={e.family_id}
-              rank={i + 1}
-              name={e.display_name}
-              stuckStep={e.current_stage}
-              stallDate={fmtDay(e.stall_date)}
-              value={fmtUSD(e.value)}
-              score={e.score.toFixed(2)}
-              contactStatus={e.contact_status}
-              // Read-only: no checkbox, no bulk.
-              active={e.family_id === selectedFamilyId}
-              onSelect={onSelectFamily}
-            />
-          ))
+          rows.map((it) => {
+            const kind = kindOf(it);
+            return (
+              <HistoryRow
+                key={it.family_id}
+                familyId={it.family_id}
+                name={it.display_name}
+                kind={kind}
+                when={fmtDay(whenIso(it))}
+                outcome={recoveredOutcomeLabel(it.recovered_outcome)}
+                amount={fmtUSD(it.value)}
+                reason={it.dismiss_reason ?? 'Dismissed'}
+                operator={it.dismissed_by ?? 'operator'}
+                stage={it.current_stage}
+                active={it.family_id === selectedFamilyId}
+                onSelect={onSelectFamily}
+              />
+            );
+          })
         )}
-        {ranked.length > ROW_CAP && (
-          <div
-            className="lab"
-            data-testid="history-cap-footer"
-            style={{ padding: 'var(--s-3) var(--s-4)', color: 'var(--muted)' }}
-          >
-            Showing top {ROW_CAP} of {ranked.length} closed-out families.
-          </div>
-        )}
+
+        <div className="history-foot lab" data-testid="history-foot">
+          Showing the {Math.min(rows.length, HISTORY_LIMIT)} most recently closed
+          of {counts.all}.
+        </div>
       </Card>
     </section>
   );
