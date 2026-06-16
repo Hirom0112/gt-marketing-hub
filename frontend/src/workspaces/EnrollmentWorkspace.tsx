@@ -10,6 +10,7 @@ import EnrollmentCalendar, {
 } from '../enrollment/EnrollmentCalendar';
 import TriageList, { type TriageScope } from '../enrollment/TriageList';
 import StudentBoard from '../enrollment/StudentBoard';
+import DropOffPanel from '../enrollment/DropOffPanel';
 import HistoryList from '../enrollment/HistoryList';
 import NotesTimeline, {
   type NotesTimelineHandle,
@@ -361,6 +362,9 @@ export default function EnrollmentWorkspace(): JSX.Element {
           dismissReasons={DISMISS_REASONS}
           onDismiss={dismissOne}
         />
+        {/* Apply-flow drop-off telemetry (S15 W2) — the last step before exit,
+            metadata only (INV-1/INV-6). Degrades cleanly on 204 / no telemetry. */}
+        <DropOffPanel familyId={selectedFamilyId} />
         <div className="work-panel-rule" aria-hidden />
         <ActionPanel
           familyId={selectedFamilyId}

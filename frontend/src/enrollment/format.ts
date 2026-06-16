@@ -76,6 +76,34 @@ export function fundingLabel(fundingType: string | null | undefined): string {
   }
 }
 
+// snake_case → Title Case for the apply-flow drop-off telemetry (S15 W2). A
+// step/form_key/field_key segment ("data_collection_consent") humanizes to
+// "Data Collection Consent". Null/empty segments are dropped by the caller, so
+// this never has to render "Null". Metadata only — these are STRUCTURAL ids
+// (step/form/field), never a typed value or child key (INV-1/INV-6).
+export function humanizeSegment(value: string | null | undefined): string {
+  if (value == null) return '';
+  return value
+    .split(/[_\s]+/)
+    .filter((word) => word.length > 0)
+    .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
+    .join(' ');
+}
+
+// Join the present drop-off segments into the operator headline, omitting null
+// segments: (enroll, data_collection_consent, signature) → "Enroll · Data
+// Collection Consent · Signature"; (apply, null, null) → "Apply".
+export function dropOffPath(
+  step: string,
+  formKey?: string | null,
+  fieldKey?: string | null,
+): string {
+  return [step, formKey, fieldKey]
+    .map((seg) => humanizeSegment(seg))
+    .filter((seg) => seg.length > 0)
+    .join(' · ');
+}
+
 // Compact: 10474 → "$10k", 2618.5 → "$2.6k", 900 → "$900" (chips, heat at-risk).
 export function shortDollars(value: number): string {
   if (!Number.isFinite(value) || value <= 0) return '$0';

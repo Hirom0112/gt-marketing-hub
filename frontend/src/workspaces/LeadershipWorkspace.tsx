@@ -3,6 +3,7 @@ import EvalGate from '../EvalGate';
 import LandingDashboard from '../LandingDashboard';
 import PipelineBoard from '../PipelineBoard';
 import Scoreboard from '../Scoreboard';
+import DropOffHeatmap from '../enrollment/DropOffHeatmap';
 
 // S11 leadership workspace — the P2-readable view. Per ASSUMPTIONS A-17, the
 // leadership-facing content the operator page used to carry now lives here,
@@ -69,7 +70,11 @@ export default function LeadershipWorkspace(): JSX.Element {
       {/* 3. FR-6.1 growth rollup (both funnels + eval status). */}
       <Scoreboard />
 
-      {/* 4. FR-4.5 / INV-3 fail-closed gate health. */}
+      {/* 4. Apply-flow drop-off heatmap (S15 W2) — where the cohort froze,
+          aggregate only (INV-6). Degrades to an empty state off live telemetry. */}
+      <DropOffHeatmap />
+
+      {/* 5. FR-4.5 / INV-3 fail-closed gate health. */}
       <EvalGate />
     </section>
   );
