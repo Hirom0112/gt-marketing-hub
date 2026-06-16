@@ -11,6 +11,7 @@ from mangum import Mangum
 
 from app.api.ai_actions import router as ai_actions_router
 from app.api.content import router as content_router
+from app.api.crm_status import router as crm_status_router
 from app.api.enrollment import router as enrollment_router
 from app.api.evals import router as evals_router
 from app.api.families import router as families_router
@@ -74,6 +75,15 @@ app.include_router(funding_router)
 # /seam/{id}/reconcile POST. The reconcile is human-gated and LOGGED (NFR-6); a
 # flagged conflict fails closed (INV-4).
 app.include_router(seam_router)
+
+# CRM seam status (S14 W4; INV-3/INV-8 surfaced) — /crm/status GET. A read-only
+# window onto the effective HubSpot seam (configured CRM_MODE, the kill switch, the
+# mode the registry would actually select, whether a token is set — NEVER the token,
+# the per-run call cap). The frontend reads it to show "CRM: Simulated/LIVE/Kill
+# switch ON" and to FAIL CLOSED — disable the live-push control when the kill switch
+# is on (the INV-3 "red eval disables the action in the UI" pattern). The kill
+# switch's MECHANISM stays the server env var; this only surfaces state.
+app.include_router(crm_status_router)
 
 # Content engine (FR-3.1/3.4/3.5; ARCH §5.3) — /ai/content/generate (gated batch),
 # /content/{id}/decision (the sole content state write — keep promotes library +
