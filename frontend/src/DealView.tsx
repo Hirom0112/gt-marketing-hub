@@ -9,6 +9,7 @@ import { Button, Chip } from './ui';
 import RecencyChip from './enrollment/RecencyChip';
 import CompletionRing from './enrollment/CompletionRing';
 import SeamDot, { type SeamStatus } from './enrollment/SeamDot';
+import { fundingLabel } from './enrollment/format';
 
 // Deal view (FR-2.2). Fetches GET /families/{id} and surfaces the deal_view
 // summary: stall reason, funding type, MAP signal (map_score), attribution
@@ -258,7 +259,10 @@ export default function DealView({
   }
 
   const deal = state.data;
-  const isTefa = deal.funding_type.toLowerCase() === 'tefa';
+  // A-23 — show the operator-facing label ("Texas voucher" / "Self-pay"), never
+  // the raw enum. Voucher tiers (any TEFA) take the gate tone, self-pay the flow.
+  const isTefa = deal.funding_type.toLowerCase().includes('tefa');
+  const fundingDisplay = fundingLabel(deal.funding_type);
 
   return (
     <section aria-label="Deal view" data-testid="deal-view">
@@ -283,7 +287,7 @@ export default function DealView({
           {deal.contact_status != null && (
             <RecencyChip status={deal.contact_status} testId="deal-recency" />
           )}
-          <Chip tone={isTefa ? 'gate' : 'flow'}>{deal.funding_type}</Chip>
+          <Chip tone={isTefa ? 'gate' : 'flow'}>{fundingDisplay}</Chip>
         </div>
       </div>
 
@@ -385,7 +389,7 @@ export default function DealView({
       >
         <DealField
           label="Funding type"
-          value={deal.funding_type}
+          value={fundingDisplay}
           testId="deal-funding-type"
         />
         <DealField

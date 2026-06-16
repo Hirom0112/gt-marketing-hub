@@ -7,11 +7,12 @@ recoverability/value score and ranks a cohort by it:
 
 Both terms live in [0,1]. `recoverability` composes three normalized sub-factors
 weighted per §8 — how recently the family stalled (relative to the stall
-window), how close it sits to the Tuition finish line, and how responsive it is.
-`value` is the tuition baseline scaled by the applicable funded multiplier,
-normalized by `value_max` so the value term also stays in [0,1] (ASSUMPTIONS.md
-A-1). Every weight, baseline, and window is read from the typed params (§8) —
-nothing here is hardcoded (CLAUDE.md INV-11).
+window), how close it sits to the Tuition finish line (the DOMINANT sub-factor —
+funnel depth, A-23), and how responsive it is. `value` is `num_children ×
+per-child tuition` (A-23 — every targeted family is full-pay, so value varies
+only by child count), normalized by `value_max` so the value term also stays in
+[0,1] (ASSUMPTIONS.md A-1). Every weight, baseline, and window is read from the
+typed params (§8) — nothing here is hardcoded (CLAUDE.md INV-11).
 
 This is part of the deterministic core and stays pure: a function of the typed
 inputs + params alone, with no LLM, no adapter, and no DB access. It imports
@@ -21,7 +22,6 @@ persistence of `family_record.work_queue_score` is wired up in a later slice.
 
 from __future__ import annotations
 
-import hashlib
 from datetime import UTC, datetime, timedelta
 from uuid import UUID
 
@@ -34,11 +34,6 @@ from app.data.models import FundingType, Stage
 # position along this path to [0,1]; closer to Tuition = more recoverable (§5.1).
 # Derived from the Stage enum, not a hardcoded magnitude (INV-11).
 _STAGE_ORDER: tuple[Stage, ...] = (Stage.INTEREST, Stage.APPLY, Stage.ENROLL, Stage.TUITION)
-
-# Multiplier for a self-pay / unfunded family: the tuition baseline at face
-# value (no funded weighting). Structural identity, not a tunable (the funded
-# weighting itself lives in params — work_queue.value.funded_multiplier).
-_SELF_PAY_MULTIPLIER = 1.0
 
 
 class WorkQueueFamily(BaseModel):
@@ -62,6 +57,12 @@ class WorkQueueFamily(BaseModel):
     # A normalized engagement signal in [0,1] (aggregate only — P-4 / INV-6);
     # clamped defensively at scoring time.
     responsiveness: float = 0.0
+    # The Interest form's child count (A-23) — the sole driver of value spread:
+    # value = num_children × per-child tuition. Defaults to 1 (a family is always
+    # for ≥1 child) so existing fixtures construct unchanged; clamped ≥1 at scoring.
+    num_children: int = 1
+    # Funding tier — informational only now (every targeted family is full-pay, so
+    # it no longer scales value, A-23). Retained for display / cohort filtering.
     funding_type: FundingType | None = None
 
 
@@ -153,35 +154,38 @@ def recoverability(
     )
 
 
-def _is_funded(funding_type: FundingType | None) -> bool:
-    """True when the family carries a TEFA award (any tier), not self-pay (§4.8)."""
-    return funding_type is not None and funding_type is not FundingType.SELF_PAY
+def _child_count(family: WorkQueueFamily) -> int:
+    """The family's child count for value, clamped to ``[1, ∞)`` (A-23).
+
+    A family always enrolls ≥1 child; a stray non-positive count would zero out
+    value and drop the row off the board, so it floors at 1.
+    """
+    return max(1, family.num_children)
 
 
 def value(family: WorkQueueFamily, params: Params) -> float:
-    """Raw queue value — tuition baseline × the applicable funded multiplier (§8).
+    """Raw queue value — per-child tuition × the family's child count (A-23; §8).
 
-    Funded (any TEFA tier) families take ``work_queue.value.funded_multiplier``;
-    self-pay / no-funding families take the 1.0 baseline. Both inputs are params
-    (INV-11). Normalized by :func:`value_max` at scoring time so the value term
-    stays in [0,1] (A-1).
+    Every targeted family pays the same full GT-Anywhere tuition per child (Texas
+    voucher = self-pay), so value varies across families ONLY by how many children
+    they enrolled (the Interest form's "How many children? 1–5+"). The old funded
+    multiplier / per-family hash variance are gone — this is a real funnel signal,
+    not jitter. ``tuition_annual_default`` is params (INV-11); normalized by
+    :func:`value_max` at scoring time so the value term stays in [0,1] (A-1).
     """
     value_cfg = params.work_queue.value
-    multiplier = (
-        value_cfg.funded_multiplier if _is_funded(family.funding_type) else _SELF_PAY_MULTIPLIER
-    )
-    return value_cfg.tuition_annual_default * multiplier
+    return value_cfg.tuition_annual_default * _child_count(family)
 
 
 def value_max(params: Params) -> float:
-    """The value normalizer (A-1): baseline × the max applicable funded multiplier.
+    """The value normalizer (A-1): per-child tuition × the max child count (§8).
 
     Derived deterministically from existing §8 params — no new magic number.
-    Dividing :func:`value` by this keeps the value term in [0,1] regardless of
-    funding tier (the funded path can never exceed the cap).
+    Dividing :func:`value` by this keeps the value term in [0,1]: a family with the
+    ``max_children`` cap (the Interest form's "5+") hits exactly 1.0, none exceed it.
     """
     value_cfg = params.work_queue.value
-    return value_cfg.tuition_annual_default * max(_SELF_PAY_MULTIPLIER, value_cfg.funded_multiplier)
+    return value_cfg.tuition_annual_default * value_cfg.max_children
 
 
 def score_family(family: WorkQueueFamily, params: Params, *, now: datetime | None = None) -> float:
@@ -237,46 +241,18 @@ def freshness(family: WorkQueueFamily, params: Params, *, now: datetime | None =
     return max(floor, min(1.0, 1.0 - elapsed_days / window_days))
 
 
-def value_variance(family: WorkQueueFamily, params: Params) -> float:
-    """Deterministic per-family value multiplier ∈ [variance_min, variance_max] (S12).
-
-    Spreads the otherwise tier-constant :func:`value` so the ``recoverable_now``
-    ranking does not bucket every family of a funding tier at one number. The
-    multiplier is a stable function of ``family_id`` alone — a hash mapped into
-    the params band ``[variance_min, variance_max]`` — so it is reproducible
-    across runs and processes (a plain ``hash()`` is salted per-process and would
-    not be). Bounded by params (INV-11), it NEVER touches the canonical
-    :func:`value`/:func:`score_family` path (so the TEFA worked targets and the
-    existing work-queue fixtures stay green) — it is consumed only by
-    :func:`recoverable_now`.
-
-    Args:
-        family: The family whose stable variance multiplier is derived.
-        params: Loaded params (§8); supplies the ``[variance_min, variance_max]``
-            band.
-
-    Returns:
-        A deterministic multiplier in ``[variance_min, variance_max]``.
-    """
-    value_cfg = params.work_queue.value
-    lo, hi = value_cfg.variance_min, value_cfg.variance_max
-    # A stable, process-independent fraction in [0,1) from the family_id bytes.
-    digest = hashlib.sha256(family.family_id.bytes).digest()
-    fraction = int.from_bytes(digest[:8], "big") / float(1 << 64)
-    return lo + (hi - lo) * fraction
-
-
 def recoverable_now(
     family: WorkQueueFamily, params: Params, *, now: datetime | None = None
 ) -> float:
-    """The S12 recoverable-now ranking key — ``value × variance × score × freshness``.
+    """The recoverable-now ranking key — ``value × score × freshness`` (A-23).
 
-    Composes the queue's existing value/score with a per-family value variance
-    (:func:`value_variance`, for ranking spread) and time decay
-    (:func:`freshness`): a high-value, high-score, freshly-stalled family ranks
-    far above a low-value, stale one. Pure and params-driven (INV-11), ``now``
-    injected (INV-2). This is the new ordering key for ``/work-queue`` — the
-    canonical :func:`score_family` (and its TEFA worked targets) is left intact.
+    Composes the queue's value (now ``num_children × per-child tuition``) with the
+    likelihood score and the time decay (:func:`freshness`): a many-children,
+    deep-funnel, freshly-stalled family ranks far above a one-child, cold,
+    top-of-funnel one. The old per-family hash *variance* factor is GONE — the
+    per-row spread is now a REAL signal (child count drives value, funnel depth
+    drives score), not jitter (A-23). Pure and params-driven (INV-11), ``now``
+    injected (INV-2).
 
     Args:
         family: The queue-relevant family attributes.
@@ -290,7 +266,6 @@ def recoverable_now(
     reference = _now_or(now)
     return (
         value(family, params)
-        * value_variance(family, params)
         * score_family(family, params, now=reference)
         * freshness(family, params, now=reference)
     )

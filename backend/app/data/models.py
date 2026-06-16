@@ -157,6 +157,12 @@ class LeadsNew(BaseModel):
     product_interest: ProductInterest
     grade_interest: str
     region: str
+    # The Interest form's "How many children are you applying for? 1–5+" (funnel
+    # map §4D). Drives the work-queue VALUE term (A-23): value scales with child
+    # count since every targeted family pays the same per-child tuition. Defaults
+    # to 1 so existing fixtures/rows that predate the field stay valid (a lead is
+    # always for ≥1 child); a `ge=1` guard rejects a non-positive count.
+    num_children: int = Field(default=1, ge=1)
     created_at: datetime | None = None
 
 

@@ -70,12 +70,14 @@ def _seeded() -> InMemoryFamilyRepository:
 def _work_queue_family(joined: JoinedFamily, params: Params) -> WorkQueueFamily:
     """Project a joined family to the scorer's input (mirrors the router build)."""
     signals = joined.community_profile.engagement_signals if joined.community_profile else {}
+    num_children = joined.lead.num_children if joined.lead else 1
     return WorkQueueFamily(
         family_id=joined.family.family_id,
         current_stage=joined.family.current_stage,
         stalled_since=joined.family.stalled_since,
         created_at=joined.family.created_at,
         responsiveness=responsiveness_from_engagement(signals, params),
+        num_children=num_children,
         funding_type=joined.family.funding_type,
     )
 
@@ -487,6 +489,9 @@ def test_work_queue_active_contract_unchanged_by_history_detail() -> None:
                 "score",
                 "recoverability",
                 "value",
+                # A-23 value drivers — always present (child count + funding label).
+                "num_children",
+                "funding_type",
                 "stall_date",
                 "recoverable_now",
                 "freshness",

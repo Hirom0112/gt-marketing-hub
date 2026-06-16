@@ -52,7 +52,7 @@ def test_missing_required_key_raises(tmp_path: Path) -> None:
             responsiveness_weight: 0.2
           value:
             tuition_annual_default: 10400
-            funded_multiplier: 1.0
+            max_children: 5
           stall_window_days: 14
         funding:
           award_amounts:
@@ -109,7 +109,7 @@ def test_wrong_type_raises(tmp_path: Path) -> None:
             responsiveness_weight: 0.2
           value:
             tuition_annual_default: 10400
-            funded_multiplier: 1.0
+            max_children: 5
           stall_window_days: 14
         funding:
           award_amounts:

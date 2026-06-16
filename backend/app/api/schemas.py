@@ -25,6 +25,7 @@ from app.data.models import (
     CommunityProfile,
     EnrollmentForms,
     FamilyRecord,
+    FundingType,
     LeadsNew,
     SeamStatus,
     Stage,
@@ -85,6 +86,12 @@ class WorkQueueItem(BaseModel):
     score: float
     recoverability: float
     value: float
+    # A-23 — the value drivers, surfaced so the row can show the HONEST secondary
+    # ("3 kids · $31,200") and the funding label ("Texas voucher" / "Self-pay")
+    # instead of a synthetic per-family $. ``num_children`` scales value; every
+    # targeted family is full-pay so ``funding_type`` is voucher/self-pay.
+    num_children: int
+    funding_type: FundingType | None = None
     # The family's stall-anchor instant (the same derivation the calendar groups
     # on — :func:`app.api.families._stall_date`), composed at the API layer (it
     # needs ``now`` + the audit log, INV-2). Lets the Show-all list group rows
@@ -143,6 +150,9 @@ class CalendarEntry(BaseModel):
     current_stage: Stage
     contact_status: ContactStatus
     value: float
+    # A-23 — value drivers for the calendar entry (child count + funding label).
+    num_children: int
+    funding_type: FundingType | None = None
     score: float
     # S12 W1 — the recoverable-now ranking key + its freshness factor (pure
     # scorer), and the derived recovery_state (A-19, API-composed) so the heat

@@ -813,7 +813,8 @@ figure {
   border-left-color: var(--flow);
 }
 
-/* The hero cell — recoverable-now, the loudest data on the row. */
+/* The hero cell — recoverability (likelihood %), the loudest data on the row:
+   "who can I save first" (A-23, funnel depth + recency + responsiveness). */
 .drill-hero {
   font-family: var(--mono);
   font-size: var(--fs-readout);
@@ -823,13 +824,33 @@ figure {
   font-variant-numeric: tabular-nums;
 }
 
-/* The secondary face-value cell — operators sanity-check "$4k of an $18k deal". */
+/* The secondary value cell — the honest money: $ face value (children × per-child
+   tuition) stacked over the child count that drives it (A-23). */
+.drill-value-cell {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  justify-content: center;
+  min-width: 0;
+}
 .drill-value {
   font-family: var(--mono);
   font-size: var(--fs-sm);
   color: var(--ink-soft);
   text-align: right;
   font-variant-numeric: tabular-nums;
+}
+/* The child-count driver under the value — "3 kids". */
+.drill-kids {
+  font-family: var(--mono);
+  font-size: var(--fs-micro);
+  letter-spacing: var(--tracking-lab);
+  color: var(--muted);
+  margin-top: 1px;
+}
+/* The funding label next to the stuck step — "Texas voucher" / "Self-pay". */
+.drill-funding {
+  color: var(--ink-soft);
 }
 
 .drill-age,

@@ -5,10 +5,12 @@ The work-queue scorer (FR-2.5) is the headline deterministic unit:
     score = w_recoverability · recoverability + w_value · (value / value_max)
 
 with both terms in [0,1]. `recoverability` composes three normalized
-sub-factors (stall-recency, stage-proximity, responsiveness) weighted per §8;
-`value` derives from the tuition baseline × the applicable funded multiplier and
-is normalized by `value_max` (A-1) so the value term stays in [0,1]. No LLM, no
-adapters — a pure function of the typed inputs + params (CLAUDE.md §3, INV-2).
+sub-factors (stall-recency, stage-proximity, responsiveness) weighted per §8
+(stage-proximity DOMINANT — funnel depth, A-23); `value` is `num_children ×
+per-child tuition` (A-23 — every targeted family is full-pay so value varies
+only by child count) and is normalized by `value_max = max_children × tuition`
+(A-1) so the value term stays in [0,1]. No LLM, no adapters — a pure function of
+the typed inputs + params (CLAUDE.md §3, INV-2).
 
 Every expected value here is computed FROM the params (not hardcoded literals),
 so the suite stays correct if a tunable is retuned: it pins the *formula*, and
@@ -35,6 +37,7 @@ from app.core.work_queue import (
     recoverable_now,
     score_family,
     value,
+    value_max,
 )
 from app.data.models import FundingType, Stage
 
@@ -90,20 +93,16 @@ def _expected_recoverability(family: WorkQueueFamily, params: Params) -> float:
     )
 
 
-def _is_funded(funding_type: FundingType | None) -> bool:
-    return funding_type is not None and funding_type is not FundingType.SELF_PAY
-
-
 def _expected_value(family: WorkQueueFamily, params: Params) -> float:
+    # A-23: per-child tuition × the family's child count (floored at 1 child).
     value_cfg = params.work_queue.value
-    multiplier = value_cfg.funded_multiplier if _is_funded(family.funding_type) else 1.0
-    return value_cfg.tuition_annual_default * multiplier
+    return value_cfg.tuition_annual_default * max(1, family.num_children)
 
 
 def _expected_value_max(params: Params) -> float:
-    # A-1: tuition_annual_default × max applicable funded_multiplier.
+    # A-1/A-23: per-child tuition × the "5+" child-count cap (max_children).
     value_cfg = params.work_queue.value
-    return value_cfg.tuition_annual_default * max(1.0, value_cfg.funded_multiplier)
+    return value_cfg.tuition_annual_default * value_cfg.max_children
 
 
 def _expected_score(family: WorkQueueFamily, params: Params) -> float:
@@ -119,35 +118,38 @@ def _expected_score(family: WorkQueueFamily, params: Params) -> float:
 
 
 def _family_high() -> WorkQueueFamily:
-    """Near Tuition, freshly stalled, responsive, TEFA-funded ⇒ high score."""
+    """Near Tuition, freshly stalled, responsive, 4-child voucher ⇒ high score."""
     return WorkQueueFamily(
         family_id=FID_A,
         current_stage=Stage.TUITION,
         stalled_since=NOW - timedelta(days=2),
         responsiveness=0.9,
+        num_children=4,
         funding_type=FundingType.TEFA_STANDARD,
     )
 
 
 def _family_mid() -> WorkQueueFamily:
-    """Mid-funnel, half-window stall, middling responsiveness, self-pay."""
+    """Mid-funnel, half-window stall, middling responsiveness, 2-child self-pay."""
     return WorkQueueFamily(
         family_id=FID_B,
         current_stage=Stage.ENROLL,
         stalled_since=NOW - timedelta(days=7),
         responsiveness=0.5,
+        num_children=2,
         funding_type=FundingType.SELF_PAY,
     )
 
 
 def _family_low() -> WorkQueueFamily:
-    """Top-of-funnel, long-since stalled (beyond window), unresponsive, no funding."""
+    """Top-of-funnel, long-since stalled (beyond window), unresponsive, 1 child."""
     return WorkQueueFamily(
         family_id=FID_C,
         current_stage=Stage.INTEREST,
         stalled_since=NOW - timedelta(days=30),
         responsiveness=0.0,
-        funding_type=None,
+        num_children=1,
+        funding_type=FundingType.SELF_PAY,
     )
 
 
@@ -228,36 +230,40 @@ def test_recoverability_subfactors() -> None:
     )
 
 
-def test_value_normalized_to_max() -> None:
-    """`value` = tuition_default × funded_multiplier, scored as value/value_max (A-1).
+def test_value_scales_with_child_count() -> None:
+    """`value` = per-child tuition × num_children, scored as value/value_max (A-23/A-1).
 
-    TEFA-funded families take the funded multiplier; self-pay/no-funding take the
-    1.0 baseline. The value term is normalized by `value_max` so it stays in
-    [0,1]. With the committed funded_multiplier == 1.0, funded and self-pay tie
-    at the cap — the test pins the derivation from params, not the literal.
+    Every targeted family is full-pay (Texas voucher = self-pay), so funding tier
+    no longer scales value — child count does. A 4-child family is worth exactly
+    4× a 1-child family; the term is normalized by `value_max = max_children ×
+    tuition` so it stays in [0,1]. The expected values derive from params, not
+    literals (INV-11).
     """
     params = _params()
-    from app.core.work_queue import value as value_fn
-    from app.core.work_queue import value_max as value_max_fn
+    tuition = params.work_queue.value.tuition_annual_default
 
-    funded = _family_high()
-    self_pay = _family_mid()
-
-    vmax = value_max_fn(params)
+    vmax = value_max(params)
     assert vmax == _expected_value_max(params)
+    assert vmax == tuition * params.work_queue.value.max_children
     assert vmax > 0.0
 
-    funded_value = value_fn(funded, params)
-    self_pay_value = value_fn(self_pay, params)
-    assert funded_value == _expected_value(funded, params)
-    assert self_pay_value == _expected_value(self_pay, params)
+    big = _family_high()  # 4 children
+    small = _family_low()  # 1 child
 
-    # Normalized value term stays within [0,1] for every funding path (A-1).
-    for v in (funded_value, self_pay_value):
-        assert 0.0 <= v / vmax <= 1.0
+    assert value(big, params) == _expected_value(big, params)
+    assert value(small, params) == _expected_value(small, params)
+    # Real per-family spread: 4 children is worth exactly 4× one child.
+    assert value(big, params) == tuition * 4
+    assert value(small, params) == tuition * 1
+    assert value(big, params) == 4 * value(small, params)
 
-    # Funded value is never below self-pay (multiplier ≥ 1.0 by §8).
-    assert funded_value >= self_pay_value
+    # Normalized value term stays within [0,1] for every child count (A-1).
+    for fam in (_family_high(), _family_mid(), _family_low()):
+        assert 0.0 <= value(fam, params) / vmax <= 1.0
+
+    # A stray non-positive child count floors at 1 child (never zeroes the row).
+    zero_kids = small.model_copy(update={"num_children": 0})
+    assert value(zero_kids, params) == tuition * 1
 
 
 def test_ranking_is_stable() -> None:
@@ -348,16 +354,31 @@ def test_freshness_uses_created_at_when_no_stall() -> None:
 
 
 def test_recoverable_now_is_value_x_score_x_freshness() -> None:
-    """`recoverable_now` = value(variance) × score_family × freshness, all params-driven."""
+    """`recoverable_now` = value × score_family × freshness, all params-driven (A-23).
+
+    The old per-family hash *variance* factor is gone — the per-row spread now
+    comes from real signals (child count drives value, funnel depth drives score).
+    """
     params = _params()
     family = _family_high()
     expected = (
         value(family, params)
-        * _value_variance(family, params)
         * score_family(family, params, now=NOW)
         * freshness(family, params, now=NOW)
     )
     assert recoverable_now(family, params, now=NOW) == pytest.approx(expected, rel=1e-9)
+
+
+def test_recoverable_now_scales_with_children() -> None:
+    """A many-child family outranks an otherwise-identical one-child family (A-23).
+
+    Value spread is now a REAL signal: holding stage / recency / responsiveness
+    fixed, more children ⇒ proportionally higher recoverable_now.
+    """
+    params = _params()
+    one = _family_mid().model_copy(update={"num_children": 1})
+    five = _family_mid().model_copy(update={"num_children": 5})
+    assert recoverable_now(five, params, now=NOW) > recoverable_now(one, params, now=NOW)
 
 
 def test_recoverable_now_orders_three_families() -> None:
@@ -394,25 +415,31 @@ def test_recoverable_now_is_params_sensitive() -> None:
     assert recoverable_now(family, tighter, now=NOW) < base
 
 
-def test_value_variance_is_deterministic_and_bounded() -> None:
-    """The per-family value multiplier is deterministic and within the params band."""
+def test_stage_proximity_dominates_recoverability() -> None:
+    """Funnel depth is the dominant recoverability sub-factor (A-23).
+
+    "The further they went, the more recoverable they are": holding recency and
+    responsiveness fixed, advancing one stage down the funnel must raise
+    recoverability by the stage_proximity weight share — and that weight is the
+    largest of the three sub-weights (the user-directed rebalance).
+    """
+    from app.core.work_queue import recoverability as recoverability_fn
+
     params = _params()
-    lo = params.work_queue.value.variance_min
-    hi = params.work_queue.value.variance_max
-    for family in (_family_high(), _family_mid(), _family_low()):
-        m1 = _value_variance(family, params)
-        m2 = _value_variance(family, params)
-        assert m1 == m2  # deterministic for the same family_id.
-        assert lo <= m1 <= hi
-    # Distinct families generally spread (not all identical) — the whole point.
-    multipliers = {
-        _value_variance(f, params) for f in (_family_high(), _family_mid(), _family_low())
-    }
-    assert len(multipliers) > 1
+    sub = params.work_queue.recoverability
+    # The rebalance: funnel depth outweighs both recency and responsiveness.
+    assert sub.stage_proximity_weight > sub.stall_recency_weight
+    assert sub.stage_proximity_weight > sub.responsiveness_weight
 
-
-def _value_variance(family: WorkQueueFamily, params: Params) -> float:
-    """Reference: the production value_variance must reproduce this exactly."""
-    from app.core.work_queue import value_variance
-
-    return value_variance(family, params)
+    base = WorkQueueFamily(
+        family_id=FID_A,
+        current_stage=Stage.INTEREST,
+        stalled_since=NOW - timedelta(days=3),
+        responsiveness=0.5,
+        funding_type=FundingType.SELF_PAY,
+    )
+    deeper = base.model_copy(update={"current_stage": Stage.ENROLL})
+    gain = recoverability_fn(deeper, params, now=NOW) - recoverability_fn(base, params, now=NOW)
+    # Interest→Enroll is 2 of 3 proximity steps ⇒ +(2/3)·stage_proximity_weight.
+    expected_gain = (2 / 3) * sub.stage_proximity_weight
+    assert gain == pytest.approx(expected_gain, rel=1e-9)

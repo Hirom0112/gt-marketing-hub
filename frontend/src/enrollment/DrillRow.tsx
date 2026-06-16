@@ -1,17 +1,19 @@
-// DrillRow (S13 redesign) — one dense row in the TRIAGE worklist. The redesign
-// kills the "AI slop" pill-wall: the recency Chip column is GONE (it's a 3px
-// left-edge RAIL now), the rank column and the score column are GONE (the ordered
-// list + the magnitude bar convey priority; score is a model internal). What's
-// loud is the MONEY: recoverable_now is the hero cell (mono, 15px, weight 700,
-// tabular nums), with a neutral magnitude bar under the family name showing where
-// the recoverable dollars sit relative to the rest of the scope. Face value stays
-// as a quieter secondary cell so an operator can sanity-check "$4k of an $18k
-// deal". A mono age cell ("12d") differentiates overdue rows by how long they've
-// sat, not an identical word. The grid template is shared with the header via
-// DRILL_GRID. History does NOT use this row — it has its own grammar (HistoryRow).
+// DrillRow (A-23 redesign) — one dense row in the TRIAGE worklist. The row leads
+// with RECOVERABILITY (likelihood), the thing that actually decides who to chase
+// first: "the further they went down the funnel, the more recoverable they are."
+// The hero cell is the likelihood % (mono, loud), and the magnitude bar under the
+// name encodes that same likelihood relative to the rest of the scope. The old
+// per-family recoverable-$ hero is GONE (it rode on synthetic hash noise) — the
+// money now lives as the HONEST secondary: the face value ($ = children × the
+// per-child GT-Anywhere tuition) with the child count that drives it ("3 kids"),
+// because every targeted family pays the same per child. Funnel depth (the stuck
+// step) + the funding label (Texas voucher / Self-pay) sit under the name. A mono
+// age cell ("12d") differentiates overdue rows by how long they've sat. The grid
+// template is shared with the header via DRILL_GRID. History has its own grammar
+// (HistoryRow).
 
-// The shared grid: rail(via border, not a col) · checkbox · name+bar · hero
-// recoverable · secondary value · age · stall-date.
+// The shared grid: rail(via border, not a col) · checkbox · name+meta+bar · hero
+// likelihood · value+kids · age · stall-date.
 export const DRILL_GRID = '26px 1fr 120px 84px 56px 72px';
 
 // Map a raw contact_status onto the recency rail class. Only OVERDUE is the loud
@@ -32,15 +34,19 @@ interface DrillRowProps {
   name: string;
   // The stuck step, human-readable — rendered as a mono uppercase system tag.
   stuckStep: string;
+  // Funding label ("Texas voucher" / "Self-pay") — sits next to the stuck step.
+  funding?: string;
   // Pre-formatted mono stall-date (e.g. "Jun 13") — caller owns date formatting.
   stallDate: string;
   // Pre-formatted mono age (e.g. "12d") — caller owns the age formatting.
   age: string;
-  // Pre-formatted HERO recoverable-now (e.g. "$50,000") — the loudest cell.
-  recoverable: string;
-  // Pre-formatted secondary face value (e.g. "$60,000") — the sanity-check cell.
+  // Pre-formatted HERO likelihood (recoverability, e.g. "84%") — the loudest cell.
+  likelihood: string;
+  // Pre-formatted secondary face value (e.g. "$31,200") — children × tuition.
   value: string;
-  // The magnitude fraction (0..1) = recoverable_now / max-in-scope → bar width.
+  // Pre-formatted child-count label (e.g. "3 kids") — the value driver (A-23).
+  kids: string;
+  // The magnitude fraction (0..1) = recoverability / max-in-scope → bar width.
   magnitude: number;
   // Raw contact_status string (→ the recency rail class).
   contactStatus: string;
@@ -65,7 +71,7 @@ export function DrillRowHead(): JSX.Element {
     >
       <span>sel</span>
       <span>family · stuck on</span>
-      <span style={{ textAlign: 'right' }}>recoverable</span>
+      <span style={{ textAlign: 'right' }}>likely</span>
       <span style={{ textAlign: 'right' }}>value</span>
       <span>age</span>
       <span style={{ textAlign: 'right' }}>stalled</span>
@@ -77,10 +83,12 @@ export default function DrillRow({
   familyId,
   name,
   stuckStep,
+  funding,
   stallDate,
   age,
-  recoverable,
+  likelihood,
   value,
+  kids,
   magnitude,
   contactStatus,
   selected = false,
@@ -134,8 +142,11 @@ export default function DrillRow({
 
       <span style={{ minWidth: 0 }}>
         <span className="drill-name">{name}</span>
-        <small className="drill-step">{stuckStep}</small>
-        {/* The magnitude bar — where the recoverable money sits (neutral, not red). */}
+        <small className="drill-step">
+          {stuckStep}
+          {funding ? <span className="drill-funding"> · {funding}</span> : null}
+        </small>
+        {/* The magnitude bar — likelihood relative to the rest of the scope. */}
         <span
           className="drill-bar-track"
           data-testid={`drill-row-bar-${familyId}`}
@@ -145,10 +156,19 @@ export default function DrillRow({
         </span>
       </span>
 
-      <span className="drill-hero" data-testid={`drill-row-recoverable-${familyId}`}>
-        {recoverable}
+      <span className="drill-hero" data-testid={`drill-row-likelihood-${familyId}`}>
+        {likelihood}
       </span>
-      <span className="drill-value">{value}</span>
+      <span className="drill-value-cell">
+        <span className="drill-value" data-testid={`drill-row-value-${familyId}`}>
+          {value}
+        </span>
+        {kids ? (
+          <small className="drill-kids" data-testid={`drill-row-kids-${familyId}`}>
+            {kids}
+          </small>
+        ) : null}
+      </span>
       <span className="drill-age" data-testid={`drill-row-age-${familyId}`}>
         {age}
       </span>

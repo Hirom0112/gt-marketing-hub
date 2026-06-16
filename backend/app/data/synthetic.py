@@ -213,6 +213,21 @@ _FUNDING_TYPE_WEIGHTS: dict[FundingType, float] = {
     FundingType.TEFA_HOMESCHOOL: 0.08,
 }
 
+# A-23 — the recovery board only targets families paying the FULL GT-Anywhere
+# tuition: Texas voucher (TEFA standard) or self-pay. The active/targeted cohorts
+# (back-to-school + realistic active stalls) draw funding from this restricted set;
+# the disability ($30k) / homeschool ($2k) tiers are NOT a recovery target.
+_TARGETED_FUNDING_WEIGHTS: dict[FundingType, float] = {
+    FundingType.TEFA_STANDARD: 0.6,
+    FundingType.SELF_PAY: 0.4,
+}
+
+# A-23 — the work-queue VALUE term scales with child count (the Interest form's
+# "How many children are you applying for? 1–5+"). Synthetic shape only (module
+# data, like the stage/funding weights): most families enroll one child, a tail
+# enrolls more, capped at the form's "5+".
+_CHILD_COUNT_WEIGHTS: dict[int, float] = {1: 0.55, 2: 0.28, 3: 0.11, 4: 0.04, 5: 0.02}
+
 _PRODUCT_WEIGHTS: dict[ProductInterest, float] = {
     ProductInterest.CAMPUS: 0.50,
     ProductInterest.ANYWHERE: 0.35,
@@ -288,6 +303,11 @@ def _weighted_choice[K](rng: random.Random, weights: dict[K, float]) -> K:
     """Pick a key from a ``{value: weight}`` mapping using ``rng``."""
     keys = list(weights.keys())
     return rng.choices(keys, weights=[weights[k] for k in keys], k=1)[0]
+
+
+def _num_children(rng: random.Random) -> int:
+    """A synthetic child count (1–5, heavy on 1–2) for the value term (A-23)."""
+    return _weighted_choice(rng, _CHILD_COUNT_WEIGHTS)
 
 
 def _synthetic_email(rng: random.Random, surname: str) -> str:
@@ -409,6 +429,7 @@ def _build_family(
         product_interest=product,
         grade_interest=rng.choice(_GRADES),
         region=region,
+        num_children=_num_children(rng),
         created_at=created,
     )
 
@@ -628,7 +649,8 @@ def _build_back_to_school_family(
     # Active stalls sit in the pre-tuition funnel (an enrolled/tuition family is
     # closing, not stalling) so the cohort reads as a recovery surface.
     stage = rng.choice((Stage.INTEREST, Stage.APPLY, Stage.ENROLL))
-    funding_type = _weighted_choice(rng, _FUNDING_TYPE_WEIGHTS)
+    # A-23 — active recovery targets are full-pay only (Texas voucher / self-pay).
+    funding_type = _weighted_choice(rng, _TARGETED_FUNDING_WEIGHTS)
     product = _weighted_choice(rng, _PRODUCT_WEIGHTS)
     attribution_source = rng.choice(_ATTRIBUTION_SOURCES)
     email = _synthetic_email(rng, surname)
@@ -680,6 +702,7 @@ def _build_back_to_school_family(
         product_interest=product,
         grade_interest=rng.choice(_GRADES),
         region=region,
+        num_children=_num_children(rng),
         created_at=created,
     )
 
@@ -916,6 +939,7 @@ def _build_realistic_history_family(
         product_interest=product,
         grade_interest=rng.choice(_GRADES),
         region=region,
+        num_children=_num_children(rng),
         created_at=created,
     )
     app_form = _build_app_form(rng, app_form_id, family_id, stage, created)
@@ -944,7 +968,8 @@ def _build_realistic_active_family(
     given = rng.choice(_GIVEN_NAMES)
     region = rng.choice(_REGIONS)
     stage = rng.choice(_REALISTIC_ACTIVE_STAGES)
-    funding_type = _weighted_choice(rng, _FUNDING_TYPE_WEIGHTS)
+    # A-23 — active recovery targets are full-pay only (Texas voucher / self-pay).
+    funding_type = _weighted_choice(rng, _TARGETED_FUNDING_WEIGHTS)
     product = _weighted_choice(rng, _PRODUCT_WEIGHTS)
     attribution_source = rng.choice(_ATTRIBUTION_SOURCES)
     email = _synthetic_email(rng, surname)
@@ -987,6 +1012,7 @@ def _build_realistic_active_family(
         product_interest=product,
         grade_interest=rng.choice(_GRADES),
         region=region,
+        num_children=_num_children(rng),
         created_at=created,
     )
     app_form = _build_app_form(rng, app_form_id, family_id, stage, created)

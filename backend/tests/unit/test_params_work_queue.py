@@ -24,7 +24,7 @@ def test_work_queue_params_loaded() -> None:
     """The typed `work_queue` block exposes exactly the §8 values from the YAML.
 
     Asserts the headline weights, the three recoverability sub-weights, the
-    value baseline + funded multiplier, and the stall window — each read from
+    value baseline + child-count cap, and the stall window — each read from
     the committed example file. Any drift (renamed/retuned key) flips one of
     these assertions red (CLAUDE.md §4.1, INV-11).
     """
@@ -35,17 +35,19 @@ def test_work_queue_params_loaded() -> None:
     assert work_queue.w_value == 0.4
 
     # Recoverability sub-weights, each normalized into the [0,1] composite (§8).
-    assert work_queue.recoverability.stall_recency_weight == 0.5
-    assert work_queue.recoverability.stage_proximity_weight == 0.3
+    # A-23 rebalance: stage_proximity (funnel depth) DOMINATES.
+    assert work_queue.recoverability.stall_recency_weight == 0.3
+    assert work_queue.recoverability.stage_proximity_weight == 0.5
     assert work_queue.recoverability.responsiveness_weight == 0.2
+    assert (
+        work_queue.recoverability.stage_proximity_weight
+        > work_queue.recoverability.stall_recency_weight
+    )
 
-    # Value baseline + funded weighting (§8); value_max derives from these (A-1).
+    # Value: per-child tuition × child count (A-23); value_max = tuition ×
+    # max_children. The funded_multiplier / variance hash-jitter are GONE.
     assert work_queue.value.tuition_annual_default == 10400
-    assert work_queue.value.funded_multiplier == 1.0
-
-    # S12 — per-family value-variance band (recoverable_now ranking spread only).
-    assert work_queue.value.variance_min == 0.8
-    assert work_queue.value.variance_max == 1.6
+    assert work_queue.value.max_children == 5
 
     # Stall window in days (§5.1) — older than this ⇒ flagged.
     assert work_queue.stall_window_days == 14

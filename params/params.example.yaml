@@ -4,15 +4,13 @@ work_queue:                 # FR-2.5 — score = w_recoverability·recoverabilit
   w_recoverability: 0.6
   w_value: 0.4
   recoverability:           # sub-factors, each normalized to [0,1]
-    stall_recency_weight: 0.5
-    stage_proximity_weight: 0.3     # closer to Tuition = more recoverable
+    stall_recency_weight: 0.3
+    stage_proximity_weight: 0.5     # funnel depth DOMINATES — the further they went, the more recoverable (A-23)
     responsiveness_weight: 0.2
     responsiveness_email_opens_max: 40   # email_opens normalizer (A-5); §4.5 aggregate cap
   value:
-    tuition_annual_default: 10400   # GT Anywhere $/yr (PROJECT.md §2) — value baseline
-    funded_multiplier: 1.0          # TEFA-funded vs self-pay value weighting
-    variance_min: 0.8               # S12 — per-family value-variance band (recoverable_now only)
-    variance_max: 1.6               # deterministic family-hash multiplier ∈ [min,max]; ranking spread
+    tuition_annual_default: 10400   # per-child GT-Anywhere tuition $/yr (PROJECT.md §2); voucher = self-pay (A-23)
+    max_children: 5                 # Interest form "How many children? 1-5+" cap — value_max normalizer (A-23)
   stall_window_days: 14             # stalled_since older than this ⇒ flagged (§5.1)
   freshness_window_days: 30         # S12 — recoverable_now freshness decays to floor over this window
   freshness_floor: 0.15             # S12 — minimum freshness once past the window (never 0 ⇒ stays rankable)

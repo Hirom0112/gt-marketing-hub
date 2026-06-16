@@ -5,12 +5,11 @@ import DrillRow, { DrillRowHead } from './DrillRow';
 import BulkBar from './BulkBar';
 import {
   ROW_CAP,
-  recoverableNow,
   type CalendarEntry,
   type SortKey,
   sortEntries,
 } from './EnrollmentCalendar';
-import { fmtAge, fmtDay, fmtUSD } from './format';
+import { fmtAge, fmtDay, fmtKids, fmtPct, fmtUSD, fundingLabel } from './format';
 import type { DrillBulk } from './EnrollmentCalendar';
 
 // TriageList (S13 redesign) — the active worklist, money-first. This is the
@@ -35,6 +34,9 @@ interface WorkQueueItem {
   score: number;
   recoverability: number;
   value: number;
+  // A-23 — value drivers: child count (scales value) + funding label.
+  num_children: number;
+  funding_type?: string | null;
   stall_date: string;
   recoverable_now?: number;
   freshness?: number;
@@ -77,6 +79,9 @@ function toEntry(item: WorkQueueItem): CalendarEntry & { recovery_state: string 
     contact_status: item.contact_status,
     value: item.value,
     score: item.score,
+    recoverability: item.recoverability,
+    num_children: item.num_children,
+    funding_type: item.funding_type,
     recoverable_now: item.recoverable_now,
     freshness: item.freshness,
     recovery_state: item.recovery_state,
@@ -221,20 +226,18 @@ export default function TriageList({
   );
   const shown = useMemo(() => ranked.slice(0, ROW_CAP), [ranked]);
 
-  // Tier-1 readout: SUM recoverable_now (not value — the fix), and the max in the
-  // shown set drives the magnitude bars.
-  const recoverableSum = useMemo(
-    () => ranked.reduce((a, e) => a + recoverableNow(e), 0),
+  // Tier-1 readout (A-23): the aggregate $ AT RISK = Σ face value (children ×
+  // per-child tuition) — the honest total exposure, not a discounted composite.
+  // The per-row magnitude bar uses each family's absolute recoverability (a [0,1]
+  // likelihood), so no max-in-scope normalizer is needed.
+  const atRiskSum = useMemo(
+    () => ranked.reduce((a, e) => a + e.value, 0),
     [ranked],
   );
-  const maxRecoverable = useMemo(
-    () => shown.reduce((m, e) => Math.max(m, recoverableNow(e)), 0),
-    [shown],
-  );
-  const selectedRecoverable = useMemo(() => {
+  const selectedAtRisk = useMemo(() => {
     if (bulk.selected.size === 0) return 0;
     return ranked.reduce(
-      (a, e) => (bulk.selected.has(e.family_id) ? a + recoverableNow(e) : a),
+      (a, e) => (bulk.selected.has(e.family_id) ? a + e.value : a),
       0,
     );
   }, [ranked, bulk.selected]);
@@ -342,9 +345,9 @@ export default function TriageList({
               className="triage-readout-money"
               data-testid="triage-readout-money"
             >
-              {fmtUSD(recoverableSum)}
+              {fmtUSD(atRiskSum)}
             </span>
-            <span className="triage-readout-sub">recoverable now</span>
+            <span className="triage-readout-sub">at risk</span>
             <span className="triage-readout-sub">
               · <b data-testid="triage-stalled-count">{ranked.length}</b> stalled
             </span>
@@ -427,11 +430,13 @@ export default function TriageList({
                 familyId={e.family_id}
                 name={e.display_name}
                 stuckStep={e.current_stage}
+                funding={fundingLabel(e.funding_type)}
                 stallDate={fmtDay(e.stall_date)}
                 age={fmtAge(e.stall_date)}
-                recoverable={fmtUSD(recoverableNow(e))}
+                likelihood={fmtPct(e.recoverability ?? 0)}
                 value={fmtUSD(e.value)}
-                magnitude={maxRecoverable > 0 ? recoverableNow(e) / maxRecoverable : 0}
+                kids={fmtKids(e.num_children ?? 1)}
+                magnitude={e.recoverability ?? 0}
                 contactStatus={e.contact_status}
                 selected={bulk.selected.has(e.family_id)}
                 active={e.family_id === selectedFamilyId}
@@ -453,7 +458,7 @@ export default function TriageList({
           count={bulk.selected.size}
           viewCount={shown.length}
           recoverableLabel={
-            selectedRecoverable > 0 ? fmtUSD(selectedRecoverable) : undefined
+            selectedAtRisk > 0 ? fmtUSD(selectedAtRisk) : undefined
           }
           onSelectAll={() => bulk.onSelectAll(shown.map((e) => e.family_id))}
           partition={bulk.partition}

@@ -65,12 +65,16 @@ def _work_queue_family(joined: JoinedFamily, params: Params) -> WorkQueueFamily:
     reads straight off the spine row.
     """
     signals = joined.community_profile.engagement_signals if joined.community_profile else {}
+    # Child count drives the value term (A-23); it lives on the lead (the Interest
+    # form's "How many children?"). A lead-less marketing row defaults to 1.
+    num_children = joined.lead.num_children if joined.lead else 1
     return WorkQueueFamily(
         family_id=joined.family.family_id,
         current_stage=joined.family.current_stage,
         stalled_since=joined.family.stalled_since,
         created_at=joined.family.created_at,
         responsiveness=responsiveness_from_engagement(signals, params),
+        num_children=num_children,
         funding_type=joined.family.funding_type,
     )
 
@@ -526,6 +530,8 @@ def get_work_queue(
                 score=score_family(family, params, now=now),
                 recoverability=recoverability(family, params, now=now),
                 value=value(family, params),
+                num_children=family.num_children,
+                funding_type=family.funding_type,
                 stall_date=_stall_date(joined, log=log, now=now, params=params),
                 recoverable_now=recoverable_now(family, params, now=now),
                 freshness=freshness(family, params, now=now),
@@ -635,12 +641,15 @@ def get_enrollment_calendar(
             apply_date=_apply_date(joined) or stall_date,
             current_stage=joined.family.current_stage,
             contact_status=_recency_for(joined, log=log, now=now, params=params)[0],
-            value=value(_work_queue_family(joined, params), params),
-            score=score_family(_work_queue_family(joined, params), params, now=now),
-            recoverable_now=recoverable_now(_work_queue_family(joined, params), params, now=now),
-            freshness=freshness(_work_queue_family(joined, params), params, now=now),
+            value=value(wqf, params),
+            num_children=wqf.num_children,
+            funding_type=wqf.funding_type,
+            score=score_family(wqf, params, now=now),
+            recoverable_now=recoverable_now(wqf, params, now=now),
+            freshness=freshness(wqf, params, now=now),
             recovery_state=_recovery_state_for(joined, log=log, now=now, params=params),
         )
         for stall_date, joined in in_month
+        for wqf in (_work_queue_family(joined, params),)
     ]
     return CalendarResponse(month=resolved_month, entries=entries)

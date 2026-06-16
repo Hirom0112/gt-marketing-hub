@@ -38,7 +38,12 @@ class _StrictModel(BaseModel):
 
 
 class Recoverability(_StrictModel):
-    """work_queue.recoverability sub-factors, each normalized to [0,1]."""
+    """work_queue.recoverability sub-factors, each normalized to [0,1].
+
+    ``stage_proximity_weight`` is the dominant sub-factor (A-23): how far a family
+    got down the Interest→Tuition funnel before stalling is the primary "who can I
+    save first" signal — the further they went, the more recoverable.
+    """
 
     stall_recency_weight: float
     stage_proximity_weight: float
@@ -50,27 +55,25 @@ class Recoverability(_StrictModel):
 
 
 class WorkQueueValue(_StrictModel):
-    """work_queue.value baseline + funded weighting + S12 per-family variance band.
+    """work_queue.value — per-child tuition × the family's child count (A-23).
 
-    ``variance_min``/``variance_max`` bound the deterministic per-family value
-    multiplier (S12; A-19 ranking spread): a stable hash of ``family_id`` maps
-    into ``[variance_min, variance_max]``. This affects ONLY the new
-    ``recoverable_now`` ranking path — the canonical ``value()``/``score_family``
-    (and the TEFA worked targets) are untouched. The band must be valid
-    (``0 < min <= max``) so the multiplier stays positive and ordered.
+    Every targeted family pays the same full GT-Anywhere tuition per child (Texas
+    voucher = self-pay), so the only thing that varies value across families is how
+    many children they enrolled (the Interest form's "How many children? 1–5+",
+    funnel-map §4D). ``value = num_children × tuition_annual_default``;
+    ``max_children`` (the "5+" cap) normalizes it via ``value_max`` so the value
+    term stays in [0,1]. The old per-family ``funded_multiplier``/``variance`` hash
+    jitter is GONE — value spread is now a real funnel signal, not noise.
     """
 
     tuition_annual_default: float
-    funded_multiplier: float
-    variance_min: float
-    variance_max: float
+    max_children: int
 
     @model_validator(mode="after")
-    def _variance_band_valid(self) -> WorkQueueValue:
-        if not (0.0 < self.variance_min <= self.variance_max):
+    def _max_children_valid(self) -> WorkQueueValue:
+        if self.max_children < 1:
             raise ValueError(
-                "work_queue.value variance band must satisfy 0 < variance_min <= "
-                f"variance_max, got [{self.variance_min!r}, {self.variance_max!r}]"
+                f"work_queue.value.max_children must be >= 1, got {self.max_children!r}"
             )
         return self
 

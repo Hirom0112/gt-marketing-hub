@@ -71,7 +71,7 @@ function familyResponse(): unknown {
     deal_view: {
       display_name: 'The Alvarez Family',
       stall_reason: 'Awaiting funding confirmation',
-      funding_type: 'TEFA',
+      funding_type: 'tefa_standard',
       map_score: 0.82,
       attribution_source: 'Paid Search',
       crm_seam_status: 'synced',
@@ -136,7 +136,7 @@ function fundingResponse(familyId: string): unknown {
   return {
     family_id: familyId,
     funding_state: 'awarded',
-    funding_type: 'TEFA',
+    funding_type: 'tefa_standard',
     installments: ['$2,618.50', '$2,618.50', '$5,237.00'],
     tuition_unlocked: false,
   };

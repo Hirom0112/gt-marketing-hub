@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { Lock, LockOpen } from 'lucide-react';
 import { apiBaseUrl } from './config';
 import { Card } from './ui';
+import { fundingLabel } from './enrollment/format';
 
 // Funding tracker (FR-2.6/2.7). Fetches GET /families/{id}/funding and surfaces
 // the funding state, the funding tier (funding_type), the TEFA installment
@@ -129,7 +130,7 @@ export default function FundingTracker({
               className="mono"
               style={{ margin: '2px 0 0', fontSize: 'var(--fs-sm)', color: 'var(--ink)' }}
             >
-              {funding.funding_type ?? PLACEHOLDER}
+              {funding.funding_type ? fundingLabel(funding.funding_type) : PLACEHOLDER}
             </dd>
           </dl>
 

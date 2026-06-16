@@ -42,6 +42,40 @@ export function fmtAge(iso: string, now: number = Date.now()): string {
   return `${days}d`;
 }
 
+// Recoverability / likelihood as a whole percent: 0.84 → "84%", clamped [0,1].
+// The triage row's HERO — "how likely can I save this one" (A-23, funnel depth +
+// recency + responsiveness). Non-finite → "—".
+export function fmtPct(value: number): string {
+  if (!Number.isFinite(value)) return '—';
+  const clamped = Math.max(0, Math.min(1, value));
+  return `${Math.round(clamped * 100)}%`;
+}
+
+// Child count as a compact label: 1 → "1 child", 3 → "3 kids" (A-23 — the value
+// driver, since every targeted family pays the same per-child tuition). 0/neg → "".
+export function fmtKids(n: number): string {
+  if (!Number.isFinite(n) || n < 1) return '';
+  return n === 1 ? '1 child' : `${Math.round(n)} kids`;
+}
+
+// Funding tier → the operator-facing label (A-23). Every targeted family is
+// full-pay: a Texas voucher (TEFA standard) or self-pay. Maps the raw enum to
+// plain words; an unknown / null tier → "—".
+export function fundingLabel(fundingType: string | null | undefined): string {
+  switch ((fundingType ?? '').toLowerCase()) {
+    case 'tefa_standard':
+      return 'Texas voucher';
+    case 'self_pay':
+      return 'Self-pay';
+    case 'tefa_disability':
+      return 'Voucher (IEP)';
+    case 'tefa_homeschool':
+      return 'Voucher (homeschool)';
+    default:
+      return '—';
+  }
+}
+
 // Compact: 10474 → "$10k", 2618.5 → "$2.6k", 900 → "$900" (chips, heat at-risk).
 export function shortDollars(value: number): string {
   if (!Number.isFinite(value) || value <= 0) return '$0';

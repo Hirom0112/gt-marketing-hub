@@ -22,6 +22,8 @@ const ACTIVE_ROWS = [
     score: 0.91,
     recoverability: 0.95,
     value: 60000,
+    num_children: 3,
+    funding_type: 'tefa_standard',
     stall_date: '2026-06-13T09:00:00Z',
     recoverable_now: 50000,
     freshness: 0.9,
@@ -36,6 +38,8 @@ const ACTIVE_ROWS = [
     score: 0.74,
     recoverability: 0.6,
     value: 36000,
+    num_children: 1,
+    funding_type: 'self_pay',
     stall_date: '2026-06-13T12:00:00Z',
     recoverable_now: 30000,
     freshness: 0.95,
@@ -50,6 +54,8 @@ const ACTIVE_ROWS = [
     score: 0.5,
     recoverability: 0.5,
     value: 10000,
+    num_children: 2,
+    funding_type: 'tefa_standard',
     stall_date: '2026-06-11T09:00:00Z',
     recoverable_now: 8000,
     freshness: 0.5,
@@ -129,20 +135,26 @@ describe('TriageList (S13 redesign)', () => {
     expect(screen.getByTestId(`drill-row-${FAM_C}`)).toBeInTheDocument();
   });
 
-  it('shows recoverable_now as the HERO cell on every row', async () => {
+  it('leads with recoverability (likelihood) as the HERO; money is the secondary (A-23)', async () => {
     vi.stubGlobal('fetch', activeFetch());
     renderList({ scope: 'all' });
 
     await screen.findByTestId('triage-list');
-    expect(screen.getByTestId(`drill-row-recoverable-${FAM_A}`)).toHaveTextContent(
-      '$50,000',
+    // The hero is the recoverability likelihood (0.95 → "95%"), not a dollar.
+    expect(screen.getByTestId(`drill-row-likelihood-${FAM_A}`)).toHaveTextContent(
+      '95%',
     );
-    expect(screen.getByTestId(`drill-row-recoverable-${FAM_C}`)).toHaveTextContent(
-      '$8,000',
+    expect(screen.getByTestId(`drill-row-likelihood-${FAM_C}`)).toHaveTextContent(
+      '50%',
     );
-    // The tier-1 readout sums recoverable_now (50k+30k+8k = $88,000), not value.
+    // The honest secondary: real value + the child-count driver.
+    expect(screen.getByTestId(`drill-row-value-${FAM_A}`)).toHaveTextContent(
+      '$60,000',
+    );
+    expect(screen.getByTestId(`drill-row-kids-${FAM_A}`)).toHaveTextContent('3 kids');
+    // The tier-1 readout sums the face VALUE at risk (60k+36k+10k = $106,000).
     expect(screen.getByTestId('triage-readout-money')).toHaveTextContent(
-      '$88,000',
+      '$106,000',
     );
   });
 
@@ -249,8 +261,8 @@ describe('TriageList (S13 redesign)', () => {
     await screen.findByTestId('triage-list');
     expect(screen.getByTestId('bulk-bar')).toBeInTheDocument();
     expect(screen.getByTestId('bulk-bar-partition')).toBeInTheDocument();
-    // The dock shows the selection's recoverable total.
-    expect(screen.getByTestId('bulk-bar-recoverable')).toHaveTextContent('$50,000');
+    // The dock shows the selection's $ at risk = Σ face value (FAM_A → $60,000).
+    expect(screen.getByTestId('bulk-bar-recoverable')).toHaveTextContent('$60,000');
   });
 
   it('an empty SCOPE shows widen remedies (not a blank panel, never "today")', async () => {

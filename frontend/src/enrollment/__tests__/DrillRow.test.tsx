@@ -2,10 +2,12 @@ import { fireEvent, render, screen } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import DrillRow, { DRILL_GRID, DrillRowHead, railClass } from '../DrillRow';
 
-// Acceptance test (CLAUDE §4.2) for the redesigned triage row. The pill-wall is
-// gone: recoverable_now is the HERO cell, recency is a left-edge RAIL (not a
-// Chip), the rank + score columns are gone, and an age cell ("12d") + a magnitude
-// bar carry priority. Header + row share the DRILL_GRID template.
+// Acceptance test (CLAUDE §4.2) for the A-23 triage row. RECOVERABILITY
+// (likelihood %) is the HERO cell — "the further they went, the more recoverable";
+// the money is the HONEST secondary: $ face value (children × per-child tuition)
+// over the child-count driver ("3 kids"). Funnel depth (stuck step) + the funding
+// label sit under the name; recency is a left-edge RAIL (not a Chip); the rank +
+// score columns are gone. Header + row share the DRILL_GRID template.
 
 const FID = 'fam-1';
 
@@ -15,10 +17,12 @@ function row(props = {}) {
       familyId={FID}
       name="The Alvarez Family"
       stuckStep="enrollment agreement"
+      funding="Texas voucher"
       stallDate="Jun 13"
       age="12d"
-      recoverable="$50,000"
-      value="$60,000"
+      likelihood="84%"
+      value="$31,200"
+      kids="3 kids"
       magnitude={0.8}
       contactStatus="overdue"
       {...props}
@@ -26,18 +30,23 @@ function row(props = {}) {
   );
 }
 
-describe('DrillRow (redesign)', () => {
-  it('renders the recoverable-now HERO cell, secondary value, age + stall date', () => {
+describe('DrillRow (A-23 redesign)', () => {
+  it('leads with the recoverability HERO + the value·kids secondary, age + date', () => {
     render(row());
     const r = screen.getByTestId(`drill-row-${FID}`);
     expect(r).toHaveTextContent('The Alvarez Family');
     expect(r).toHaveTextContent('enrollment agreement');
-    // The loud hero is recoverable_now (not the face value).
-    expect(screen.getByTestId(`drill-row-recoverable-${FID}`)).toHaveTextContent(
-      '$50,000',
+    // The loud hero is the recoverability likelihood (NOT a dollar).
+    expect(screen.getByTestId(`drill-row-likelihood-${FID}`)).toHaveTextContent(
+      '84%',
     );
-    // Secondary face value stays for the sanity-check ("$50k of a $60k deal").
-    expect(r).toHaveTextContent('$60,000');
+    // The money is the honest secondary: real value + the child-count driver.
+    expect(screen.getByTestId(`drill-row-value-${FID}`)).toHaveTextContent(
+      '$31,200',
+    );
+    expect(screen.getByTestId(`drill-row-kids-${FID}`)).toHaveTextContent('3 kids');
+    // The funding label rides under the name next to the stuck step.
+    expect(r).toHaveTextContent('Texas voucher');
     expect(screen.getByTestId(`drill-row-age-${FID}`)).toHaveTextContent('12d');
     expect(screen.getByTestId(`drill-row-date-${FID}`)).toHaveTextContent('Jun 13');
   });
@@ -69,7 +78,7 @@ describe('DrillRow (redesign)', () => {
     expect(railClass('fresh')).toBe('rail-fresh');
   });
 
-  it('renders the magnitude bar (recoverable-now / max-in-scope width)', () => {
+  it('renders the magnitude bar (recoverability / likelihood width)', () => {
     render(row({ magnitude: 0.5 }));
     const bar = screen.getByTestId(`drill-row-bar-${FID}`);
     const fill = bar.firstElementChild as HTMLElement;

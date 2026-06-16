@@ -14,7 +14,7 @@ import FundingTracker from '../FundingTracker';
 const UNLOCKED_PAYLOAD = {
   family_id: 'fam-a',
   funding_state: 'first_installment_received',
-  funding_type: 'TEFA',
+  funding_type: 'tefa_standard',
   installments: ['2618.50', '2618.50', '5237.00'],
   tuition_unlocked: true,
 };
@@ -23,7 +23,7 @@ const UNLOCKED_PAYLOAD = {
 const LOCKED_PAYLOAD = {
   family_id: 'fam-b',
   funding_state: 'awaiting_first_installment',
-  funding_type: 'TEFA',
+  funding_type: 'tefa_standard',
   installments: ['2618.50', '2618.50', '5237.00'],
   tuition_unlocked: false,
 };
@@ -73,7 +73,7 @@ describe('FundingTracker', () => {
     expect(
       await screen.findByText('first_installment_received'),
     ).toBeInTheDocument();
-    expect(screen.getByTestId('funding-type')).toHaveTextContent('TEFA');
+    expect(screen.getByTestId('funding-type')).toHaveTextContent('Texas voucher');
 
     // The three TEFA installment amounts render in order.
     const schedule = screen.getByTestId('installment-schedule');

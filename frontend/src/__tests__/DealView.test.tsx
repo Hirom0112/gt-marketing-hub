@@ -12,7 +12,7 @@ const ENROLLED_PAYLOAD = {
   deal_view: {
     display_name: 'The Rivera Family',
     stall_reason: 'Awaiting funding confirmation',
-    funding_type: 'TEFA',
+    funding_type: 'tefa_standard',
     map_score: 0.82,
     attribution_source: 'Paid Search',
     crm_seam_status: 'synced',
@@ -33,7 +33,7 @@ const INTEREST_PAYLOAD = {
   deal_view: {
     display_name: 'The Okafor Family',
     stall_reason: null,
-    funding_type: 'Self-pay',
+    funding_type: 'self_pay',
     map_score: null,
     attribution_source: 'Referral',
     crm_seam_status: 'unsynced',
@@ -71,7 +71,9 @@ describe('DealView', () => {
     expect(
       await screen.findByText('Awaiting funding confirmation'),
     ).toBeInTheDocument();
-    expect(screen.getByTestId('deal-funding-type')).toHaveTextContent('TEFA');
+    expect(screen.getByTestId('deal-funding-type')).toHaveTextContent(
+      'Texas voucher',
+    );
     expect(screen.getByTestId('deal-map-score')).toHaveTextContent('0.82');
     expect(screen.getByTestId('deal-attribution')).toHaveTextContent(
       'Paid Search',

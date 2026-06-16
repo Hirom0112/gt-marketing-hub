@@ -40,6 +40,12 @@ export interface CalendarEntry {
   contact_status: string;
   value: number;
   score: number;
+  // A-23 — recoverability (likelihood, the triage HERO) + the value drivers
+  // (child count + funding label). Optional so the calendar's own fetch (which
+  // omits recoverability) still satisfies the type; the triage list populates them.
+  recoverability?: number;
+  num_children?: number;
+  funding_type?: string | null;
   recoverable_now?: number;
   freshness?: number;
   recovery_state?: string;
