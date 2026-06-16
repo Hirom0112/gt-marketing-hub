@@ -196,10 +196,11 @@ def derive_student_recovery_state(
     cleared, or its ``funding_state`` reached the §5.4 first-installment gate.
     Pure and total — reuses the same predicates as :func:`derive_recovery_state`.
 
-    Per-child contact/dismiss tracking is not yet wired (there is no per-student
-    audit log), so ``last_contact_at``/``dismissed`` default off and a child is
-    ``RECOVERED`` (its funnel moved) or ``STALLED`` (it has not); the optional
-    args keep the signature ready for a future per-student contact log.
+    ``last_contact_at`` and ``dismissed`` are the per-child audit facts the API
+    layer resolves keyed to (family_id, student_id) — a student-keyed approved
+    outbound (A-14) and a per-child dismiss event (A-24) — and passes IN, exactly
+    as the family deriver takes them. They default off so a caller with no log
+    facts still gets the funnel-only ``RECOVERED``/``STALLED`` split.
     """
     if dismissed:
         return RecoveryState.DISMISSED

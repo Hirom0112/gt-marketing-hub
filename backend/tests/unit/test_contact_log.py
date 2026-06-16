@@ -18,7 +18,6 @@ from datetime import UTC, datetime
 from uuid import UUID
 
 from app.core.contact_log import last_contact_at
-
 from app.observability.log_store import DecisionAction, InMemoryObservabilityLog
 
 # Stable UUIDs so the aggregation is fully deterministic (no uuid4 in the path).

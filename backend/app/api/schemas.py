@@ -10,7 +10,7 @@ from __future__ import annotations
 from datetime import datetime
 from uuid import UUID
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from app.ai.schemas.brand import LibraryAsset
 from app.ai.schemas.close_tips import CloseTipsProposal
@@ -163,8 +163,10 @@ class StudentRow(BaseModel):
     freshness: float
 
     # Per-child derived recovery state (A-24). {stalled, working, recovered,
-    # dismissed}; per-student contact/dismiss tracking is not yet wired, so a
-    # child reads recovered (its funnel moved) or stalled.
+    # dismissed}: recovered (its own funnel moved), working (a per-child approved
+    # outbound exists), dismissed (a per-child dismiss holds — POST /students/{id}/
+    # dismiss), else stalled. Resolved per (family_id, student_id) so it never
+    # reflects a sibling's or a family-level event.
     recovery_state: RecoveryState
 
 
@@ -195,6 +197,40 @@ class StudentBoardResponse(BaseModel):
     households: list[HouseholdGroup]
     total_students: int
     total_value_at_risk: float
+
+
+class StudentDismissRequest(BaseModel):
+    """`POST /students/{id}/dismiss` body (A-24) — the per-child dismiss reason.
+
+    A per-child dismiss is the only MANUAL recovery removal of one child (A-19:
+    recovered is DETECTED, never a button). ``reason`` is REQUIRED — a blank
+    reason is rejected 422 before any event is logged, so the audit always records
+    *why* a child was set aside (INV-2).
+    """
+
+    reason: str = Field(min_length=1)
+
+    @field_validator("reason")
+    @classmethod
+    def _reason_not_blank(cls, value: str) -> str:
+        """Reject a whitespace-only reason 422 (the audit needs a real why; A-19)."""
+        if not value.strip():
+            raise ValueError("dismiss reason must not be blank")
+        return value
+
+
+class StudentDismissResponse(BaseModel):
+    """`POST /students/{id}/dismiss` result (A-24) — the child's new recovery state.
+
+    Echoes the dismissed child's ids and its recomputed ``recovery_state`` (now
+    ``dismissed``, the highest-precedence state) so the UI can drop the row from
+    the active board without a re-fetch.
+    """
+
+    student_id: UUID
+    family_id: UUID
+    recovery_state: RecoveryState
+    reason: str
 
 
 class CalendarEntry(BaseModel):

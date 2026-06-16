@@ -16,10 +16,11 @@ from fastapi.testclient import TestClient
 
 from app.adapters.hubspot.crm_adapter import SimulatedCRMAdapter
 from app.api import deps
-from app.api.deps import get_crm_adapter_dep
+from app.api.deps import get_crm_adapter_dep, get_observability_log
 from app.core.params import load_params
 from app.data.repository import DEFAULT_FAMILY_COUNT, DEFAULT_SEED, InMemoryFamilyRepository
 from app.main import app
+from app.observability.log_store import InMemoryObservabilityLog
 
 client = TestClient(app)
 
@@ -146,6 +147,64 @@ def test_students_history_scope_limit_caps_rows() -> None:
     """`limit` caps the history/all row count (never streams the long tail)."""
     body = client.get("/students?scope=history&limit=3").json()
     assert len(_flat(body)) <= 3
+
+
+def test_dismiss_student_moves_it_from_active_to_history() -> None:
+    """POST /students/{id}/dismiss sets ONE child aside → dismissed, off the active board.
+
+    The per-child dismiss is the manual recovery removal for A-24: the child reads
+    ``dismissed`` (highest precedence), drops out of the default active scope, and
+    appears under history. A fresh in-memory log isolates the write.
+    """
+    fresh = InMemoryObservabilityLog()
+    app.dependency_overrides[get_observability_log] = lambda: fresh
+    try:
+        active = client.get("/students?scope=active").json()
+        row = active["households"][0]["students"][0]
+        sid = row["student_id"]
+        assert row["recovery_state"] in _ACTIVE
+
+        resp = client.post(f"/students/{sid}/dismiss", json={"reason": "enrolled elsewhere"})
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        assert body["student_id"] == sid
+        assert body["recovery_state"] == "dismissed"
+
+        active_ids = {r["student_id"] for r in _flat(client.get("/students?scope=active").json())}
+        assert sid not in active_ids
+        history_ids = {r["student_id"] for r in _flat(client.get("/students?scope=history").json())}
+        assert sid in history_ids
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_dismiss_unknown_student_404() -> None:
+    """Dismissing an unknown student id is a clean 404, not a 500."""
+    from uuid import uuid4
+
+    fresh = InMemoryObservabilityLog()
+    app.dependency_overrides[get_observability_log] = lambda: fresh
+    try:
+        resp = client.post(f"/students/{uuid4()}/dismiss", json={"reason": "n/a"})
+        assert resp.status_code == 404
+        assert not fresh.list_dismissals()
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_dismiss_student_blank_reason_422() -> None:
+    """A blank dismiss reason is rejected 422 — the audit needs a why (A-19)."""
+    fresh = InMemoryObservabilityLog()
+    app.dependency_overrides[get_observability_log] = lambda: fresh
+    try:
+        sid = client.get("/students?scope=active").json()["households"][0]["students"][0][
+            "student_id"
+        ]
+        resp = client.post(f"/students/{sid}/dismiss", json={"reason": "   "})
+        assert resp.status_code == 422
+        assert not fresh.list_dismissals()
+    finally:
+        app.dependency_overrides.clear()
 
 
 def test_transfer_student_to_crm_simulated_records_push() -> None:

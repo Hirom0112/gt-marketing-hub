@@ -27,6 +27,8 @@ from app.api.schemas import (
     HouseholdGroup,
     PipelineResponse,
     StudentBoardResponse,
+    StudentDismissRequest,
+    StudentDismissResponse,
     StudentRow,
     WorkQueueItem,
 )
@@ -72,6 +74,9 @@ LogDep = Annotated[ObservabilityLog, Depends(get_observability_log)]
 # The CRM boundary (INV-9) — simulated by default, live behind CRM_MODE=live; the
 # per-child transfer route pushes through this seam, never a direct HubSpot call.
 CRMAdapterDep = Annotated[CRMAdapter, Depends(get_crm_adapter_dep)]
+
+# The operator identity recorded on a manual write (mirrors seam/ai_actions).
+DEFAULT_HUMAN = "operator"
 
 
 def _work_queue_family(joined: JoinedFamily, params: Params) -> WorkQueueFamily:
@@ -604,6 +609,33 @@ def get_work_queue(
     return rows
 
 
+def _student_recovery_state(js: JoinedStudent, *, log: ObservabilityLog) -> RecoveryState:
+    """Derive a child's recovery state, resolving its per-child audit facts (A-24).
+
+    Mirrors the family composition root (:func:`_recovery_state_for`): the
+    log-derived contact (A-14) and dismiss (A-19) facts are resolved HERE, keyed
+    to (family_id, student_id) so a child's contact/dismiss never picks up a
+    sibling's or a family-level event, then passed INTO the pure deriver — which
+    never touches the log (INV-2 core purity). A re-stall after the dismiss
+    (``restalled_after=stalled_since``) supersedes it, exactly as for families.
+    """
+    student = js.student
+    contact = last_contact_at(log, student.family_id, student_id=student.student_id)
+    dismissed = log.is_dismissed(
+        student.family_id,
+        student_id=student.student_id,
+        restalled_after=student.stalled_since,
+    )
+    return derive_student_recovery_state(
+        current_stage=student.current_stage,
+        funding_state=student.funding_state,
+        enrollment_forms=js.enrollment_forms,
+        stall_stage=_student_stall_stage(js),
+        last_contact_at=contact,
+        dismissed=dismissed,
+    )
+
+
 # The per-child board scope (A-24), mirroring the work-queue's first axis.
 # ``active`` is the DEFAULT — only children still in play (recovery_state ∈
 # {stalled, working}); recovered/dismissed children belong to history, not the
@@ -615,6 +647,7 @@ StudentScope = Literal["active", "history", "all"]
 def get_students(
     repository: RepositoryDep,
     params: ParamsDep,
+    log: LogDep,
     scope: Annotated[
         StudentScope,
         Query(
@@ -674,12 +707,7 @@ def get_students(
             break
         js = joined_by_id[unit.student_id]
         student = js.student
-        state = derive_student_recovery_state(
-            current_stage=student.current_stage,
-            funding_state=student.funding_state,
-            enrollment_forms=js.enrollment_forms,
-            stall_stage=_student_stall_stage(js),
-        )
+        state = _student_recovery_state(js, log=log)
         # Scope gate: drop children whose derived state is outside the slice.
         if scope == "active" and not is_active(state):
             continue
@@ -725,6 +753,44 @@ def get_students(
         households=households,
         total_students=surfaced,
         total_value_at_risk=sum(g.value_at_risk for g in households),
+    )
+
+
+@router.post("/students/{student_id}/dismiss", response_model=StudentDismissResponse)
+def dismiss_student(
+    student_id: UUID,
+    request: StudentDismissRequest,
+    repository: RepositoryDep,
+    log: LogDep,
+) -> StudentDismissResponse:
+    """Set ONE child aside — the per-child manual recovery removal (A-24; A-19).
+
+    Appends a per-student dismiss event (the one new audit write; ``reason``
+    required, a blank one rejected 422 by the request schema) keyed to
+    (family_id, student_id) so it never leaks to a sibling or the household. The
+    child then derives ``recovery_state=dismissed`` (highest precedence, until a
+    later re-stall supersedes it), drops out of the default active board, and
+    appears under history. The read store stays read-only (A-3); the audit log is
+    the only write spine (INV-2). 404 if the student is unknown.
+    """
+    js = next(
+        (j for j in repository.list_students() if j.student.student_id == student_id),
+        None,
+    )
+    if js is None:
+        raise HTTPException(status_code=404, detail=f"unknown student: {student_id}")
+
+    log.log_dismiss(
+        family_id=js.student.family_id,
+        student_id=student_id,
+        human=DEFAULT_HUMAN,
+        reason=request.reason,
+    )
+    return StudentDismissResponse(
+        student_id=student_id,
+        family_id=js.student.family_id,
+        recovery_state=_student_recovery_state(js, log=log),
+        reason=request.reason,
     )
 
 
