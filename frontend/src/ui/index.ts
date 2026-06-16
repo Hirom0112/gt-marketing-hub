@@ -1,4 +1,4 @@
-// Shared presentational UI primitives for the GT Growth Cockpit re-skin.
+// Shared presentational UI primitives for the GT Pulse re-skin.
 // Token-driven, no `any`, no fetch — safe for any workspace component to import.
 export { Card } from './Card';
 export type { CardProps } from './Card';

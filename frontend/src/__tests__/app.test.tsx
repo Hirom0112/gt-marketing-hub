@@ -4,26 +4,35 @@ import { describe, expect, it } from 'vitest';
 import App from '../App';
 import { DEFAULT_API_BASE_URL } from '../config';
 
-// S14 shell IA: the old top tab-bar header was replaced by a LEFT sidebar nav +
-// a clean page-header zone (eyebrow + page title, with the API chip in the
-// corner). These tests assert the sidebar nav IA and the per-workspace page
-// title rather than the retired "GT Growth Cockpit" top heading.
+// GT Pulse shell IA: the full-height LEFT sidebar is the only chrome — there is
+// NO top bar. The sidebar carries the GT Pulse brand at the top + the nav stack;
+// each workspace has a clean page-header zone (eyebrow + page title, with the API
+// chip in the corner). The Enrollment situation metrics live in the page CONTENT,
+// not in any global header. These tests assert that IA.
 describe('App shell', () => {
-  it('renders the full-width brand bar with the GT wordmark', () => {
+  it('has no global top bar — the sidebar is the only chrome', () => {
     render(<App />);
-    const topbar = screen.getByTestId('app-topbar');
-    expect(topbar).toBeInTheDocument();
-    expect(within(topbar).getByTestId('app-wordmark')).toHaveTextContent(
-      /GT Growth Cockpit/i,
-    );
-    // The API chip lives in the brand bar's far corner.
-    expect(within(topbar).getByTestId('api-base-url')).toBeInTheDocument();
+    expect(screen.queryByTestId('app-topbar')).toBeNull();
+    expect(screen.queryByTestId('app-wordmark')).toBeNull();
   });
 
-  it('keeps the sidebar nav-only (no brand mark — it moved to the brand bar)', () => {
+  it('renders the GT Pulse brand at the top of the sidebar', () => {
     render(<App />);
     const sidebar = screen.getByTestId('sidebar');
-    expect(within(sidebar).queryByTestId('app-wordmark')).toBeNull();
+    const brand = within(sidebar).getByTestId('sidebar-brand');
+    expect(brand).toHaveTextContent(/GT Pulse/i);
+    expect(
+      within(brand).getByRole('img', { name: /GT Pulse/i }),
+    ).toHaveAttribute('src', '/gt-pulse-logo.png');
+  });
+
+  it('puts the API chip in the page-header, not a global header', () => {
+    render(<App />);
+    // The API chip lives in the per-workspace page-header.
+    expect(screen.getByTestId('api-base-url')).toBeInTheDocument();
+    // The situation metrics are NOT in any global header (they live in the
+    // Enrollment page content — see EnrollmentWorkspace tests).
+    expect(screen.queryByTestId('situation-bar')).toBeNull();
   });
 
   it('renders the left sidebar with the five nav items', () => {
@@ -62,7 +71,9 @@ describe('App shell', () => {
     );
 
     fireEvent.click(screen.getByTestId('sidebar-nav-settings'));
-    expect(screen.getByTestId('page-title')).toHaveTextContent(/configuration/i);
+    expect(screen.getByTestId('page-title')).toHaveTextContent(
+      /configuration/i,
+    );
     expect(screen.getByTestId('settings-workspace')).toBeInTheDocument();
 
     fireEvent.click(screen.getByTestId('sidebar-nav-help'));

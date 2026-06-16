@@ -1,5 +1,4 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { createPortal } from 'react-dom';
 import { CalendarDays, History, ListOrdered } from 'lucide-react';
 import ActionPanel from '../ActionPanel';
 import DealView from '../DealView';
@@ -88,7 +87,9 @@ export default function EnrollmentWorkspace(): JSX.Element {
   const [leftView, setLeftView] = useState<LeftView>('calendar');
   // The triage list's scope dial (Day/Week/All) + the day it's windowed around.
   const [triageScope, setTriageScope] = useState<TriageScope>('all');
-  const [triageAnchor, setTriageAnchor] = useState<string | undefined>(undefined);
+  const [triageAnchor, setTriageAnchor] = useState<string | undefined>(
+    undefined,
+  );
   const [recoveryRows, setRecoveryRows] = useState<RecoverableRow[] | null>(
     null,
   );
@@ -114,7 +115,8 @@ export default function EnrollmentWorkspace(): JSX.Element {
   const reloadRows = useCallback((): void => {
     fetch(`${apiBaseUrl}/work-queue`)
       .then((res) => {
-        if (!res.ok) throw new Error(`work-queue request failed: ${res.status}`);
+        if (!res.ok)
+          throw new Error(`work-queue request failed: ${res.status}`);
         return res.json() as Promise<RecoverableRow[]>;
       })
       .then((rows) => setRecoveryRows(rows))
@@ -132,7 +134,10 @@ export default function EnrollmentWorkspace(): JSX.Element {
         if (cancelled) return;
         const first = families[0]?.family_id ?? null;
         if (first === null) {
-          setFamiliesState({ status: 'error', message: 'no families returned' });
+          setFamiliesState({
+            status: 'error',
+            message: 'no families returned',
+          });
           return;
         }
         setSelectedFamilyId(first);
@@ -478,58 +483,54 @@ export default function EnrollmentWorkspace(): JSX.Element {
 // (INV-11 spirit: nothing hardcoded). A-17: a fresh lead is still inside its
 // contact window, so it is NOT a stall the loop is leaving on the table.
 //
-// In the S14 shell this renders as a SINGLE bordered pill in the TOP-RIGHT of
-// the full-width brand bar: the three figures inline, separated by thin vertical
-// dividers (⚠ N ACTIVE STALLS │ N OVERDUE │ $X AT RISK). The workspace keeps
-// ownership of the data (the /work-queue fetch doesn't move — least-coupled),
-// and PORTALS the pill into the shell's `#situation-slot`. When that slot is
-// absent (the workspace mounted on its own, e.g. in a unit test), it falls back
-// to rendering inline. Either way the `situation-bar` + figure testids are
-// stable.
-function SituationBar({ rows }: { rows: readonly RecoverableRow[] }): JSX.Element {
+// It renders as a SINGLE bordered pill at the TOP of the Enrollment content,
+// right-aligned (NOT in any header): the three figures inline, separated by thin
+// vertical dividers (⚠ N ACTIVE STALLS │ N OVERDUE │ $X AT RISK). The workspace
+// owns the data (the /work-queue fetch). The `situation-bar` + figure testids
+// are stable.
+function SituationBar({
+  rows,
+}: {
+  rows: readonly RecoverableRow[];
+}): JSX.Element {
   const { stalled, overdue, recoverableValue } = summarizeRecovery(rows);
 
-  const summary = (
-    <div data-testid="situation-bar" className="situation-pill">
-      <div className="situation-pill-cell">
-        <span className="situation-pill-glyph" aria-hidden>
-          ⚠
-        </span>
-        <span
-          className="mono situation-pill-figure is-signal"
-          data-testid="situation-stalled"
-        >
-          {stalled}
-        </span>
-        <span className="lab situation-pill-label">Active stalls</span>
-      </div>
-      <span className="situation-pill-divider" aria-hidden />
-      <div className="situation-pill-cell">
-        <span
-          className="mono situation-pill-figure is-signal"
-          data-testid="situation-overdue"
-        >
-          {overdue}
-        </span>
-        <span className="lab situation-pill-label">Overdue</span>
-      </div>
-      <span className="situation-pill-divider" aria-hidden />
-      <div className="situation-pill-cell">
-        <span
-          className="mono situation-pill-figure is-money"
-          data-testid="situation-recoverable"
-        >
-          {fmtUSD(recoverableValue)}
-        </span>
-        <span className="lab situation-pill-label">At risk</span>
+  return (
+    <div className="situation-row">
+      <div data-testid="situation-bar" className="situation-pill">
+        <div className="situation-pill-cell">
+          <span className="situation-pill-glyph" aria-hidden>
+            ⚠
+          </span>
+          <span
+            className="mono situation-pill-figure is-signal"
+            data-testid="situation-stalled"
+          >
+            {stalled}
+          </span>
+          <span className="lab situation-pill-label">Active stalls</span>
+        </div>
+        <span className="situation-pill-divider" aria-hidden />
+        <div className="situation-pill-cell">
+          <span
+            className="mono situation-pill-figure is-signal"
+            data-testid="situation-overdue"
+          >
+            {overdue}
+          </span>
+          <span className="lab situation-pill-label">Overdue</span>
+        </div>
+        <span className="situation-pill-divider" aria-hidden />
+        <div className="situation-pill-cell">
+          <span
+            className="mono situation-pill-figure is-money"
+            data-testid="situation-recoverable"
+          >
+            {fmtUSD(recoverableValue)}
+          </span>
+          <span className="lab situation-pill-label">At risk</span>
+        </div>
       </div>
     </div>
   );
-
-  const slot =
-    typeof document !== 'undefined'
-      ? document.getElementById('situation-slot')
-      : null;
-
-  return slot ? createPortal(summary, slot) : summary;
 }

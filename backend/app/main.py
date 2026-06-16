@@ -22,7 +22,7 @@ from app.api.scoreboard import router as scoreboard_router
 from app.api.seam import router as seam_router
 from app.core.settings import get_settings
 
-app = FastAPI(title="GT Growth Cockpit", version="0.1.0")
+app = FastAPI(title="GT Pulse", version="0.1.0")
 
 # CORS — the React app runs on a separate origin (Vite dev server / built host),
 # so the browser sends cross-origin requests the API must explicitly allow-list

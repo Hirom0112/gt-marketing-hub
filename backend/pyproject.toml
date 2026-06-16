@@ -1,7 +1,7 @@
 [project]
 name = "gt-growth-cockpit-backend"
 version = "0.1.0"
-description = "GT Growth Cockpit backend — deterministic core, LLM at the edge, eval-gated."
+description = "GT Pulse backend — deterministic core, LLM at the edge, eval-gated."
 requires-python = ">=3.12,<3.13"
 
 # Direct runtime dependencies. Hard ceiling: <= 15 (TECH_STACK.md §4.1).

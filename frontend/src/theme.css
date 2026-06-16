@@ -1,5 +1,5 @@
 /* =============================================================================
-   GT Growth Cockpit — design tokens (S8 Wave 1)
+   GT Pulse — design tokens (S8 Wave 1)
 
    The SINGLE canonical home for the palette, type scale, radius, and spacing
    rhythm. No component anywhere may declare a raw hex, font stack, or radius —
@@ -108,9 +108,10 @@
   --focus-ring: 0 0 0 2px var(--surface), 0 0 0 4px var(--focus);
 
   /* ---- type --------------------------------------------------------------- */
-  --mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
-  --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, Roboto,
-    Helvetica, Arial, sans-serif;
+  --mono: ui-monospace, 'SF Mono', 'JetBrains Mono', Menlo, Consolas, monospace;
+  --sans:
+    -apple-system, BlinkMacSystemFont, 'Segoe UI', Inter, Roboto, Helvetica,
+    Arial, sans-serif;
 
   --fs-micro: 10px; /* .lab uppercase labels   */
   --fs-chip: 10.5px;
@@ -151,12 +152,10 @@
   --ease: cubic-bezier(0.2, 0.6, 0.2, 1);
   --dur: 140ms;
 
-  /* ---- app shell (S14: full-width brand bar + left nav rail + header) ------ */
-  --topbar-h: 58px; /* the full-width brand bar height (sticky top) */
-  --sidebar-w: 72px; /* the thin vertical icon rail */
+  /* ---- app shell (GT Pulse: full-height left nav rail + per-page header) --- */
+  --sidebar-w: 84px; /* the vertical nav rail — widened so the brand tile + labels breathe */
   --header-h: 76px; /* the page-header zone min height */
-  --brand-mark: 40px; /* the sidebar GT rounded-square mark size (retired) */
-  --topbar-mark: 30px; /* the brand-bar GT rounded-square mark size */
+  --brand-tile: 56px; /* the sidebar GT Pulse logo width inside its dark tile */
 }
 
 /* ---- base reset ----------------------------------------------------------- */
@@ -224,96 +223,29 @@ figure {
 }
 
 /* =============================================================================
-   App shell (S14) — a full-width brand bar over a [nav rail][main] row.
+   App shell (GT Pulse) — a full-height left nav rail beside the fluid main.
 
-   Layout: a column — a sticky full-width brand bar (GT mark + wordmark left;
-   situation pill + API chip right), then a [sidebar fixed-width][main fluid]
-   row beneath it. The main column keeps the prior fluid behaviour (full width,
-   scaling padding, no hard max-width). Each page-header carries a large page
-   title with a mono eyebrow below it.
+   Layout: a [sidebar fixed-width][main fluid] grid. The sidebar is the ONLY
+   full-height chrome (no top bar) — it carries the GT Pulse brand at the top and
+   the nav stack below it. The main column is fluid (full width, scaling padding,
+   no hard max-width). Each page-header carries a large page title with a mono
+   eyebrow below it (and the API chip in the corner); the Enrollment situation
+   metrics live in the page CONTENT, not in any header.
 ============================================================================= */
 .app-shell {
-  display: flex;
-  flex-direction: column;
+  display: grid;
+  grid-template-columns: var(--sidebar-w) minmax(0, 1fr);
   min-height: 100vh;
   background: var(--paper);
   color: var(--ink);
 }
 
-/* ---- the full-width top brand bar ----------------------------------------- */
-.app-topbar {
-  position: sticky;
-  top: 0;
-  z-index: 20;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--s-4);
-  height: var(--topbar-h);
-  padding: 0 clamp(12px, 1.4vw, 24px);
-  background: var(--surface);
-  border-bottom: 1px solid var(--line);
-}
-
-.app-topbar-brand {
-  display: flex;
-  align-items: center;
-  gap: var(--s-2);
-  min-width: 0;
-}
-
-/* The dark GT rounded-square mark — white mono "GT" on --ink. */
-.app-topbar-mark {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  flex: none;
-  width: var(--topbar-mark);
-  height: var(--topbar-mark);
-  border-radius: var(--r-sm);
-  background: var(--ink);
-  color: var(--on-ink);
-  font-family: var(--mono);
-  font-size: var(--fs-sm);
-  font-weight: 700;
-  letter-spacing: 0.02em;
-}
-
-.app-topbar-wordmark {
-  font-family: var(--sans);
-  font-size: var(--fs-md);
-  font-weight: 700;
-  letter-spacing: -0.01em;
-  color: var(--ink);
-  white-space: nowrap;
-}
-
-.app-topbar-aside {
-  display: flex;
-  align-items: center;
-  gap: var(--s-3);
-  margin-left: auto;
-  min-width: 0;
-}
-
-.app-topbar-situation:empty {
-  display: none;
-}
-
-/* ---- the [sidebar][main] row beneath the brand bar ------------------------ */
-.app-row {
-  display: grid;
-  grid-template-columns: var(--sidebar-w) minmax(0, 1fr);
-  flex: 1;
-  min-height: 0;
-}
-
-/* ---- the left nav rail ---------------------------------------------------- */
+/* ---- the full-height left nav rail ---------------------------------------- */
 .sidebar {
   position: sticky;
-  top: var(--topbar-h);
+  top: 0;
   align-self: start;
-  height: calc(100vh - var(--topbar-h));
+  height: 100vh;
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -321,6 +253,41 @@ figure {
   padding: var(--s-3) 0;
   background: var(--surface);
   border-right: 1px solid var(--line);
+}
+
+/* ---- the GT Pulse brand block at the top of the rail ---------------------- */
+/* The logo art is dark/glowing-blue, designed for dark backgrounds — so it sits
+   inside a small dark rounded tile to read well on the light rail. */
+.sidebar-brand {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--s-1);
+  padding: 0 var(--s-2) var(--s-1);
+}
+
+.sidebar-brand-tile {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--ink);
+  border-radius: var(--r-md);
+  padding: var(--s-2);
+}
+
+.sidebar-brand-logo {
+  display: block;
+  width: var(--brand-tile);
+  height: auto;
+}
+
+.sidebar-brand-label {
+  font-family: var(--mono);
+  font-size: 9px;
+  letter-spacing: var(--tracking-lab);
+  text-transform: uppercase;
+  color: var(--muted);
+  line-height: 1.1;
 }
 
 .sidebar-group {
@@ -423,8 +390,13 @@ figure {
 }
 
 /* The situation summary — ONE bordered white pill holding the three figures
-   inline, separated by thin vertical dividers. Lives in the brand bar's right
-   side (portaled into #situation-slot from the Enrollment workspace). */
+   inline, separated by thin vertical dividers. Lives at the TOP of the
+   Enrollment page content, right-aligned (NOT in any header). */
+.situation-row {
+  display: flex;
+  justify-content: flex-end;
+}
+
 .situation-pill {
   display: inline-flex;
   align-items: center;
@@ -541,10 +513,9 @@ figure {
   letter-spacing: var(--tracking-lab);
 }
 
-/* The situation summary now lives in the page header (see `.situation-summary`
-   in the app-shell block) — the workspace portals it there. When the workspace
-   mounts standalone (e.g. in a unit test) it renders inline at the top of the
-   content with the same `.situation-summary` cells. */
+/* The situation summary renders inline at the top of the Enrollment content,
+   right-aligned (`.situation-row` > `.situation-pill`) — see the pill rules in
+   the app-shell block. It is Enrollment content, not header chrome. */
 
 /* ---- work-panel (act) — the self-contained right column ------------------- */
 .work-panel {
