@@ -23,6 +23,7 @@ persistence of `family_record.work_queue_score` is wired up in a later slice.
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
+from typing import Protocol, runtime_checkable
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict
@@ -34,6 +35,21 @@ from app.data.models import FundingType, Stage
 # position along this path to [0,1]; closer to Tuition = more recoverable (§5.1).
 # Derived from the Stage enum, not a hardcoded magnitude (INV-11).
 _STAGE_ORDER: tuple[Stage, ...] = (Stage.INTEREST, Stage.APPLY, Stage.ENROLL, Stage.TUITION)
+
+
+@runtime_checkable
+class _Scorable(Protocol):
+    """The funnel attributes the recoverability/freshness sub-factors read.
+
+    Both :class:`WorkQueueFamily` and the per-child :class:`WorkQueueStudent`
+    (A-24) satisfy this structurally, so the §5.1 sub-factors (stall recency,
+    stage proximity, freshness) are computed once and reused for either unit.
+    """
+
+    current_stage: Stage
+    stalled_since: datetime | None
+    created_at: datetime | None
+    responsiveness: float
 
 
 class WorkQueueFamily(BaseModel):
@@ -63,6 +79,28 @@ class WorkQueueFamily(BaseModel):
     num_children: int = 1
     # Funding tier — informational only now (every targeted family is full-pay, so
     # it no longer scales value, A-23). Retained for display / cohort filtering.
+    funding_type: FundingType | None = None
+
+
+class WorkQueueStudent(BaseModel):
+    """The queue-relevant attributes for ONE child's funnel (A-24; FR-2.5).
+
+    The per-child analog of :class:`WorkQueueFamily`. Each child runs its own
+    funnel (one application per child), so the queue scores STUDENTS: a child's
+    value is exactly **one** per-child tuition (the A-23 ``num_children``
+    multiplier is gone — a household's $-at-risk is the SUM over its still-
+    recoverable students, no longer all-or-nothing). Funnel position / stall
+    recency / responsiveness drive recoverability exactly as for a family.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    student_id: UUID
+    family_id: UUID  # the household, for grouping/aggregation on the board.
+    current_stage: Stage
+    stalled_since: datetime | None = None
+    created_at: datetime | None = None
+    responsiveness: float = 0.0
     funding_type: FundingType | None = None
 
 
@@ -102,7 +140,7 @@ def _now_or(now: datetime | None) -> datetime:
     return now if now is not None else datetime.now(UTC)
 
 
-def _stall_recency(family: WorkQueueFamily, params: Params, *, now: datetime) -> float:
+def _stall_recency(family: _Scorable, params: Params, *, now: datetime) -> float:
     """Stall-recency sub-factor ∈ [0,1] — fresher stalls are more recoverable.
 
     Measured relative to ``work_queue.stall_window_days`` (§8): a family stalled
@@ -117,7 +155,7 @@ def _stall_recency(family: WorkQueueFamily, params: Params, *, now: datetime) ->
     return _clamp01(1.0 - elapsed_days / window_days)
 
 
-def _stage_proximity(family: WorkQueueFamily) -> float:
+def _stage_proximity(family: _Scorable) -> float:
     """Stage-proximity sub-factor ∈ [0,1] — closer to Tuition ⇒ higher (§5.1).
 
     The family's index along the §4.8 funnel order, normalized by the number of
@@ -126,9 +164,7 @@ def _stage_proximity(family: WorkQueueFamily) -> float:
     return _STAGE_ORDER.index(family.current_stage) / (len(_STAGE_ORDER) - 1)
 
 
-def recoverability(
-    family: WorkQueueFamily, params: Params, *, now: datetime | None = None
-) -> float:
+def recoverability(family: _Scorable, params: Params, *, now: datetime | None = None) -> float:
     """Composite recoverability ∈ [0,1] — the weighted sub-factor blend (§8).
 
     Sums the three normalized sub-factors (stall-recency, stage-proximity,
@@ -211,7 +247,7 @@ def score_family(family: WorkQueueFamily, params: Params, *, now: datetime | Non
     return work_queue.w_recoverability * recover_term + work_queue.w_value * value_term
 
 
-def freshness(family: WorkQueueFamily, params: Params, *, now: datetime | None = None) -> float:
+def freshness(family: _Scorable, params: Params, *, now: datetime | None = None) -> float:
     """Freshness ∈ [floor,1] — how recently a family went quiet (S12; recoverable_now).
 
     ``freshness = max(floor, min(1, 1 - elapsed_days / window))`` where
@@ -295,4 +331,76 @@ def rank_families(
     return sorted(
         families,
         key=lambda family: (-score_family(family, params, now=reference), family.family_id),
+    )
+
+
+# --------------------------------------------------------------------------- #
+# A-24 — per-child scoring. Each child is worth exactly ONE per-child tuition
+# (no num_children multiplier); the funnel sub-factors are shared with the
+# family scorer via _Scorable, so per-student ranking is driven by recoverability
+# (the value term is uniform across students — every student is one child).
+# --------------------------------------------------------------------------- #
+
+
+def student_value(params: Params) -> float:
+    """One child's queue value — a single per-child tuition (A-24; §8).
+
+    The A-23 ``num_children`` multiplier is dropped: a Student is one child, so
+    its value is exactly ``tuition_annual_default`` (params — INV-11). A
+    household's dollar value is the SUM of its students' :func:`student_value`
+    over the ones still in play (resolved at the API/aggregation layer), which is
+    why a partially-stalled household no longer over- or under-states its $ at risk.
+    """
+    return params.work_queue.value.tuition_annual_default
+
+
+def score_student(
+    student: WorkQueueStudent, params: Params, *, now: datetime | None = None
+) -> float:
+    """Score one child for the work queue (A-24; FR-2.5, §5.1).
+
+    Same shape as :func:`score_family` —
+    ``w_recoverability · recoverability + w_value · (value / value_max)`` — but the
+    value term uses :func:`student_value` (one child), so it is uniform across
+    students and the per-student ranking is driven by recoverability (funnel depth
+    + stall recency + responsiveness). Every weight is params (INV-11); ``now`` is
+    injected (INV-2).
+    """
+    work_queue = params.work_queue
+    recover_term = recoverability(student, params, now=now)
+    value_term = student_value(params) / value_max(params)
+    return work_queue.w_recoverability * recover_term + work_queue.w_value * value_term
+
+
+def recoverable_now_student(
+    student: WorkQueueStudent, params: Params, *, now: datetime | None = None
+) -> float:
+    """A child's recoverable-now ranking key — ``student_value × score × freshness``.
+
+    The per-child analog of :func:`recoverable_now`: one child's tuition weighted
+    by likelihood and time decay. Pure and params-driven (INV-11); ``now`` injected.
+    """
+    reference = _now_or(now)
+    return (
+        student_value(params)
+        * score_student(student, params, now=reference)
+        * freshness(student, params, now=reference)
+    )
+
+
+def rank_students(
+    students: list[WorkQueueStudent],
+    params: Params,
+    *,
+    now: datetime | None = None,
+) -> list[WorkQueueStudent]:
+    """Rank children by work-queue score, highest first (A-24; FR-2.5).
+
+    Deterministic: descending score, ties broken by ascending ``student_id`` so
+    the order is total and reproducible. Not mutated; a new list is returned.
+    """
+    reference = _now_or(now)
+    return sorted(
+        students,
+        key=lambda student: (-score_student(student, params, now=reference), student.student_id),
     )

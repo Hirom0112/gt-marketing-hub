@@ -32,10 +32,15 @@ import pytest
 from app.core.params import Params, load_params
 from app.core.work_queue import (
     WorkQueueFamily,
+    WorkQueueStudent,
     freshness,
     rank_families,
+    rank_students,
     recoverable_now,
+    recoverable_now_student,
     score_family,
+    score_student,
+    student_value,
     value,
     value_max,
 )
@@ -443,3 +448,83 @@ def test_stage_proximity_dominates_recoverability() -> None:
     # Interest→Enroll is 2 of 3 proximity steps ⇒ +(2/3)·stage_proximity_weight.
     expected_gain = (2 / 3) * sub.stage_proximity_weight
     assert gain == pytest.approx(expected_gain, rel=1e-9)
+
+
+# ---------------------------------------------------------------------------
+# A-24 — per-child scoring: one student = one per-child tuition (no multiplier).
+# ---------------------------------------------------------------------------
+
+SID_A = UUID("00000000-0000-0000-0000-0000000000a1")
+SID_B = UUID("00000000-0000-0000-0000-0000000000b2")
+SID_C = UUID("00000000-0000-0000-0000-0000000000c3")
+
+
+def test_student_value_is_one_child_tuition_no_multiplier() -> None:
+    """A student is worth exactly one per-child tuition; N students sum to N×tuition."""
+    params = _params()
+    tuition = params.work_queue.value.tuition_annual_default
+
+    # One student = one child of tuition (the A-23 num_children multiplier is gone).
+    assert student_value(params) == tuition
+
+    # A household 3-up: per-student aggregation = 3 × tuition (not all-or-nothing).
+    household = [student_value(params) for _ in range(3)]
+    assert sum(household) == 3 * tuition
+
+
+def _student(
+    sid: UUID, stage: Stage, *, stalled_days: int, responsiveness: float
+) -> WorkQueueStudent:
+    return WorkQueueStudent(
+        student_id=sid,
+        family_id=FID_A,
+        current_stage=stage,
+        stalled_since=NOW - timedelta(days=stalled_days),
+        responsiveness=responsiveness,
+        funding_type=FundingType.TEFA_STANDARD,
+    )
+
+
+def test_score_student_matches_params_formula_to_4dp() -> None:
+    """score_student reproduces w_rec·recoverability + w_value·(tuition/value_max)."""
+    params = _params()
+    s = _student(SID_A, Stage.ENROLL, stalled_days=3, responsiveness=0.5)
+
+    # Reference recoverability reuses the family expectation (same sub-factors).
+    ref_family = WorkQueueFamily(
+        family_id=FID_A,
+        current_stage=Stage.ENROLL,
+        stalled_since=NOW - timedelta(days=3),
+        responsiveness=0.5,
+    )
+    wq = params.work_queue
+    expected = wq.w_recoverability * _expected_recoverability(ref_family, params) + wq.w_value * (
+        student_value(params) / _expected_value_max(params)
+    )
+    assert round(score_student(s, params, now=NOW), 4) == round(expected, 4)
+
+
+def test_rank_students_orders_by_recoverability_then_student_id() -> None:
+    """Deeper-funnel/fresher students rank higher; ties break on student_id (A-24)."""
+    params = _params()
+    deep = _student(SID_A, Stage.TUITION, stalled_days=1, responsiveness=0.9)
+    shallow = _student(SID_B, Stage.INTEREST, stalled_days=40, responsiveness=0.0)
+    ranked = rank_students([shallow, deep], params, now=NOW)
+    assert [s.student_id for s in ranked] == [SID_A, SID_B]
+
+    # Two identical students ⇒ stable tiebreak by ascending student_id.
+    twin1 = _student(SID_C, Stage.ENROLL, stalled_days=5, responsiveness=0.3)
+    twin2 = _student(SID_B, Stage.ENROLL, stalled_days=5, responsiveness=0.3)
+    ranked_ties = rank_students([twin1, twin2], params, now=NOW)
+    assert [s.student_id for s in ranked_ties] == [SID_B, SID_C]
+
+
+def test_recoverable_now_student_is_positive_and_value_scaled() -> None:
+    """recoverable_now_student = student_value × score × freshness (A-24)."""
+    params = _params()
+    s = _student(SID_A, Stage.ENROLL, stalled_days=3, responsiveness=0.5)
+    expected = (
+        student_value(params) * score_student(s, params, now=NOW) * freshness(s, params, now=NOW)
+    )
+    assert round(recoverable_now_student(s, params, now=NOW), 4) == round(expected, 4)
+    assert recoverable_now_student(s, params, now=NOW) > 0.0
