@@ -39,7 +39,7 @@ export default function Sidebar<K extends string>({
         className={`sidebar-item${on ? ' is-active' : ''}`}
         onClick={() => onSelect(key)}
       >
-        <Icon size={20} aria-hidden className="sidebar-item-icon" />
+        <Icon size={26} aria-hidden className="sidebar-item-icon" />
         <span className="sidebar-item-label">{label}</span>
       </button>
     );
