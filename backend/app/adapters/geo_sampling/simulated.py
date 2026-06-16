@@ -15,6 +15,15 @@ same technique as :mod:`app.adapters.funding.simulated`) — no ``random`` globa
 state, no wall-clock. GT's own domain starts near the **0% baseline** (rarely
 cited under the seed default, RESEARCH.md Q6) so coverage-vs-0%-baseline is
 demonstrable; the gifted-school competitor set is cited far more often.
+
+generate-to-win flywheel (FR-3.7): the adapter consults a per-instance
+**published-prompt registry**. Once a GEO piece is generated, gate-passed, and
+*published* for a prompt (``publish(prompt, published_cite_buckets=...)``), the
+simulated engine cites GT for THAT prompt at the published (much higher) bucket
+band — so re-sampling shows coverage RISE on the won prompt while the others
+stay near 0%. The lift amount is a param the caller passes in (INV-11); it is
+never a code literal here. This is an in-memory, per-process registry that
+shapes the SIMULATION only — there is still no live engine (INV-9).
 """
 
 from __future__ import annotations
@@ -63,7 +72,42 @@ class SimulatedGeoSamplingAdapter(GeoSamplingAdapter):
     is therefore a structural property, not a configured behaviour. Each
     ``sample`` call replays a deterministic-but-varying citation stream derived
     from ``(prompt, run_index, seed)``.
+
+    The instance holds a per-process **published-prompt registry**
+    (``prompt -> published GT cite buckets``): :meth:`publish` records that a GEO
+    piece was won for a prompt, and :meth:`sample` then cites GT for that prompt
+    at the published bucket band so coverage visibly RISES (the generate-to-win
+    flywheel, FR-3.7). The lift bucket count is supplied by the caller (params,
+    INV-11), never a literal here. The registry is in-memory only (no I/O); it
+    shapes the offline simulation, not a live engine (INV-9).
     """
+
+    def __init__(self, published_registry: dict[str, int] | None = None) -> None:
+        """Build the adapter over an optional SHARED published-prompt registry.
+
+        ``published_registry`` maps a published prompt → its GT cite-bucket band.
+        Default (``None``) ⇒ a fresh per-instance registry (the adapter-test
+        scope: publish + sample on one instance). The API passes a PROCESS-SHARED
+        dict so a piece published via one request raises coverage on the next
+        request's freshly-built adapter (the cross-request flywheel, FR-3.7). A
+        prompt absent from the registry samples GT at the near-0% baseline. In
+        memory only (INV-9) — publishing moves the simulation, not a live engine.
+        """
+        self._published: dict[str, int] = (
+            published_registry if published_registry is not None else {}
+        )
+
+    def publish(self, prompt: str, *, published_cite_buckets: int) -> None:
+        """Record that a GEO piece was WON (generated + gate-passed) for ``prompt``.
+
+        After this, :meth:`sample` cites GT for ``prompt`` at the
+        ``published_cite_buckets`` band (out of 256) instead of the near-0%
+        baseline — so re-sampling shows coverage rise on the won prompt (the
+        generate-to-win flywheel, FR-3.7). ``published_cite_buckets`` is the
+        params-owned lift amount the caller passes in (INV-11), clamped to the
+        valid bucket range. No I/O — in-memory per-process registry (INV-9).
+        """
+        self._published[prompt] = max(0, min(_BUCKETS, published_cite_buckets))
 
     def sample(
         self,
@@ -83,7 +127,7 @@ class SimulatedGeoSamplingAdapter(GeoSamplingAdapter):
         observations: list[GeoObservation] = []
         for prompt in prompt_set:
             for run_index in range(min_samples_per_prompt):
-                cited = self._cited_domains(seed, prompt, run_index)
+                cited = self._cited_domains(seed, prompt, run_index)  # consults registry
                 observations.append(
                     GeoObservation(
                         prompt=prompt,
@@ -95,17 +139,22 @@ class SimulatedGeoSamplingAdapter(GeoSamplingAdapter):
                 )
         return observations
 
-    @staticmethod
-    def _cited_domains(seed: int, prompt: str, run_index: int) -> tuple[str, ...]:
+    def _cited_domains(self, seed: int, prompt: str, run_index: int) -> tuple[str, ...]:
         """Deterministically decide which domains are cited in one simulated run.
 
         Each domain is included iff its salted digest byte falls in its citation
         bucket band. Slot order is the fixed domain order, so ``cited_domains``
         doubles as the ordered citation slots the metrics layer consumes.
+
+        GT's band is the published band when ``prompt`` is in the
+        published-prompt registry (the generate-to-win flywheel raised it,
+        FR-3.7), else the near-0% baseline band. Consulting the registry (not a
+        constant) is what lets publishing MOVE coverage.
         """
+        gt_band = self._published.get(prompt, _GT_CITE_BUCKETS)
         cited: list[str] = []
         for domain in (_GT_DOMAIN, *_COMPETITOR_DOMAINS):
-            threshold = _GT_CITE_BUCKETS if domain == _GT_DOMAIN else _COMPETITOR_CITE_BUCKETS
+            threshold = gt_band if domain == _GT_DOMAIN else _COMPETITOR_CITE_BUCKETS
             if _digest_byte(seed, prompt, run_index, domain) < threshold:
                 cited.append(domain)
         return tuple(cited)

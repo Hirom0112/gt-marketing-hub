@@ -35,6 +35,10 @@ interface GeoTrackingView {
   enabled: boolean; // false ⇒ GEO eval is RED ⇒ disable generate-to-win
   prompt_set: string[];
   engine: string;
+  // GT-vs-competitor citation share (FR-3.7; growth-strategy Bet 3): GT ≈ 3% vs
+  // competitors ≈ 50%. The ~3%-vs-~50% leadership view rendered as share bars.
+  gt_citation_share?: number; // 0.0..1.0 — GT's own slice of cited domains
+  competitor_citation_share?: Record<string, number>; // domain → 0.0..1.0
 }
 
 type LoadState =
@@ -54,6 +58,51 @@ function signedPct(fraction: number): string {
   const value = Math.round(fraction * 100);
   const sign = value > 0 ? '+' : '';
   return `${sign}${value}%`;
+}
+
+// One citation-share bar: a labelled domain + a fill proportional to its share
+// of the cited slots, with the whole-percent figure. The GT bar (tone 'flow')
+// reads tiny next to the competitor bars (tone 'signal') — the ~3% vs ~50% gap.
+function ShareBar({
+  testId,
+  label,
+  domain,
+  share,
+  tone,
+}: {
+  testId: string;
+  label: string;
+  domain: string;
+  share: number;
+  tone: 'flow' | 'signal';
+}): JSX.Element {
+  const width = `${Math.min(100, Math.max(0, share * 100))}%`;
+  const fill = tone === 'flow' ? 'var(--flow)' : 'var(--signal)';
+  return (
+    <div data-testid={testId} data-domain={domain} style={{ display: 'grid', gap: 2 }}>
+      <div
+        style={{
+          display: 'flex',
+          justifyContent: 'space-between',
+          fontSize: 'var(--fs-sm)',
+        }}
+      >
+        <span className="mono">{label}</span>
+        <span className="mono">{pct(share)}</span>
+      </div>
+      <div
+        aria-hidden
+        style={{
+          height: 8,
+          borderRadius: 'var(--r-sm)',
+          background: 'var(--surface-2)',
+          overflow: 'hidden',
+        }}
+      >
+        <div style={{ width, height: '100%', background: fill }} />
+      </div>
+    </div>
+  );
 }
 
 export default function GeoBoard(): JSX.Element {
@@ -130,6 +179,14 @@ export default function GeoBoard(): JSX.Element {
   const ci = pct(Math.sqrt(Math.max(geo.variance, 0)));
   const liftTone = geo.lift > 0 ? 'flow' : geo.lift < 0 ? 'signal' : 'neutral';
 
+  // GT-vs-competitor citation share (FR-3.7; growth-strategy Bet 3). Competitors
+  // sorted high→low so the leader (the ~50% gap GT is measured against) reads
+  // first. The bar width is the share as a percent of the slot stream.
+  const gtShare = geo.gt_citation_share ?? 0;
+  const competitorShare = geo.competitor_citation_share ?? {};
+  const competitorRows = Object.entries(competitorShare).sort((a, b) => b[1] - a[1]);
+  const hasShare = competitorRows.length > 0 || gtShare > 0;
+
   return (
     <section
       aria-label="GEO board"
@@ -191,6 +248,43 @@ export default function GeoBoard(): JSX.Element {
           />
         </Card>
       </div>
+
+      {/* GT-vs-competitor citation share — the ~3%-GT vs ~50%-competitor
+          leadership view (growth-strategy Bet 3). GT's own bar first, then the
+          gifted-school competitors high→low; the gap is the whole point. */}
+      {hasShare && (
+        <Card>
+          <p className="lab" style={{ margin: 0 }}>
+            Citation share — who AI-search cites for these prompts
+          </p>
+          <div
+            data-testid="geo-share-bars"
+            style={{
+              display: 'grid',
+              gap: 'var(--s-2)',
+              marginTop: 'var(--s-3)',
+            }}
+          >
+            <ShareBar
+              testId="geo-share-gt"
+              label="GT School"
+              domain="gtschool.com"
+              share={gtShare}
+              tone="flow"
+            />
+            {competitorRows.map(([domain, share]) => (
+              <ShareBar
+                key={domain}
+                testId="geo-share-competitor"
+                label={domain}
+                domain={domain}
+                share={share}
+                tone="signal"
+              />
+            ))}
+          </div>
+        </Card>
+      )}
 
       <Card>
         <div

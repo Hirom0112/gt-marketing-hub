@@ -13,6 +13,7 @@ import GeoBoard from '../GeoBoard';
 // runtime deps). fireEvent only (no user-event dep).
 
 // A healthy GEO read: coverage 30% vs the 0% baseline ⇒ lift +30%; eval green.
+// GT citation share ≈ 3% vs competitors ≈ 50% (growth-strategy Bet 3).
 const GEO_ENABLED = {
   coverage_mean: 0.3,
   baseline: 0.0,
@@ -23,6 +24,14 @@ const GEO_ENABLED = {
   enabled: true,
   prompt_set: ['best online school for gifted kids', 'gt school reviews'],
   engine: 'simulated-llm',
+  gt_citation_share: 0.03,
+  competitor_citation_share: {
+    'joinprisma.com': 0.5,
+    'fusionacademy.com': 0.48,
+    'davidsononline.org': 0.49,
+    'k12.com': 0.51,
+    'niche.com': 0.5,
+  },
 };
 
 // A re-sampled read after a POST /geo/sample run: coverage climbs to 45%.
@@ -36,6 +45,11 @@ const GEO_SAMPLED = {
   enabled: true,
   prompt_set: ['best online school for gifted kids', 'gt school reviews'],
   engine: 'simulated-llm',
+  gt_citation_share: 0.12,
+  competitor_citation_share: {
+    'joinprisma.com': 0.5,
+    'k12.com': 0.51,
+  },
 };
 
 // A red GEO eval (enabled:false) AND too few samples — fail-closed surface.
@@ -49,6 +63,8 @@ const GEO_DISABLED = {
   enabled: false,
   prompt_set: ['best online school for gifted kids'],
   engine: 'simulated-llm',
+  gt_citation_share: 0.01,
+  competitor_citation_share: { 'joinprisma.com': 0.5 },
 };
 
 function mockFetch(payload: unknown): void {
@@ -100,6 +116,22 @@ describe('GeoBoard', () => {
     mockFetch(GEO_ENABLED);
     render(<GeoBoard />);
     expect(await screen.findByTestId('geo-variance')).toBeInTheDocument();
+  });
+
+  it('renders the GT-vs-competitor citation share bars (~3% vs ~50%)', async () => {
+    mockFetch(GEO_ENABLED);
+    render(<GeoBoard />);
+
+    // GT's own share bar (the ~3% leadership figure).
+    const gtBar = await screen.findByTestId('geo-share-gt');
+    expect(gtBar).toHaveTextContent('3%');
+
+    // A competitor's share bar (the ~50% they dominate at).
+    const compBars = screen.getAllByTestId('geo-share-competitor');
+    expect(compBars.length).toBeGreaterThan(0);
+    expect(compBars.some((b) => b.textContent?.includes('50%'))).toBe(true);
+    // The leading competitor is cited far more than GT — the gap is shown.
+    expect(compBars.some((b) => b.textContent?.includes('k12.com'))).toBe(true);
   });
 
   it('disables the generate-to-win action when the GEO eval is red (INV-3 fail-closed)', async () => {

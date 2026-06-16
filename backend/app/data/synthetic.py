@@ -1383,6 +1383,84 @@ def generate_recipes() -> list[MarketingRecipe]:
             version=1,
             provenance=prov,
         ),
+        # The two under-posted, strategically-critical themes (INSIGHTS): TEFA
+        # $0-net affordability, and socialization-as-proof. Both carry the LOCKED
+        # Tom Babb attribution (INV-7) and lean on the verifiable TEFA funding fact
+        # ($10,474 standard award) rather than any unverifiable multiplier (V-2).
+        MarketingRecipe(
+            id="recipe-tefa-affordability",
+            name="TEFA $0-net affordability explainer",
+            attribution=_TOM_BABB_ATTRIBUTION,
+            description=(
+                "Drafts a grounded affordability explainer showing how the Texas "
+                "Education Freedom Account (TEFA) can bring a family's net tuition "
+                "to roughly $0 — an under-posted theme that answers the #1 parent "
+                "objection without overclaiming."
+            ),
+            parameters=[
+                RecipeParam(
+                    key="fundingTier",
+                    label="TEFA funding tier",
+                    type=RecipeParamType.ENUM,
+                    required=True,
+                    options=["standard", "disability_iep", "homeschool"],
+                ),
+                RecipeParam(
+                    key="persona",
+                    label="Parent persona",
+                    type=RecipeParamType.STRING,
+                    required=True,
+                ),
+            ],
+            prompt_template=(
+                "Write a plain-language affordability explainer for a {persona} parent "
+                "showing how the Texas Education Freedom Account ({fundingTier} tier) "
+                "offsets GT School tuition toward a near-$0 net cost. Cite only the "
+                "verifiable TEFA award amount; no guarantees, no speed multipliers, "
+                "parents only."
+            ),
+            output_channel=Channel.EMAIL,
+            output_format=ContentFormat.EMAIL_BODY,
+            brand_rule_refs=["br-no-unverifiable-claims", "br-lead-with-program"],
+            version=1,
+            provenance=prov,
+        ),
+        MarketingRecipe(
+            id="recipe-socialization-proof",
+            name="Socialization-as-proof story",
+            attribution=_TOM_BABB_ATTRIBUTION,
+            description=(
+                "Generates an honest socialization-as-proof story that answers the "
+                "'but what about socialization?' objection with concrete community, "
+                "cohort, and in-person-intensive detail — an under-posted theme that "
+                "reframes a perceived weakness as evidence."
+            ),
+            parameters=[
+                RecipeParam(
+                    key="audience",
+                    label="Audience segment",
+                    type=RecipeParamType.STRING,
+                    required=True,
+                ),
+                RecipeParam(
+                    key="proofPoint",
+                    label="Concrete community proof point",
+                    type=RecipeParamType.STRING,
+                    required=True,
+                ),
+            ],
+            prompt_template=(
+                "Write a warm, concrete short caption for a {audience} audience that "
+                "reframes socialization as a GT School strength, using {proofPoint} as "
+                "real, source-able evidence. Describe the community; never promise "
+                "outcomes, never use multipliers, parents and educators only."
+            ),
+            output_channel=Channel.INSTAGRAM,
+            output_format=ContentFormat.SHORT_CAPTION,
+            brand_rule_refs=["br-lead-with-program", "br-never-target-minors"],
+            version=1,
+            provenance=prov,
+        ),
     ]
 
 

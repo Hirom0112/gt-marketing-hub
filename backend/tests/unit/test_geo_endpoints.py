@@ -24,6 +24,7 @@ from fastapi.testclient import TestClient
 
 from app.adapters.geo_sampling.base import GeoObservation, GeoSamplingAdapter
 from app.api import deps
+from app.api import geo as geo_api
 from app.main import app
 
 client = TestClient(app)
@@ -31,12 +32,14 @@ client = TestClient(app)
 
 @pytest.fixture(autouse=True)
 def _isolation() -> Iterator[None]:
-    """Fresh observability log + no stray dependency overrides per test."""
+    """Fresh observability log + published registry + no stray overrides per test."""
     deps.reset_observability_log()
+    geo_api.reset_published_registry()
     app.dependency_overrides.clear()
     yield
     app.dependency_overrides.clear()
     deps.reset_observability_log()
+    geo_api.reset_published_registry()
 
 
 class _SingleRunAdapter(GeoSamplingAdapter):
@@ -160,3 +163,76 @@ def test_geo_insufficient_samples_disables_action() -> None:
     body = client.get("/geo").json()
     assert body["insufficient_samples"] is True
     assert body["enabled"] is False
+
+
+# --------------------------------------------------------------------------- #
+# generate-to-win flywheel (FR-3.7) — POST /geo/generate.
+# --------------------------------------------------------------------------- #
+_TARGET_PROMPT = "best virtual school for gifted K-8"  # a seeded GEO prompt.
+
+
+def test_generate_to_win_publishes_and_raises_coverage() -> None:
+    """POST /geo/generate generates a gate-passing GeoContentPiece, publishes it,
+    and re-samples so coverage on the target prompt RISES (lift > 0, FR-3.7).
+    """
+    resp = client.post("/geo/generate", json={"target_prompt": _TARGET_PROMPT})
+    assert resp.status_code == 200
+    body = resp.json()
+
+    # The piece passed the grounding gate and was published.
+    assert body["published"] is True
+    assert body["blocked"] is False
+    # The re-sampled coverage for the won prompt rose above the 0% baseline.
+    assert body["baseline"] == 0.0
+    assert body["coverage_mean"] > 0.0
+    assert body["lift"] > 0.0
+    # The view is scoped to the won prompt.
+    assert body["prompt_set"] == [_TARGET_PROMPT]
+
+
+def test_generate_to_win_lift_visible_on_default_board() -> None:
+    """After generate-to-win publishes a prompt, GET /geo (the whole board)
+    reflects a coverage lift vs a pre-publish read (the cross-request flywheel).
+    """
+    before = client.get("/geo").json()["coverage_mean"]
+    win = client.post("/geo/generate", json={"target_prompt": _TARGET_PROMPT})
+    assert win.status_code == 200
+    after = client.get("/geo").json()["coverage_mean"]
+    assert after > before, "publishing a won prompt must raise board-wide coverage"
+
+
+def test_generate_to_win_blocks_banned_claim_and_does_not_publish() -> None:
+    """A body carrying a banned '4X speed' claim is BLOCKED (INV-4): the piece is
+    NOT published and coverage on the prompt is UNCHANGED (fail-closed flywheel).
+    """
+    banned_prompt = "online school for profoundly gifted elementary"
+    before = client.get("/geo").json()["coverage_mean"]
+
+    resp = client.post(
+        "/geo/generate",
+        json={"target_prompt": banned_prompt, "body": "GT School is 4X faster than any rival."},
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+
+    # Fail-closed: blocked, not published, V-2 grounding flagged.
+    assert body["blocked"] is True
+    assert body["published"] is False
+    assert "v2_grounding" in body["failed_rules"]
+    # Coverage did not move — a blocked piece never reaches the corpus (INV-4).
+    after = client.get("/geo").json()["coverage_mean"]
+    assert after == before
+
+
+def test_generate_to_win_logs_proposal_and_eval() -> None:
+    """POST /geo/generate logs the piece proposal + its grounding eval (NFR-6)."""
+    log = deps.get_observability_log()
+    before = len(log.list_proposals())
+    resp = client.post("/geo/generate", json={"target_prompt": _TARGET_PROMPT})
+    assert resp.status_code == 200
+    proposals = log.list_proposals()
+    assert len(proposals) == before + 1
+    record = proposals[-1]
+    audit = log.get_audit(record.proposal_id)
+    assert audit is not None
+    assert audit.evals  # the grounding gate verdict is attached

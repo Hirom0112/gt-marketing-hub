@@ -25,11 +25,23 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 from app.adapters.geo_sampling.base import GeoObservation
 from app.core.params import Params
-from app.evals.geo_metrics import coverage, sample_stats
+from app.evals.geo_metrics import citation_share, coverage, sample_stats
+
+# GT's own domain — the brand whose citation share is the GEO leadership metric
+# (GT ≈ low vs competitors ≈ high; growth-strategy.md Bet 3). The simulated corpus
+# cites these domains; the share is computed over the sampled `cited_domains`.
+_GT_DOMAIN = "gtschool.com"
+_COMPETITOR_DOMAINS: tuple[str, ...] = (
+    "joinprisma.com",
+    "fusionacademy.com",
+    "davidsononline.org",
+    "k12.com",
+    "niche.com",
+)
 
 
 class GeoTrackingResult(BaseModel):
@@ -51,6 +63,12 @@ class GeoTrackingResult(BaseModel):
             too few runs to trust a point estimate (ARCH §9).
         enabled: False whenever `insufficient_samples` is True — fail-closed
             (INV-3); the GEO action is disabled/red when samples are insufficient.
+        gt_citation_share: GT's share of ALL citation slots across the sampled
+            observations (`citation_share`, FR-3.7) — the ~3% leadership figure
+            (growth-strategy.md Bet 3). In [0.0, 1.0].
+        competitor_citation_share: Per-competitor citation share over the same
+            slots — the ~50%-each figure GT is measured against. The shares of GT
+            + the competitors over distinct domains sum to ≤ 1.0.
     """
 
     model_config = ConfigDict(frozen=True)
@@ -62,6 +80,8 @@ class GeoTrackingResult(BaseModel):
     sample_count: int
     insufficient_samples: bool
     enabled: bool
+    gt_citation_share: float = 0.0
+    competitor_citation_share: dict[str, float] = Field(default_factory=dict)
 
 
 def evaluate_geo_tracking(
@@ -107,6 +127,16 @@ def evaluate_geo_tracking(
     # Honor the report_variance param: surface variance only when configured to.
     variance = stats.variance if geo_cfg.report_variance else 0.0
 
+    # GT-vs-competitor citation share (FR-3.7) over EVERY citation slot across all
+    # observations — the ~3%-GT-vs-~50%-competitor leadership view (growth-strategy
+    # Bet 3) the `citation_share` metric exists to surface. Flatten the per-run
+    # `cited_domains` into one slot stream, then take each brand's share.
+    slots: list[str] = []
+    for obs in observations:
+        slots.extend(obs.cited_domains)
+    gt_share = citation_share(slots, _GT_DOMAIN)
+    competitor_share = {domain: citation_share(slots, domain) for domain in _COMPETITOR_DOMAINS}
+
     return GeoTrackingResult(
         coverage_mean=stats.mean,
         baseline=baseline,
@@ -116,4 +146,6 @@ def evaluate_geo_tracking(
         insufficient_samples=stats.insufficient_samples,
         # Fail-closed (INV-3): insufficient samples ⇒ the GEO action is disabled.
         enabled=not stats.insufficient_samples,
+        gt_citation_share=gt_share,
+        competitor_citation_share=competitor_share,
     )
