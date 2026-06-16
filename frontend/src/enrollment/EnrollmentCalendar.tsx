@@ -85,7 +85,13 @@ interface EnrollmentCalendarProps {
   onOpenScope: (scope: 'day' | 'week' | 'all', anchorDate?: string) => void;
 }
 
-export type SortKey = 'recoverable' | 'value' | 'score' | 'date' | 'recency';
+export type SortKey =
+  | 'likely'
+  | 'recoverable'
+  | 'value'
+  | 'score'
+  | 'date'
+  | 'recency';
 
 type LoadState =
   | { status: 'loading' }
@@ -159,6 +165,13 @@ export function sortEntries<T extends CalendarEntry>(
 ): T[] {
   const copy = [...arr];
   switch (sort) {
+    case 'likely':
+      // The HERO axis (A-23): recoverability/likelihood, highest first. Ties fall
+      // back to value so the order is stable + sensible.
+      return copy.sort(
+        (a, b) =>
+          (b.recoverability ?? 0) - (a.recoverability ?? 0) || b.value - a.value,
+      );
     case 'value':
       return copy.sort((a, b) => b.value - a.value);
     case 'score':

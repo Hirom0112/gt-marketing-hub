@@ -49,9 +49,12 @@ interface WorkQueueItem {
 export type TriageScope = 'day' | 'week' | 'all';
 type Recency = 'all' | 'overdue' | 'fresh' | 'followed_up';
 
-// The list-only sorts (date-sort + score-sort REMOVED — the calendar owns date;
-// score is a model internal the redesign hides).
-type TriageSort = 'recoverable' | 'value' | 'recency';
+// The list-only sorts. 'likely' (recoverability — the hero) is the default; the
+// money axis is 'value' (children × tuition). The old composite 'recoverable'
+// (recoverable_now) sort is dropped — it read as "just the money" but wasn't the
+// plain value, which confused the order. date-sort/score-sort stay removed (the
+// calendar owns date; score is a model internal).
+type TriageSort = 'likely' | 'value' | 'recency';
 
 interface TriageListProps {
   scope: TriageScope;
@@ -187,9 +190,10 @@ export default function TriageList({
     };
   }, [refreshKey]);
 
-  // Drop score/date from the live sort — coerce anything stray to recoverable.
+  // Coerce anything stray (incl. the dropped 'recoverable'/'score'/'date') to the
+  // default hero axis, 'likely'.
   const effectiveSort: TriageSort =
-    sort === 'value' || sort === 'recency' ? sort : 'recoverable';
+    sort === 'value' || sort === 'recency' ? sort : 'likely';
 
   const allItems = useMemo<WorkQueueItem[]>(
     () => (state.status === 'ready' ? state.items : []),
@@ -413,7 +417,7 @@ export default function TriageList({
                 onChange={(ev) => onSort(ev.target.value as SortKey)}
                 className="history-sort"
               >
-                <option value="recoverable">recoverable</option>
+                <option value="likely">likely</option>
                 <option value="value">value</option>
                 <option value="recency">recency</option>
               </select>
@@ -450,8 +454,8 @@ export default function TriageList({
             data-testid="triage-cap-footer"
             style={{ padding: 'var(--s-3) var(--s-4)', color: 'var(--muted)' }}
           >
-            Showing the top {ROW_CAP} of {ranked.length} by recoverable — batch the
-            top of the wave first.
+            Showing the top {ROW_CAP} of {ranked.length} by {effectiveSort} — batch
+            the top of the wave first.
           </div>
         )}
         <BulkBar

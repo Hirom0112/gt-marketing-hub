@@ -104,7 +104,9 @@ export default function EnrollmentWorkspace(): JSX.Element {
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [pendingDismiss, setPendingDismiss] = useState(false);
   const [partition, setPartition] = useState<SendPartition | undefined>();
-  const [sort, setSort] = useState<SortKey>('recoverable');
+  // Default to the HERO axis: likelihood (A-23) — so the loud "likely" column the
+  // operator reads top-to-bottom IS the list order.
+  const [sort, setSort] = useState<SortKey>('likely');
 
   const handleActionApproved = useCallback((): void => {
     setDealRefresh((n) => n + 1);

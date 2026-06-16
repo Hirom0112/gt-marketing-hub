@@ -158,17 +158,36 @@ export default function FundingTracker({
         </div>
 
         {funding.installments !== null && (
-          <ol
-            className="installment-schedule"
-            data-testid="installment-schedule"
-            style={{
-              listStyle: 'none',
-              margin: 'var(--s-3) 0 0',
-              padding: 0,
-              display: 'grid',
-              gap: 'var(--s-2)',
-            }}
-          >
+          <>
+            {/* The schedule is PROJECTED until funding is actually awarded +
+                disbursed (tuition still locked) — it's what they WOULD receive,
+                not money in hand. Labelled so it never reads as "voucher
+                connected" next to funding_state=none (INV-10: GT-controlled
+                signals drive the real state). */}
+            <div
+              className="lab"
+              data-testid="installment-caption"
+              style={{
+                marginTop: 'var(--s-3)',
+                color: unlocked ? 'var(--flow-ink)' : 'var(--muted)',
+              }}
+            >
+              {unlocked
+                ? 'TEFA installment schedule'
+                : 'Projected schedule — pending award + first installment'}
+            </div>
+            <ol
+              className="installment-schedule"
+              data-testid="installment-schedule"
+              style={{
+                listStyle: 'none',
+                margin: 'var(--s-2) 0 0',
+                padding: 0,
+                display: 'grid',
+                gap: 'var(--s-2)',
+                opacity: unlocked ? 1 : 0.6,
+              }}
+            >
             {funding.installments.map((amount, index) => (
               <li
                 // Installment amounts can repeat (25/25/50) — key by position.
@@ -200,7 +219,8 @@ export default function FundingTracker({
                 </span>
               </li>
             ))}
-          </ol>
+            </ol>
+          </>
         )}
       </Card>
     </section>

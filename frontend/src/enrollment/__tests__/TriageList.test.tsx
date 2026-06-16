@@ -110,7 +110,7 @@ function renderList(
       anchorDate={opts.anchorDate}
       onScopeChange={opts.onScopeChange ?? vi.fn()}
       bulk={opts.bulk ?? noopBulk()}
-      sort={opts.sort ?? 'recoverable'}
+      sort={opts.sort ?? 'likely'}
       onSort={vi.fn()}
     />,
   );
@@ -158,11 +158,12 @@ describe('TriageList (S13 redesign)', () => {
     );
   });
 
-  it('defaults to recoverable-now ranking and keeps a stall-date column', async () => {
+  it('defaults to likely (recoverability) ranking and keeps a stall-date column', async () => {
     vi.stubGlobal('fetch', activeFetch());
-    renderList({ scope: 'all', sort: 'recoverable' });
+    renderList({ scope: 'all', sort: 'likely' });
 
     await screen.findByTestId('triage-list');
+    // Sorted by recoverability desc: FAM_A (0.95) → FAM_B (0.6) → FAM_C (0.5).
     const rows = screen.getAllByTestId(/^drill-row-[a-f0-9-]+$/);
     expect(rows[0]).toHaveAttribute('data-testid', `drill-row-${FAM_A}`);
     expect(rows[2]).toHaveAttribute('data-testid', `drill-row-${FAM_C}`);
@@ -184,7 +185,9 @@ describe('TriageList (S13 redesign)', () => {
     const optionValues = Array.from(sortSelect.options).map((o) => o.value);
     expect(optionValues).not.toContain('date');
     expect(optionValues).not.toContain('score');
-    expect(optionValues).toEqual(['recoverable', 'value', 'recency']);
+    // The money axis is plain 'value' now; the composite 'recoverable' is dropped.
+    expect(optionValues).not.toContain('recoverable');
+    expect(optionValues).toEqual(['likely', 'value', 'recency']);
   });
 
   it('DAY scope windows the active set to a single stall day', async () => {
@@ -317,7 +320,7 @@ describe('TriageList (S13 redesign)', () => {
     expect(screen.queryByTestId('triage-loading')).not.toBeInTheDocument();
   });
 
-  it('coerces a stray score/date sort to recoverable-now', async () => {
+  it('coerces a stray score/date/recoverable sort to likely', async () => {
     vi.stubGlobal('fetch', activeFetch());
     renderList({ scope: 'all', sort: 'score' });
 
@@ -325,6 +328,6 @@ describe('TriageList (S13 redesign)', () => {
     const rows = screen.getAllByTestId(/^drill-row-[a-f0-9-]+$/);
     expect(rows[0]).toHaveAttribute('data-testid', `drill-row-${FAM_A}`);
     const sortSelect = screen.getByTestId('list-sort') as HTMLSelectElement;
-    expect(sortSelect.value).toBe('recoverable');
+    expect(sortSelect.value).toBe('likely');
   });
 });

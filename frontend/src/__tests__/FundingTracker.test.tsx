@@ -88,9 +88,14 @@ describe('FundingTracker', () => {
     // The tuition lock badge reads UNLOCKED.
     const badge = screen.getByTestId('tuition-badge');
     expect(badge).toHaveTextContent(/unlocked/i);
+
+    // Unlocked ⇒ the schedule is the REAL installment schedule, not "projected".
+    const caption = screen.getByTestId('installment-caption');
+    expect(caption).toHaveTextContent('TEFA installment schedule');
+    expect(caption).not.toHaveTextContent(/projected/i);
   });
 
-  it('Test B: tuition_unlocked:false shows a locked badge', async () => {
+  it('Test B: tuition_unlocked:false shows a locked badge + a PROJECTED schedule', async () => {
     vi.unstubAllGlobals();
     mockFetch(LOCKED_PAYLOAD);
     render(<FundingTracker familyId="fam-b" />);
@@ -99,6 +104,12 @@ describe('FundingTracker', () => {
     const badge = screen.getByTestId('tuition-badge');
     expect(badge).toHaveTextContent(/locked/i);
     expect(badge).not.toHaveTextContent(/unlocked/i);
+
+    // Locked ⇒ the ladder is labelled PROJECTED (pending award/first installment),
+    // so it never reads as "voucher connected" next to an early funding state.
+    expect(screen.getByTestId('installment-caption')).toHaveTextContent(
+      /projected/i,
+    );
   });
 
   it('Test C: installments:null (self-pay) renders no schedule and does not crash', async () => {
