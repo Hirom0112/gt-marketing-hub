@@ -492,10 +492,38 @@ class CrmGtProperties(_StrictModel):
     Provisioned by ``scripts/provision_hubspot.py`` and read by the live adapter
     so a property name lives in exactly one place (INV-11): the adapter never
     hardcodes ``gt_synthetic_id`` et al.
+
+    ``social_post`` are the gt_* properties on the **GT Social Post** custom
+    object (publish-monitor W3): the second-screen mirror of each dispatched
+    social post. Same INV-11 posture — the mirror adapter reads these names,
+    never a code literal.
     """
 
     deal: list[str]
     contact: list[str]
+    social_post: list[str]
+
+
+class CrmSocialPostObject(_StrictModel):
+    """crm.gt_social_post_object — the GT Social Post custom object config (W3).
+
+    The publish-monitor mirror upserts one custom-object record per dispatched
+    social post so the team can monitor publishing on the HubSpot screen too. Per
+    INV-11 the object's API identifiers live here (provisioned by
+    ``scripts/provision_hubspot.py``), never hardcoded in the adapter:
+
+    - ``object_type`` is the CRM v3 object identifier the adapter puts in the URL
+      path (``/crm/v3/objects/{object_type}``) — HubSpot accepts either the
+      ``fullyQualifiedName`` (``p<portal>_gt_social_post``) or the object type id
+      (``2-XXXXXXX``). A placeholder ships in the example; the live params.yaml
+      carries the provisioned value.
+    - ``id_property`` is the idempotency upsert key on the object — the
+      ``gt_synthetic_id`` analogue keyed on ``str(post_id)`` (NEVER any contact
+      identity; INV-1).
+    """
+
+    object_type: str
+    id_property: str
 
 
 class Crm(_StrictModel):
@@ -514,6 +542,24 @@ class Crm(_StrictModel):
     synthetic_email_domains: list[str]
     real_domain_denylist: list[str]
     gt_properties: CrmGtProperties
+    gt_social_post_object: CrmSocialPostObject
+
+    @model_validator(mode="after")
+    def _social_post_id_property_declared(self) -> Crm:
+        """The custom object's upsert key MUST be in the social_post prop list.
+
+        Keeps the two homes consistent (INV-11): the idempotency key the mirror
+        upserts on (``gt_social_post_object.id_property``) has to be a property the
+        provisioner declares on ``gt_properties.social_post``, else a drift would
+        let the adapter key on a property that was never created.
+        """
+        if self.gt_social_post_object.id_property not in self.gt_properties.social_post:
+            raise ValueError(
+                "crm.gt_social_post_object.id_property "
+                f"{self.gt_social_post_object.id_property!r} must appear in "
+                f"crm.gt_properties.social_post {self.gt_properties.social_post!r}"
+            )
+        return self
 
 
 class Params(_StrictModel):

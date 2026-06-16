@@ -189,3 +189,18 @@ crm:                        # S10 — HubSpot CRM seam (ANALYSIS/hubspot-complem
       - gt_apply_date
     contact:
       - gt_synthetic_id
+    # GT Social Post custom-object props (publish-monitor W3): the second-screen
+    # mirror of each dispatched social post. Provisioned by the script.
+    social_post:
+      - gt_synthetic_id        # idempotency key = str(post_id) (NEVER PII; INV-1)
+      - gt_platform            # the dispatch channel (instagram/x/...)
+      - gt_dispatch_status     # the §6 dispatch verdict (simulated_sent/...)
+      - gt_scheduled_for       # the scheduled-for marker
+      - gt_campaign_theme      # the publish request's campaign theme
+      - gt_content_ref         # source content ref (asset/candidate id)
+      - gt_simulated_receipt   # the simulated dispatch receipt
+  # The GT Social Post custom object (publish-monitor W3). object_type is the
+  # CRM v3 path id; placeholder shape — re-provision to fill it on a real portal.
+  gt_social_post_object:
+    object_type: "p_gt_social_post"
+    id_property: gt_synthetic_id
