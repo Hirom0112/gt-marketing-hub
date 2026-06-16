@@ -32,6 +32,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from enum import StrEnum
+from typing import Literal
 
 from app.core.params import Params
 from app.data.models import FundingState, Stage
@@ -52,6 +53,11 @@ _RECOVERED_FUNDING_ORDER: tuple[FundingState, ...] = (
     FundingState.FUNDED,
 )
 _FUNDING_RECOVERED_FLOOR = FundingState.FIRST_INSTALLMENT_RECEIVED
+
+# Which recovery predicate fired, for the history-scope outcome story (A-19).
+# Labels are in the SAME document order as the OR in `derive_recovery_state`:
+# stage-advance, then forms-cleared, then first-installment (the §5.4 deposit).
+RecoveredOutcome = Literal["stage_advanced", "forms_cleared", "deposit_received"]
 
 
 class RecoveryState(StrEnum):
@@ -95,6 +101,39 @@ def _funding_recovered(funding_state: FundingState) -> bool:
     )
 
 
+def recovered_outcome(joined: JoinedFamily, *, stall_stage: Stage) -> RecoveredOutcome | None:
+    """WHICH recovery predicate fired for a (would-be) RECOVERED family (A-19).
+
+    Pure mirror of the OR inside :func:`derive_recovery_state`, in the SAME
+    document order (the precedence is the contract): the family is RECOVERED iff
+    any of the three §5.x signals fired, and this exposes the *first* one that
+    did so the history surface can tell the OUTCOME story per resolved family.
+
+    The history-view redesign reads it for a RECOVERED row; it is ``None`` for a
+    family that has not recovered (no signal fired). It does NOT consider the
+    dismiss/contact precedence — a dismissed family that also looks recovered is
+    DISMISSED upstream, so the caller only asks this for RECOVERED rows.
+
+    Args:
+        joined: The spine row joined to its source rows — supplies
+            ``current_stage``, ``funding_state``, and the enrollment-forms progress.
+        stall_stage: The funnel stage the family was stuck at (the baseline for the
+            "advanced past" check), resolved at the API layer (mirrors the deriver).
+
+    Returns:
+        ``'stage_advanced'`` / ``'forms_cleared'`` / ``'deposit_received'`` for the
+        first predicate that fired, or ``None`` if none did (not recovered).
+    """
+    family = joined.family
+    if _stage_advanced(family.current_stage, stall_stage):
+        return "stage_advanced"
+    if _forms_cleared(joined):
+        return "forms_cleared"
+    if _funding_recovered(family.funding_state):
+        return "deposit_received"
+    return None
+
+
 def derive_recovery_state(
     *,
     joined: JoinedFamily,
@@ -130,12 +169,9 @@ def derive_recovery_state(
     if dismissed:
         return RecoveryState.DISMISSED
 
-    family = joined.family
-    if (
-        _stage_advanced(family.current_stage, stall_stage)
-        or _forms_cleared(joined)
-        or _funding_recovered(family.funding_state)
-    ):
+    # RECOVERED iff any §5.x signal fired; `recovered_outcome` is the single source
+    # of truth for that OR (and exposes WHICH one for the history surface).
+    if recovered_outcome(joined, stall_stage=stall_stage) is not None:
         return RecoveryState.RECOVERED
 
     if last_contact_at is not None:

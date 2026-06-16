@@ -377,6 +377,127 @@ def test_work_queue_active_scope_is_small_on_recovered_heavy_cohort() -> None:
         deps.reset_observability_log()
 
 
+def test_work_queue_history_recovered_row_carries_outcome_and_resolved_at() -> None:
+    """A RECOVERED history row carries `recovered_outcome` + `resolved_at`, null dismiss.
+
+    The History view needs the OUTCOME story per resolved family: for a recovered
+    row the predicate that fired (∈ the three labels) and the instant it left the
+    active board, and the dismiss fields must be null (it was not dismissed).
+    """
+    from app.core.recovery_state import RecoveryState
+
+    deps.reset_observability_log()
+    try:
+        hist = client.get("/work-queue", params={"scope": "history", "limit": 500}).json()
+        recovered = [it for it in hist if it["recovery_state"] == RecoveryState.RECOVERED.value]
+        # The fixed-seed cohort has recovered families in the history tail.
+        assert recovered, "expected at least one recovered family in the history scope"
+        labels = {"stage_advanced", "forms_cleared", "deposit_received"}
+        for it in recovered:
+            assert it["recovered_outcome"] in labels
+            assert it["resolved_at"] is not None
+            # Dismiss fields are null for a recovered (not dismissed) row.
+            assert it["dismiss_reason"] is None
+            assert it["dismissed_by"] is None
+            assert it["dismissed_at"] is None
+    finally:
+        deps.reset_observability_log()
+
+
+def test_work_queue_history_dismissed_row_carries_dismiss_record_fields() -> None:
+    """A DISMISSED history row carries reason/operator/date from the logged DismissRecord.
+
+    Logging a dismiss for a family ⇒ its history row derives `dismissed` and
+    plumbs the `DismissRecord` (reason/human/created_at) through onto the row,
+    with the recovered fields null (it did not recover — it was set aside).
+    """
+    from app.core.recovery_state import RecoveryState
+
+    deps.reset_observability_log()
+    log = deps.get_observability_log()
+    repo = _seeded()
+    sample = repo.list_families()[0]
+    record = log.log_dismiss(
+        family_id=sample.family_id,
+        human="enrollment_lead",
+        reason="Out of budget this cycle",
+    )
+    try:
+        hist = client.get("/work-queue", params={"scope": "history", "limit": 500}).json()
+        by_id = {it["family_id"]: it for it in hist}
+        row = by_id[str(sample.family_id)]
+        assert row["recovery_state"] == RecoveryState.DISMISSED.value
+        assert row["dismiss_reason"] == record.reason
+        assert row["dismissed_by"] == record.human
+        assert row["dismissed_at"][:19] == record.created_at.isoformat()[:19]
+        # Recovered fields are null for a dismissed row.
+        assert row["recovered_outcome"] is None
+        assert row["resolved_at"] is None
+    finally:
+        deps.reset_observability_log()
+
+
+def test_work_queue_active_scope_omits_history_detail_fields() -> None:
+    """The active/triage rows have ALL the new history fields null (contract intact).
+
+    The history-scope detail is populated ONLY for `scope=history`; the active
+    path must add no cost and stay byte-identical, so every active row carries the
+    five new fields as null.
+    """
+    deps.reset_observability_log()
+    try:
+        active = client.get("/work-queue").json()
+        assert active, "expected a non-empty active queue on the fixed-seed cohort"
+        for it in active:
+            assert it["recovered_outcome"] is None
+            assert it["resolved_at"] is None
+            assert it["dismiss_reason"] is None
+            assert it["dismissed_by"] is None
+            assert it["dismissed_at"] is None
+    finally:
+        deps.reset_observability_log()
+
+
+def test_work_queue_active_contract_unchanged_by_history_detail() -> None:
+    """The active scope is byte-identical save the five new always-null fields.
+
+    Stripping the new optional fields from every active row reproduces the exact
+    prior active payload — proving the history-detail change is contract-additive
+    only and did not touch the active path's existing values.
+    """
+    deps.reset_observability_log()
+    try:
+        active = client.get("/work-queue").json()
+        new_fields = {
+            "recovered_outcome",
+            "resolved_at",
+            "dismiss_reason",
+            "dismissed_by",
+            "dismissed_at",
+        }
+        for it in active:
+            # The new fields are present-and-null; the rest is the prior contract.
+            assert new_fields <= set(it)
+            stripped = {k: v for k, v in it.items() if k not in new_fields}
+            # The pre-existing active row keys are exactly these (S9/S12 contract).
+            assert set(stripped) == {
+                "family_id",
+                "display_name",
+                "current_stage",
+                "score",
+                "recoverability",
+                "value",
+                "stall_date",
+                "recoverable_now",
+                "freshness",
+                "contact_status",
+                "last_contact_at",
+                "recovery_state",
+            }
+    finally:
+        deps.reset_observability_log()
+
+
 def test_responsiveness_from_engagement_normalizes() -> None:
     """`responsiveness_from_engagement` maps email_opens into [0,1] via params (INV-11)."""
     params = _params()

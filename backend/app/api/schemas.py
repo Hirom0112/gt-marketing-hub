@@ -19,7 +19,7 @@ from app.ai.schemas.enrollment_draft import DraftAction, EnrollmentDraftProposal
 from app.core.contact_status import ContactStatus
 from app.core.eval_gate import ValidationResult
 from app.core.family_record import DealView
-from app.core.recovery_state import RecoveryState
+from app.core.recovery_state import RecoveredOutcome, RecoveryState
 from app.data.models import (
     AppForm,
     CommunityProfile,
@@ -107,6 +107,18 @@ class WorkQueueItem(BaseModel):
     # needs ``now`` + the audit log for the dismiss/contact facts), NOT the pure
     # scorer. {stalled, working, recovered, dismissed}.
     recovery_state: RecoveryState
+    # History-scope OUTCOME story (A-19) — populated ONLY on ``scope=history`` rows
+    # so the active/triage contract stays byte-identical (these all default null,
+    # so an active row simply omits them). For a RECOVERED row: which predicate in
+    # ``derive_recovery_state`` fired (``recovered_outcome``) plus the approximate
+    # instant the family left the active board (``resolved_at``). For a DISMISSED
+    # row: the logged ``DismissRecord`` reason / operator / instant. Both groups are
+    # mutually exclusive — a recovered row has null dismiss fields and vice-versa.
+    recovered_outcome: RecoveredOutcome | None = None
+    resolved_at: datetime | None = None
+    dismiss_reason: str | None = None
+    dismissed_by: str | None = None
+    dismissed_at: datetime | None = None
 
 
 class CalendarEntry(BaseModel):

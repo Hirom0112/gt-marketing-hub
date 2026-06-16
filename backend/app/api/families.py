@@ -25,7 +25,12 @@ from app.core.contact_log import last_contact_at
 from app.core.contact_status import ContactStatus, derive_contact_status
 from app.core.family_record import assemble_deal_view
 from app.core.params import Params
-from app.core.recovery_state import RecoveryState, derive_recovery_state
+from app.core.recovery_state import (
+    RecoveredOutcome,
+    RecoveryState,
+    derive_recovery_state,
+    recovered_outcome,
+)
 from app.core.work_queue import (
     WorkQueueFamily,
     freshness,
@@ -37,7 +42,7 @@ from app.core.work_queue import (
 )
 from app.data.models import FamilyRecord, FundingState, SeamStatus, Stage, StallReason
 from app.data.repository import FamilyRepository, JoinedFamily
-from app.observability.log_store import ObservabilityLog
+from app.observability.log_store import DismissRecord, ObservabilityLog
 
 router = APIRouter(tags=["families"])
 
@@ -180,6 +185,23 @@ _STALL_REASON_STAGE: dict[StallReason, Stage] = {
 }
 
 
+def _stall_stage(joined: JoinedFamily) -> Stage:
+    """The funnel stage a family was stuck at — the recovery "advanced past" baseline.
+
+    Maps the spine's ``stall_reason`` through the §5.1 :data:`_STALL_REASON_STAGE`
+    table; a family with no ``stall_reason`` falls back to its current stage (so
+    "advanced" reads False — it has not moved off where it is). Pure projection off
+    the spine; shared by :func:`_recovery_state_for` and the history-scope
+    :func:`recovered_outcome` so the two never disagree on the baseline.
+    """
+    family = joined.family
+    return (
+        _STALL_REASON_STAGE[family.stall_reason]
+        if family.stall_reason is not None
+        else family.current_stage
+    )
+
+
 def _recovery_state_for(
     joined: JoinedFamily,
     *,
@@ -209,18 +231,79 @@ def _recovery_state_for(
     contacted_at = last_contact_at(log, family.family_id)
     stall_date = _stall_date(joined, log=log, now=now, params=params)
     dismissed = log.is_dismissed(family.family_id, restalled_after=stall_date)
-    stall_stage = (
-        _STALL_REASON_STAGE[family.stall_reason]
-        if family.stall_reason is not None
-        else family.current_stage
-    )
     return derive_recovery_state(
         joined=joined,
         last_contact_at=contacted_at,
         dismissed=dismissed,
-        stall_stage=stall_stage,
+        stall_stage=_stall_stage(joined),
         params=params,
     )
+
+
+def _holding_dismiss(
+    joined: JoinedFamily,
+    *,
+    log: ObservabilityLog,
+    now: datetime,
+    params: Params,
+) -> DismissRecord | None:
+    """The :class:`DismissRecord` that currently HOLDS for a family, or None (A-19).
+
+    The latest dismiss event for the family that is not superseded by a later
+    re-stall — i.e. the one ``is_dismissed`` is reporting True for. Surfaces the
+    logged record (reason / human / created_at) so the history surface can show
+    *who set this family aside, why, and when*. Mirrors the netting in
+    :meth:`ObservabilityLog.is_dismissed` against the family's derived
+    ``stall_date``. Returns None when no dismiss holds.
+    """
+    family = joined.family
+    stall_date = _stall_date(joined, log=log, now=now, params=params)
+    if not log.is_dismissed(family.family_id, restalled_after=stall_date):
+        return None
+    latest: DismissRecord | None = None
+    for record in log.list_dismissals():
+        if record.family_id != family.family_id:
+            continue
+        if latest is None or record.created_at > latest.created_at:
+            latest = record
+    return latest
+
+
+def _resolved_at(
+    joined: JoinedFamily,
+    *,
+    log: ObservabilityLog,
+    now: datetime,
+    params: Params,
+) -> datetime:
+    """Approximate when a RECOVERED family left the active board (A-19; history scope).
+
+    There is no stored "recovered at" instant, so this composes the most relevant
+    available signal instant the same way :func:`_stall_date` is composed — by the
+    recovery predicate that fired (``recovered_outcome``):
+
+    - ``stage_advanced``  → ``app_form.submitted_at`` (the apply-step instant we have).
+    - ``forms_cleared``   → ``enrollment_forms.created_at`` (the forms-row instant).
+    - ``deposit_received``→ ``family.crm_synced_at`` (the funding-mirror instant).
+
+    If that signal instant is not recoverable, fall back to ``last_contact_at``
+    (A-14) else the spine's ``updated_at`` else ``created_at`` else ``now`` — so a
+    row always carries an approximate instant (never None). Lives at the API layer
+    (NOT pure core) because the fallbacks read the audit log and ``now`` (INV-2),
+    the same composition-root rationale as :func:`_stall_date`.
+    """
+    family = joined.family
+    outcome = recovered_outcome(joined, stall_stage=_stall_stage(joined))
+    signal: datetime | None = None
+    if outcome == "stage_advanced" and joined.app_form is not None:
+        signal = joined.app_form.submitted_at
+    elif outcome == "forms_cleared" and joined.enrollment_forms is not None:
+        signal = joined.enrollment_forms.created_at
+    elif outcome == "deposit_received":
+        signal = family.crm_synced_at
+    if signal is not None:
+        return signal
+    return last_contact_at(log, family.family_id) or family.updated_at or family.created_at or now
 
 
 @router.get("/pipeline", response_model=PipelineResponse)
@@ -416,6 +499,25 @@ def get_work_queue(
         if scope == "history" and state not in _HISTORY_STATES:
             continue
         contact_status, contacted_at = _recency_for(joined, log=log, now=now, params=params)
+        # History-scope OUTCOME story (A-19) — computed ONLY here, so the active
+        # path stays byte-identical and adds no cost (all five fields stay null on
+        # active/all rows). For a recovered row: which predicate fired + when it
+        # left the board; for a dismissed row: the holding DismissRecord's fields.
+        recovered_label: RecoveredOutcome | None = None
+        resolved_at: datetime | None = None
+        dismiss_reason: str | None = None
+        dismissed_by: str | None = None
+        dismissed_at: datetime | None = None
+        if scope == "history":
+            if state is RecoveryState.RECOVERED:
+                recovered_label = recovered_outcome(joined, stall_stage=_stall_stage(joined))
+                resolved_at = _resolved_at(joined, log=log, now=now, params=params)
+            elif state is RecoveryState.DISMISSED:
+                dismiss = _holding_dismiss(joined, log=log, now=now, params=params)
+                if dismiss is not None:
+                    dismiss_reason = dismiss.reason
+                    dismissed_by = dismiss.human
+                    dismissed_at = dismiss.created_at
         rows.append(
             WorkQueueItem(
                 family_id=family.family_id,
@@ -430,6 +532,11 @@ def get_work_queue(
                 contact_status=contact_status,
                 last_contact_at=contacted_at,
                 recovery_state=state,
+                recovered_outcome=recovered_label,
+                resolved_at=resolved_at,
+                dismiss_reason=dismiss_reason,
+                dismissed_by=dismissed_by,
+                dismissed_at=dismissed_at,
             )
         )
         # history/all are bounded — never stream the recovered/dismissed tail.

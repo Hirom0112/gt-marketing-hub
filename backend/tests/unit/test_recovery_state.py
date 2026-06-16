@@ -29,6 +29,7 @@ from app.core.recovery_state import (
     RecoveryState,
     derive_recovery_state,
     is_active,
+    recovered_outcome,
 )
 from app.data.models import (
     EnrollmentForms,
@@ -207,3 +208,76 @@ def test_is_active_partitions_the_states() -> None:
     assert is_active(RecoveryState.WORKING) is True
     assert is_active(RecoveryState.RECOVERED) is False
     assert is_active(RecoveryState.DISMISSED) is False
+
+
+# --------------------------------------------------------------------------- #
+# `recovered_outcome` — WHICH recovery predicate fired (history-scope detail).
+# Pure mirror of the OR in `derive_recovery_state`, in the same precedence order.
+# --------------------------------------------------------------------------- #
+def test_recovered_outcome_stage_advanced() -> None:
+    """Stage advanced past the stall stage ⇒ 'stage_advanced'."""
+    joined = _joined(current_stage=Stage.ENROLL)
+    assert recovered_outcome(joined, stall_stage=Stage.APPLY) == "stage_advanced"
+
+
+def test_recovered_outcome_forms_cleared() -> None:
+    """All forms signed (and forms existed), no stage move ⇒ 'forms_cleared'."""
+    joined = _joined(current_stage=Stage.APPLY, enrollment_forms=_forms(signed=6, total=6))
+    assert recovered_outcome(joined, stall_stage=Stage.APPLY) == "forms_cleared"
+
+
+def test_recovered_outcome_deposit_received() -> None:
+    """funding_state >= first_installment_received, no other signal ⇒ 'deposit_received'."""
+    for fs in (FundingState.FIRST_INSTALLMENT_RECEIVED, FundingState.FUNDED):
+        joined = _joined(current_stage=Stage.APPLY, funding_state=fs)
+        assert recovered_outcome(joined, stall_stage=Stage.APPLY) == "deposit_received"
+
+
+def test_recovered_outcome_none_when_not_recovered() -> None:
+    """A family with no recovery signal yields None (not a recovered row)."""
+    joined = _joined(current_stage=Stage.APPLY, enrollment_forms=_forms(signed=2, total=6))
+    assert recovered_outcome(joined, stall_stage=Stage.APPLY) is None
+
+
+def test_recovered_outcome_precedence_stage_over_forms_and_funding() -> None:
+    """When several predicates fire, the OR's document order wins: stage > forms > deposit."""
+    # stage-advanced AND forms-cleared AND funded — stage wins (first in the OR).
+    joined = _joined(
+        current_stage=Stage.ENROLL,
+        funding_state=FundingState.FUNDED,
+        enrollment_forms=_forms(signed=6, total=6),
+    )
+    assert recovered_outcome(joined, stall_stage=Stage.APPLY) == "stage_advanced"
+    # forms-cleared AND funded, no stage move — forms wins over deposit.
+    joined2 = _joined(
+        current_stage=Stage.APPLY,
+        funding_state=FundingState.FUNDED,
+        enrollment_forms=_forms(signed=6, total=6),
+    )
+    assert recovered_outcome(joined2, stall_stage=Stage.APPLY) == "forms_cleared"
+
+
+def test_recovered_outcome_matches_derive_recovery_state() -> None:
+    """`recovered_outcome` is non-None exactly when `derive_recovery_state` is RECOVERED.
+
+    Same predicates, same precedence: the helper exposes WHICH branch the OR took,
+    so it must agree with the deriver's RECOVERED verdict on the same inputs.
+    """
+    params = _params()
+    cases = [
+        _joined(current_stage=Stage.ENROLL),  # stage_advanced
+        _joined(enrollment_forms=_forms(signed=6, total=6)),  # forms_cleared
+        _joined(funding_state=FundingState.FIRST_INSTALLMENT_RECEIVED),  # deposit_received
+        _joined(enrollment_forms=_forms(signed=2, total=6)),  # not recovered
+        _joined(enrollment_forms=None),  # not recovered (no forms)
+    ]
+    for joined in cases:
+        outcome = recovered_outcome(joined, stall_stage=Stage.APPLY)
+        state = derive_recovery_state(
+            joined=joined,
+            last_contact_at=None,
+            dismissed=False,
+            stall_stage=Stage.APPLY,
+            params=params,
+        )
+        assert (outcome is not None) == (state is RecoveryState.RECOVERED)
