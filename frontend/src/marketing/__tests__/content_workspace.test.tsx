@@ -173,7 +173,7 @@ describe('ContentWorkspace', () => {
     await waitFor(() => {
       const fetchMock = fetch as unknown as ReturnType<typeof vi.fn>;
       const decisionCall = fetchMock.mock.calls.find((c) =>
-        String(c[0]).includes('/proposals/cand-a/decision'),
+        String(c[0]).includes('/content/cand-a/decision'),
       );
       expect(decisionCall).toBeTruthy();
       const init = decisionCall?.[1] as RequestInit | undefined;

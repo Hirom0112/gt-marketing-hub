@@ -53,11 +53,12 @@ from app.api.deps import (
     get_settings_dep,
 )
 from app.api.schemas import (
+    CandidateValidationView,
+    ContentCandidateResponse,
     ContentDecisionRequest,
     ContentDecisionResponse,
     ContentGenerateRequest,
     ContentGenerateResponse,
-    SurfacedCandidateResponse,
 )
 from app.core.eval_gate import BrandJudge, RuleVerdict, ValidationResult
 from app.core.params import Params
@@ -111,9 +112,11 @@ def generate_content(
         brand_rules=brand_rules,
     )
 
-    surfaced: list[SurfacedCandidateResponse] = []
+    candidates: list[ContentCandidateResponse] = []
+    batch_id = ""
 
-    # LOG every surfaced candidate (proposal + passing eval) BEFORE returning it.
+    # LOG every surfaced candidate (proposal + passing eval) BEFORE returning it,
+    # then project it FLAT with surfaced=True so the client renders keep/discard.
     for item in outcome.surfaced:
         proposal_id = uuid4()
         log.log_proposal(
@@ -128,16 +131,24 @@ def generate_content(
             passed=item.validation.passed,
             score=item.validation.brand_score,
         )
-        surfaced.append(
-            SurfacedCandidateResponse(
+        batch_id = batch_id or item.candidate.batch_id
+        candidates.append(
+            ContentCandidateResponse(
                 proposal_id=proposal_id,
-                candidate=item.candidate,
-                validation=item.validation,
+                copy=item.candidate.copy_text,
+                channel=item.candidate.channel.value,
+                surfaced=True,
+                degraded=outcome.degraded,
+                failed_rules=[],
+                validation=CandidateValidationView(passed=item.validation.passed),
             )
         )
 
     # LOG every withheld (blocked) candidate with its FAILING eval — the audit
-    # proof that no unverifiable claim escaped (INV-4); it does NOT surface.
+    # proof that no unverifiable claim escaped (INV-4) — then SURFACE it flat with
+    # surfaced=False + its failed_rules so the operator SEES the gate block it. It
+    # carries a proposal_id but is never keepable: the keep endpoint 409s on an
+    # un-passed eval (INV-3), and the client renders no keep control for it.
     for blocked in outcome.withheld:
         proposal_id = uuid4()
         log.log_proposal(
@@ -152,9 +163,22 @@ def generate_content(
             passed=blocked.validation.passed,
             score=blocked.validation.brand_score,
         )
+        batch_id = batch_id or blocked.candidate.batch_id
+        candidates.append(
+            ContentCandidateResponse(
+                proposal_id=proposal_id,
+                copy=blocked.candidate.copy_text,
+                channel=blocked.candidate.channel.value,
+                surfaced=False,
+                degraded=outcome.degraded,
+                failed_rules=list(blocked.validation.failed_rules),
+                validation=CandidateValidationView(passed=blocked.validation.passed),
+            )
+        )
 
     return ContentGenerateResponse(
-        candidates=surfaced,
+        batch_id=batch_id,
+        candidates=candidates,
         blocked_count=outcome.withheld_count,
         degraded=outcome.degraded,
     )

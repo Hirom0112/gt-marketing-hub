@@ -127,7 +127,7 @@ export default function ContentWorkspace(): JSX.Element {
   }
 
   function decide(proposalId: string, kind: DecisionKind): void {
-    fetch(`${apiBaseUrl}/proposals/${proposalId}/decision`, {
+    fetch(`${apiBaseUrl}/content/${proposalId}/decision`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ action: kind }),

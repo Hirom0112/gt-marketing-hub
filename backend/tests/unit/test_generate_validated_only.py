@@ -192,12 +192,15 @@ def _clean_overrides() -> Iterator[None]:
     deps.reset_observability_log()
 
 
-def test_api_generate_surfaces_only_passing_blocked_logged(tmp_path: Path) -> None:
-    """`POST /ai/content/generate` surfaces only passing candidates; blocked is logged.
+def test_api_generate_surfaces_passing_and_blocked_both_logged(tmp_path: Path) -> None:
+    """`POST /ai/content/generate` flat-projects passing AND blocked candidates.
 
-    The blocked ("4X speed") candidate is NOT in the surfaced set but IS in
-    `GET /proposals` with a FAILING eval (INV-4 audit side). The malformed
-    candidate never surfaces and never writes state (INV-2).
+    Passing candidates carry ``surfaced=True`` + ``passed=True`` (keepable); the
+    blocked ("4X speed") candidate is returned ``surfaced=False`` with its
+    ``failed_rules`` so the operator SEES the gate block it (INV-4 visible) — but
+    it is never keepable. Both are in `GET /proposals` (the blocked one with a
+    FAILING eval, INV-4 audit side). The malformed candidate never parses, so it
+    neither surfaces nor writes state (INV-2).
     """
     params = load_params(EXAMPLE_PARAMS)
     app.dependency_overrides[deps.get_params] = lambda: params
@@ -210,14 +213,25 @@ def test_api_generate_surfaces_only_passing_blocked_logged(tmp_path: Path) -> No
     assert resp.status_code == 200
     data = resp.json()
 
-    # Only passing candidates surface, each with a proposal_id + passing validation.
-    surfaced = data["candidates"]
+    # 2 surfaced (passing) + 1 blocked candidate are returned, all flat.
+    candidates = data["candidates"]
+    assert len(candidates) == 3
+    surfaced = [c for c in candidates if c["surfaced"]]
+    blocked = [c for c in candidates if not c["surfaced"]]
     assert len(surfaced) == 2
-    surfaced_copies = {c["candidate"]["copy"] for c in surfaced}
-    assert all("4X" not in c for c in surfaced_copies)
+    assert len(blocked) == 1
+
+    # Passing candidates carry a proposal_id + passing validation; no "4X" claim.
     for entry in surfaced:
         assert entry["proposal_id"]
         assert entry["validation"]["passed"] is True
+        assert "4X" not in entry["copy"]
+
+    # The blocked candidate IS surfaced (visible) but un-keepable: surfaced=False,
+    # passed=False, with failing rules, and it IS the "4X" one.
+    assert "4X" in blocked[0]["copy"]
+    assert blocked[0]["validation"]["passed"] is False
+    assert blocked[0]["failed_rules"]
 
     assert data["blocked_count"] == 1
 
