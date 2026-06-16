@@ -116,6 +116,42 @@ def _build_prompt(prompt: str, channel: Channel | str, block: ConditioningBlock)
     )
 
 
+def build_campaign_prompt(
+    *,
+    theme: str,
+    channel: Channel | str,
+    audience: str,
+    target_geo_prompt: str | None,
+    count: int,
+) -> str:
+    """Render a CAMPAIGN operator prompt embedding the four campaign axes (Slice B).
+
+    A campaign is defined by four axes that this prompt embeds so the edge conditions on
+    all of them: the ``theme`` (the angle to LEAD with), the ``channel`` (shapes
+    format/length — passed separately to :func:`generate_content_batch` for conditioning,
+    and named here for the model), the ``audience`` (tone + CTA), and — when set — the
+    ``target_geo_prompt`` (an instruction to structure the copy to WIN that AI-search
+    prompt, i.e. SEO/GEO). ``count`` is the (already-clamped) requested batch size.
+
+    The returned string is the OPERATOR request fed to :func:`generate_content_batch`,
+    which then wraps it with the brand-memory conditioning block — so this helper adds no
+    live call and no magic numbers (the cap is applied by the caller, INV-8/INV-11).
+    """
+    channel_value = channel.value if isinstance(channel, Channel) else channel
+    lines = [
+        f"Generate a campaign batch of {count} on-brand GT School social captions.",
+        f"Lead with this THEME / angle: {theme}.",
+        f"Channel: {channel_value} — shape the format and length for this channel.",
+        f"Audience: {audience} — match the tone and call-to-action to this audience.",
+    ]
+    if target_geo_prompt:
+        lines.append(
+            "Structure the copy to WIN this AI-search (SEO/GEO) prompt — answer it "
+            f"directly and concisely so GT School is the cited source: {target_geo_prompt}"
+        )
+    return "\n".join(lines)
+
+
 def _parse_batch(text: str, block: ConditioningBlock) -> list[ContentCandidate]:
     """Parse the edge's JSON array into a list of :class:`ContentCandidate` (§5.3 step 3).
 

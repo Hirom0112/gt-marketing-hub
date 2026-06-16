@@ -135,20 +135,46 @@ function mockFetch(payload: unknown): void {
 // POST (and the decision POST) distinct payloads.
 function mockFetchRouted(routes: {
   generate?: unknown;
+  campaign?: unknown;
   decision?: unknown;
   library?: unknown;
+  geo?: unknown;
 }): void {
   vi.stubGlobal(
     'fetch',
     vi.fn(async (url: string) => {
       let payload: unknown = {};
-      if (url.includes('/ai/content/generate')) payload = routes.generate ?? {};
+      if (url.includes('/ai/content/campaign')) payload = routes.campaign ?? {};
+      else if (url.includes('/ai/content/generate'))
+        payload = routes.generate ?? {};
       else if (url.includes('/decision')) payload = routes.decision ?? {};
       else if (url.includes('/content/library')) payload = routes.library ?? [];
+      // GET /geo — supplies the target-GEO-prompt select options.
+      else if (url.includes('/geo')) payload = routes.geo ?? { prompt_set: [] };
       return { ok: true, status: 200, json: async () => payload };
     }),
   );
 }
+
+// A campaign batch echoes the chosen axes alongside the SAME flat candidate shape.
+const CAMPAIGN_BATCH = {
+  ...MIXED_BATCH,
+  batch_id: 'campaign-1',
+  campaign: {
+    theme: 'cost_tefa_esa',
+    channel: 'instagram',
+    audience: 'prospective_parent',
+    target_geo_prompt: 'best gifted school in Austin Texas',
+  },
+};
+
+// GET /geo prompt_set — the target-GEO-prompt select options.
+const GEO_VIEW = {
+  prompt_set: [
+    'best gifted school in Austin Texas',
+    'do gifted kids struggle socially',
+  ],
+};
 
 describe('ContentWorkspace', () => {
   beforeEach(() => {
@@ -362,5 +388,99 @@ describe('ContentWorkspace', () => {
       const body = JSON.parse(String(init?.body)) as { prompt: string };
       expect(body.prompt).toBe('a warm enrollment email');
     });
+  });
+
+  // --- Slice B: the campaign batch creator ------------------------------------
+  it('test_campaign_posts_axes_and_renders_candidates', async () => {
+    mockFetchRouted({
+      campaign: CAMPAIGN_BATCH,
+      geo: GEO_VIEW,
+      library: [],
+    });
+    render(<ContentWorkspace />);
+
+    // The GEO prompt options are fetched on mount and populate the select.
+    await waitFor(() => {
+      expect(
+        screen.getByTestId('campaign-geo-prompt'),
+      ).toHaveTextContent('best gifted school in Austin Texas');
+    });
+
+    // Pick the four axes + a count.
+    fireEvent.change(screen.getByTestId('campaign-theme'), {
+      target: { value: 'cost_tefa_esa' },
+    });
+    fireEvent.change(screen.getByTestId('campaign-channel'), {
+      target: { value: 'instagram' },
+    });
+    fireEvent.change(screen.getByTestId('campaign-audience'), {
+      target: { value: 'prospective_parent' },
+    });
+    fireEvent.change(screen.getByTestId('campaign-geo-prompt'), {
+      target: { value: 'best gifted school in Austin Texas' },
+    });
+    fireEvent.change(screen.getByTestId('campaign-count'), {
+      target: { value: '3' },
+    });
+    fireEvent.click(screen.getByTestId('campaign-generate'));
+
+    // The same flat candidates render (reuses BatchResult).
+    const candA = await screen.findByTestId('candidate-cand-a');
+    expect(within(candA).getByTestId('keep-cand-a')).toBeEnabled();
+    expect(screen.getByTestId('candidate-blocked-cand-c')).toBeInTheDocument();
+    expect(screen.queryByTestId('keep-cand-c')).toBeNull();
+
+    // The POST carried the chosen axes + count.
+    const fetchMock = fetch as unknown as ReturnType<typeof vi.fn>;
+    const campaignCall = fetchMock.mock.calls.find((c) =>
+      String(c[0]).includes('/ai/content/campaign'),
+    );
+    expect(campaignCall).toBeTruthy();
+    const init = campaignCall?.[1] as RequestInit | undefined;
+    expect(init?.method).toBe('POST');
+    const body = JSON.parse(String(init?.body)) as {
+      theme: string;
+      channel: string;
+      audience: string;
+      target_geo_prompt: string | null;
+      count: number;
+    };
+    expect(body.theme).toBe('cost_tefa_esa');
+    expect(body.channel).toBe('instagram');
+    expect(body.audience).toBe('prospective_parent');
+    expect(body.target_geo_prompt).toBe('best gifted school in Austin Texas');
+    expect(body.count).toBe(3);
+  });
+
+  it('test_campaign_summary_chips_show_active_axes', async () => {
+    mockFetchRouted({
+      campaign: CAMPAIGN_BATCH,
+      geo: GEO_VIEW,
+      library: [],
+    });
+    render(<ContentWorkspace />);
+
+    fireEvent.change(screen.getByTestId('campaign-theme'), {
+      target: { value: 'cost_tefa_esa' },
+    });
+    fireEvent.click(screen.getByTestId('campaign-generate'));
+
+    const summary = await screen.findByTestId('campaign-summary');
+    expect(summary).toHaveTextContent('cost_tefa_esa');
+  });
+
+  it('test_campaign_geo_options_empty_when_geo_fails', async () => {
+    // GEO fetch fails → the select still renders (gracefully empty), no crash.
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: string) => {
+        if (url.includes('/geo'))
+          return { ok: false, status: 500, json: async () => ({}) };
+        return { ok: true, status: 200, json: async () => [] };
+      }),
+    );
+    render(<ContentWorkspace />);
+
+    expect(await screen.findByTestId('campaign-geo-prompt')).toBeInTheDocument();
   });
 });

@@ -39,7 +39,11 @@ from pydantic import ValidationError
 
 from app.ai.client import LLMClient
 from app.ai.cost import RunBudget
-from app.ai.graphs.content_generate import generate_content_batch
+from app.ai.graphs.content_generate import (
+    ContentBatchOutcome,
+    build_campaign_prompt,
+    generate_content_batch,
+)
 from app.ai.schemas.brand import BrandRule, LibraryAsset
 from app.ai.schemas.content import ContentCandidate, Decision
 from app.api.deps import (
@@ -53,6 +57,9 @@ from app.api.deps import (
     get_settings_dep,
 )
 from app.api.schemas import (
+    CampaignEcho,
+    CampaignGenerateRequest,
+    CampaignGenerateResponse,
     CandidateValidationView,
     ContentCandidateResponse,
     ContentDecisionRequest,
@@ -74,6 +81,13 @@ router = APIRouter(tags=["content"])
 CONTENT_FLOW = "content_generate"
 CONTENT_SCHEMA_VERSION = "1"
 CONTENT_EVAL_NAME = "message_safety_grounding"
+
+# Slice B campaign cap: the max candidates a single campaign batch may request, so a
+# campaign is never silently unbounded (INV-8 — bound the metered edge). `params` has no
+# content-batch tunable that fits, so this is a documented module constant (CLAUDE §1
+# INV-11 allows a documented constant when no canonical param home exists); a `count`
+# above it is clamped down, never errored.
+CAMPAIGN_COUNT_MAX = 8
 
 # --- dependency aliases (Annotated keeps the call in the type, not a default arg) ---
 ParamsDep = Annotated[Params, Depends(get_params)]
@@ -112,11 +126,24 @@ def generate_content(
         brand_rules=brand_rules,
     )
 
+    return _project_outcome(outcome, log=log)
+
+
+def _project_outcome(
+    outcome: ContentBatchOutcome, *, log: ObservabilityLog
+) -> ContentGenerateResponse:
+    """Log every candidate then FLAT-project the batch into a `ContentGenerateResponse`.
+
+    The shared §5.3 surface logic both `/ai/content/generate` and `/ai/content/campaign`
+    use: each candidate (surfaced AND withheld) is logged with its eval (INV-4 audit side)
+    BEFORE being projected flat. A surfaced candidate carries ``surfaced=True`` +
+    ``passed=True`` (keepable); a withheld candidate carries ``surfaced=False`` + its
+    ``failed_rules`` so the operator SEES the gate block it — it has a ``proposal_id`` but
+    is never keepable (the keep endpoint 409s on an un-passed eval, INV-3).
+    """
     candidates: list[ContentCandidateResponse] = []
     batch_id = ""
 
-    # LOG every surfaced candidate (proposal + passing eval) BEFORE returning it,
-    # then project it FLAT with surfaced=True so the client renders keep/discard.
     for item in outcome.surfaced:
         proposal_id = uuid4()
         log.log_proposal(
@@ -144,11 +171,6 @@ def generate_content(
             )
         )
 
-    # LOG every withheld (blocked) candidate with its FAILING eval — the audit
-    # proof that no unverifiable claim escaped (INV-4) — then SURFACE it flat with
-    # surfaced=False + its failed_rules so the operator SEES the gate block it. It
-    # carries a proposal_id but is never keepable: the keep endpoint 409s on an
-    # un-passed eval (INV-3), and the client renders no keep control for it.
     for blocked in outcome.withheld:
         proposal_id = uuid4()
         log.log_proposal(
@@ -181,6 +203,68 @@ def generate_content(
         candidates=candidates,
         blocked_count=outcome.withheld_count,
         degraded=outcome.degraded,
+    )
+
+
+@router.post("/ai/content/campaign", response_model=CampaignGenerateResponse)
+def generate_campaign(
+    request: CampaignGenerateRequest,
+    params: ParamsDep,
+    settings: SettingsDep,
+    log: LogDep,
+    client: LLMClientDep,
+    brand_judge: BrandJudgeDep,
+    store: StoreDep,
+    brand_rules: BrandRulesDep,
+) -> CampaignGenerateResponse:
+    """Generate a gated CAMPAIGN batch for the four axes, surface only on pass (Slice B).
+
+    A THIN composition over the SAME §5.3 spine `/ai/content/generate` uses: build a
+    CAMPAIGN PROMPT embedding the theme/channel/audience/(optional)GEO axes, clamp the
+    requested ``count`` to :data:`CAMPAIGN_COUNT_MAX` (never silently unbounded — INV-8),
+    feed it to the EXISTING :func:`generate_content_batch` (so it conditions on brand
+    memory and DEGRADES to persisted exemplars with no key — INV-8), and reuse the same
+    log + gate + flat-projection flow as `generate_content`. Returns the SAME flat batch
+    PLUS a ``campaign`` echo of the axes.
+    """
+    count = min(request.count, CAMPAIGN_COUNT_MAX)
+    campaign_prompt = build_campaign_prompt(
+        theme=request.theme,
+        channel=request.channel,
+        audience=request.audience.value,
+        target_geo_prompt=request.target_geo_prompt,
+        count=count,
+    )
+
+    # Per-run budget (INV-8) — built per request, never a singleton.
+    budget = RunBudget.from_config(settings=settings, params=params)
+    outcome = generate_content_batch(
+        campaign_prompt,
+        request.channel,
+        store=store,  # type: ignore[arg-type]  # BrandMemoryStore boundary
+        client=client,
+        budget=budget,
+        settings=settings,
+        params=params,
+        brand_judge=brand_judge,
+        brand_rules=brand_rules,
+    )
+
+    base = _project_outcome(outcome, log=log)
+    # TODO(campaign-tag): when campaign-tagging-on-keep lands, thread these axes into the
+    # keep/library write path so a kept candidate is tagged with its campaign theme +
+    # target GEO prompt. OUT OF SCOPE for this slice — generate + render only.
+    return CampaignGenerateResponse(
+        batch_id=base.batch_id,
+        candidates=base.candidates,
+        blocked_count=base.blocked_count,
+        degraded=base.degraded,
+        campaign=CampaignEcho(
+            theme=request.theme,
+            channel=request.channel,
+            audience=request.audience,
+            target_geo_prompt=request.target_geo_prompt,
+        ),
     )
 
 

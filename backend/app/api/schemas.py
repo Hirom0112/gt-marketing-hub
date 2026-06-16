@@ -14,7 +14,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from app.ai.schemas.brand import LibraryAsset
 from app.ai.schemas.close_tips import CloseTipsProposal
-from app.ai.schemas.content import Channel, Decision
+from app.ai.schemas.content import AudienceTag, Channel, Decision
 from app.ai.schemas.enrollment_draft import DraftAction, EnrollmentDraftProposal
 from app.core.contact_status import ContactStatus
 from app.core.eval_gate import ValidationResult
@@ -471,6 +471,46 @@ class ContentGenerateResponse(BaseModel):
     candidates: list[ContentCandidateResponse] = Field(default_factory=list)
     blocked_count: int = 0
     degraded: bool = False
+
+
+class CampaignGenerateRequest(BaseModel):
+    """`POST /ai/content/campaign` body — the four campaign axes + a count (Slice B).
+
+    A campaign is defined by four axes: ``theme`` (the angle to lead with, e.g.
+    ``gifted_identity`` / ``cost_tefa_esa`` / …), ``channel`` (shapes format/length),
+    ``audience`` (the :class:`AudienceTag` driving tone + CTA), and an optional
+    ``target_geo_prompt`` (an AI-search prompt the copy should be structured to win —
+    SEO/GEO). ``count`` is the requested batch size; the endpoint CLAMPS it to a module
+    cap so a batch is never silently unbounded (INV-8). ``channel`` / ``audience`` are
+    closed enums (an out-of-range value is rejected 422). ``theme`` is a free string so
+    the angle set can grow without a schema migration; it is embedded verbatim.
+    """
+
+    theme: str = Field(min_length=1)
+    channel: Channel
+    audience: AudienceTag
+    target_geo_prompt: str | None = None
+    count: int = Field(default=1, ge=1)
+
+
+class CampaignEcho(BaseModel):
+    """The campaign axes echoed back on the response so the client can show them as chips."""
+
+    theme: str
+    channel: Channel
+    audience: AudienceTag
+    target_geo_prompt: str | None = None
+
+
+class CampaignGenerateResponse(ContentGenerateResponse):
+    """The campaign batch outcome — the SAME flat batch as `/ai/content/generate` + echo.
+
+    Extends :class:`ContentGenerateResponse` (so candidates stay FLAT and the existing
+    BatchResult UI renders it unchanged) and adds the ``campaign`` echo of the axes that
+    drove the batch.
+    """
+
+    campaign: CampaignEcho
 
 
 class ContentDecisionRequest(BaseModel):
