@@ -15,6 +15,7 @@ nothing from `app.ai` or `app.adapters` (the core-purity test guards this).
 from __future__ import annotations
 
 import os
+from datetime import date
 from pathlib import Path
 from typing import Any
 
@@ -239,6 +240,102 @@ class Funding(_StrictModel):
                 f"funding.installment_split must sum to 1.0, got {total!r} ({value!r})"
             )
         return value
+
+
+class VoucherWindows(_StrictModel):
+    """voucher_programs.<key>.windows — the per-program deadline calendar (R2).
+
+    The genuinely-NEW window values the standing engine needs (the award AMOUNTS
+    stay in ``funding`` — INV-11, one canonical home):
+
+    * ``parent_select_deadline`` — the date by which a family must SELECT/confirm
+      the school (the SELECTED_GT → RECONFIRMED reconfirm step's deadline).
+    * ``full_award_cutoff`` — the last date a confirmation still earns the FULL
+      award; after it the award prorates by enrollment date.
+    * ``reconfirm_required`` — whether the program has the parent-reconfirm/lock-in
+      gap at all (the "$X lost on a deadline" at-risk window).
+
+    ``verified``/``confidence`` carry the rule's provenance so an UNVERIFIED rule
+    is visible and never silently load-bearing (the ANALYSIS docs hedge some
+    dates). Dates are stored as concrete ``date`` DATA, not month/day comments.
+    """
+
+    parent_select_deadline: date
+    full_award_cutoff: date
+    reconfirm_required: bool
+    verified: bool
+    confidence: str
+
+    @model_validator(mode="after")
+    def _cutoff_not_before_select(self) -> VoucherWindows:
+        if self.full_award_cutoff < self.parent_select_deadline:
+            raise ValueError(
+                "voucher windows.full_award_cutoff must be >= parent_select_deadline, got "
+                f"{self.full_award_cutoff!r} < {self.parent_select_deadline!r}"
+            )
+        return self
+
+
+class InstallmentScheduleEntry(_StrictModel):
+    """One installment in a program's disbursement schedule (R2; DATA, not a comment).
+
+    ``fraction`` is this installment's share of the award (mirrors
+    ``funding.installment_split`` — the SPLIT is shared math, the per-program
+    DUE DATE is the new value). ``due_month``/``due_day`` carry the calendar due
+    date AS DATA so the schedule's timing is a config row, never a YAML comment.
+    """
+
+    fraction: float
+    due_month: int
+    due_day: int
+
+    @model_validator(mode="after")
+    def _due_date_valid(self) -> InstallmentScheduleEntry:
+        if not 1 <= self.due_month <= 12:
+            raise ValueError(f"installment due_month must be 1..12, got {self.due_month!r}")
+        if not 1 <= self.due_day <= 31:
+            raise ValueError(f"installment due_day must be 1..31, got {self.due_day!r}")
+        if not 0.0 <= self.fraction <= 1.0:
+            raise ValueError(f"installment fraction must be in [0,1], got {self.fraction!r}")
+        return self
+
+
+class VoucherSettingLock(_StrictModel):
+    """voucher_programs.<key>.setting_lock — irreversible setting rules (R2).
+
+    ``irreversible_settings`` lists the learning-SETTING tokens that, once chosen,
+    cannot be changed (e.g. homeschool/other is frozen and cannot upgrade to the
+    private-school rate — CONFIRMED in the ANALYSIS docs). ``verified``/``confidence``
+    carry the rule's provenance so an unverified lock is visible.
+    """
+
+    irreversible_settings: list[str]
+    verified: bool
+    confidence: str
+
+
+class VoucherProgram(_StrictModel):
+    """A single voucher program's RULES + DEADLINES (R2; multi-state = config row).
+
+    Proves multi-state expansion is a CONFIG ROW, not a code change: ``tx_tefa``
+    and ``az_esa`` are two instances of this same model. It owns ONLY the new
+    window/rule values — the award AMOUNTS keep their canonical home in ``funding``
+    (INV-11, no duplicated value). ``tuition_unlock_state`` names the funding-state
+    threshold at/after which tuition unlocks (composes ``funding_gate``).
+    """
+
+    program_name: str
+    funding_year: int
+    windows: VoucherWindows
+    installment_schedule: list[InstallmentScheduleEntry]
+    setting_lock: VoucherSettingLock
+    tuition_unlock_state: str
+
+    @model_validator(mode="after")
+    def _schedule_non_empty(self) -> VoucherProgram:
+        if not self.installment_schedule:
+            raise ValueError("voucher program installment_schedule must be non-empty")
+        return self
 
 
 class NudgeTrigger(_StrictModel):
@@ -673,6 +770,10 @@ class Params(_StrictModel):
     back_to_school: BackToSchool
     realistic: Realistic
     funding: Funding
+    # Per-program voucher RULES + DEADLINES (R2). Keyed by program (tx_tefa,
+    # az_esa, …) so a new state is a CONFIG ROW, not a code change. Owns only the
+    # new window/rule values; award AMOUNTS stay in ``funding`` (INV-11).
+    voucher_programs: dict[str, VoucherProgram]
     eval_thresholds: EvalThresholds
     cost_caps: CostCaps
     anthropic_pricing: AnthropicPricing

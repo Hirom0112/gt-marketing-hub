@@ -67,6 +67,48 @@ funding:                    # FR-2.7 — RESEARCH.md Q1; amounts NEVER hardcoded
   installment_split: [0.25, 0.25, 0.50]   # ~Jul1 / Oct1 / Feb1
   tuition_unlock_state: first_installment_received   # §5.4 gate threshold
 
+voucher_programs:           # R2 — per-program RULES + DEADLINES; a new state is a CONFIG ROW, not code (INV-11).
+  # Owns ONLY the new window/rule values; award AMOUNTS keep their canonical home in `funding` above.
+  # Each rule carries verified/confidence so an UNVERIFIED rule is VISIBLE, never silently load-bearing.
+  tx_tefa:                  # Texas Education Freedom Accounts (TEFA / SB-2 2025) — ANALYSIS/tefa-mechanics-and-timing.md
+    program_name: "Texas Education Freedom Accounts"
+    funding_year: 2026
+    windows:
+      parent_select_deadline: 2026-07-15   # CONFIRMED — final parent deadline to select/confirm a school (reconfirm step)
+      full_award_cutoff: 2026-09-15        # CONFIRMED official — last date a confirmation still earns the FULL award; after ⇒ prorated
+      reconfirm_required: true             # CONFIRMED — the SELECTED_GT → RECONFIRMED parent lock-in gap exists
+      verified: true                       # the deadline dates are confirmed against the official funding page
+      confidence: confirmed                # provenance: educationfreedom.texas.gov Funding Timelines & Installments
+    installment_schedule:                  # DATA, not a comment: fraction + due month/day (≈ Jul 1 / Oct 1 / Feb 1)
+      - { fraction: 0.25, due_month: 7, due_day: 1 }
+      - { fraction: 0.25, due_month: 10, due_day: 1 }
+      - { fraction: 0.50, due_month: 2, due_day: 1 }
+    setting_lock:
+      irreversible_settings: [homeschool, other]   # CONFIRMED — homeschool/other is final and cannot upgrade to the private rate
+      verified: true
+      confidence: confirmed
+    tuition_unlock_state: first_installment_received   # composes funding_gate (§5.4 threshold); mirrors `funding`
+  az_esa:                   # Arizona Empowerment Scholarship Account — SECOND program proving multi-state = config row.
+    # NOTE: AZ ESA window dates are NOT in the ANALYSIS docs (those cover TX only). These are UNVERIFIED
+    # placeholders flagged so they are never silently load-bearing — confirm against the AZ DOE before live use.
+    program_name: "Arizona Empowerment Scholarship Account"
+    funding_year: 2026
+    windows:
+      parent_select_deadline: 2026-08-01   # UNVERIFIED placeholder — not sourced; AZ ESA enrolls year-round (verify)
+      full_award_cutoff: 2026-09-30        # UNVERIFIED placeholder — prorating/cutoff behavior unconfirmed for AZ
+      reconfirm_required: false            # UNVERIFIED — AZ ESA has no documented GT reconfirm gap (modeled as absent)
+      verified: false                      # flagged UNVERIFIED so the rule surfaces as not-yet-confirmed
+      confidence: unverified               # provenance: NONE in repo ANALYSIS — placeholder only
+    installment_schedule:                  # UNVERIFIED placeholder split (mirrors the funding split shape for demo)
+      - { fraction: 0.25, due_month: 8, due_day: 1 }
+      - { fraction: 0.25, due_month: 11, due_day: 1 }
+      - { fraction: 0.50, due_month: 2, due_day: 1 }
+    setting_lock:
+      irreversible_settings: []            # UNVERIFIED — no documented irreversible-setting rule for AZ in repo sources
+      verified: false
+      confidence: unverified
+    tuition_unlock_state: first_installment_received
+
 eval_thresholds:            # FR-4.x — an action whose eval is below threshold is BLOCKED/disabled
   nudge_trigger:            # FR-4.1
     min_precision: 0.85
