@@ -16,10 +16,10 @@ from __future__ import annotations
 from uuid import uuid4
 
 import pytest
-from app.marketing.scheduler import LiveDispatchRejected, gate_dispatch, simulate_send
 
 from app.ai.schemas.content import Channel, Decision, GeneratedBy, HumanDecision, Provenance
 from app.core.eval_gate import RuleVerdict, ValidationResult
+from app.marketing.scheduler import LiveDispatchRejected, gate_dispatch, simulate_send
 from app.marketing.schemas.scheduling import (
     DispatchMode,
     DispatchStatus,

@@ -16,15 +16,15 @@ from __future__ import annotations
 from uuid import uuid4
 
 import pytest
+
+from app.ai.schemas.content import GeneratedBy, Provenance
+from app.core.eval_gate import RuleVerdict, ValidationResult
 from app.marketing.pipeline import (
     PipelineAdvanceBlocked,
     advance,
     can_advance,
     next_stage,
 )
-
-from app.ai.schemas.content import GeneratedBy, Provenance
-from app.core.eval_gate import RuleVerdict, ValidationResult
 from app.marketing.schemas.artifacts import (
     ArtifactStatus,
     ConceptArtifact,

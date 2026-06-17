@@ -29,7 +29,6 @@ import json
 from pathlib import Path
 
 import pytest
-from app.marketing.recipe_run import RecipeParamMissing, fill_template, run_recipe
 from pydantic import ValidationError
 
 from app.ai.client import AnthropicLLMClient, LLMClient
@@ -40,6 +39,7 @@ from app.ai.schemas.content import Channel
 from app.core.params import load_params
 from app.core.settings import Settings
 from app.data.synthetic import generate_recipes
+from app.marketing.recipe_run import RecipeParamMissing, fill_template, run_recipe
 
 EXAMPLE_PARAMS = Path(__file__).resolve().parents[4] / "params" / "params.example.yaml"
 

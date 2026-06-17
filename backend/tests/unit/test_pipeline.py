@@ -18,7 +18,6 @@ from __future__ import annotations
 from collections import Counter
 
 from app.core.pipeline import pipeline_counts
-
 from app.data.models import Stage
 from app.data.synthetic import generate
 

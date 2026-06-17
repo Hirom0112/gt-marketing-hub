@@ -14,9 +14,9 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
-from app.evals.metrics import PrecisionRecall, evaluate_nudge, precision_recall
 
 from app.core.params import Params, load_params
+from app.evals.metrics import PrecisionRecall, evaluate_nudge, precision_recall
 
 EXAMPLE_PARAMS = Path(__file__).resolve().parents[3] / "params" / "params.example.yaml"
 

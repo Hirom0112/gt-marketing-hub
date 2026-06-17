@@ -14,9 +14,9 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
-from app.evals.metrics import evaluate_doc_extraction, extraction_accuracy
 
 from app.core.params import Params, load_params
+from app.evals.metrics import evaluate_doc_extraction, extraction_accuracy
 
 EXAMPLE_PARAMS = Path(__file__).resolve().parents[3] / "params" / "params.example.yaml"
 

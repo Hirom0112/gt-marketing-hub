@@ -22,9 +22,8 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from uuid import uuid4
 
-from app.core.stage_machine import FamilyInputs, derive_stage, derive_stall_reason
-
 from app.core.params import Params, load_params
+from app.core.stage_machine import FamilyInputs, derive_stage, derive_stall_reason
 from app.data.models import AppForm, EnrollmentForms, Stage, StallReason
 
 # The committed example file is the authoritative params source for these tests.
