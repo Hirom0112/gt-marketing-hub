@@ -25,7 +25,6 @@ log), provable without mocking sockets. This module imports nothing from
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from datetime import datetime
 from typing import Any
 from uuid import UUID, uuid4
 
@@ -212,11 +211,20 @@ class SimulatedCRMAdapter(CRMAdapter):
         self.sent_log: list[SendResult] = []
         # GT Social Post mirrors recorded: (synthetic object id, post id).
         self.mirrored_log: list[tuple[str, UUID]] = []
-        # The simulated HubSpot mirror, keyed by family — rebuilt from pushes.
-        self._mirror: dict[UUID, tuple[Stage, datetime | None]] = {}
+        # The simulated HubSpot mirror, keyed by family — rebuilt from pushes. R1:
+        # the stored value is the full multi-field :class:`MirrorState` (stage +
+        # funding_state + owner + timestamp), so ``read_mirror`` feeds the §4.7
+        # multi-field deriver the same shape the live portal would.
+        self._mirror: dict[UUID, MirrorState] = {}
 
     def push_family(self, family_record: FamilyRecord) -> SyncResult:
-        """Record a family push and update the simulated mirror (never sends)."""
+        """Record a family push and update the simulated mirror (never sends).
+
+        R1: the mirror adopts every tracked field the §4.7 deriver compares —
+        stage, ``funding_state``, and the owner id (the ownership root
+        ``user_id``, stringified) — so a freshly-pushed family reads ``synced``
+        across all fields, never a spurious divergence on the un-mirrored ones.
+        """
         result = SyncResult(
             simulated=True,
             recorded_id=uuid4().hex,
@@ -224,11 +232,26 @@ class SimulatedCRMAdapter(CRMAdapter):
             stage=family_record.current_stage,
         )
         self.pushed_log.append(result)
-        self._mirror[family_record.family_id] = (
-            family_record.current_stage,
-            family_record.updated_at,
+        owner = None if family_record.user_id is None else str(family_record.user_id)
+        self._mirror[family_record.family_id] = MirrorState(
+            stage=family_record.current_stage,
+            mirror_updated_at=family_record.updated_at,
+            funding_state=family_record.funding_state,
+            owner=owner,
         )
         return result
+
+    def seed_mirror(self, family_id: UUID, mirror: MirrorState) -> None:
+        """Seed the simulated mirror for one family directly (demo/test divergence).
+
+        The push path always mirrors local exactly (⇒ ``synced``); this seam lets
+        the demo and tests stage a DELIBERATE divergence — a mirror whose stage /
+        ``funding_state`` / ``owner`` differs from the DB record — so the seam
+        endpoint exercises ``push_local`` (a DB-newer drift) and ``flag_conflict``
+        (a CRM-authoritative ``owner`` divergence, or no clear recency winner). No
+        I/O — it simply writes the in-memory mirror entry (INV-9).
+        """
+        self._mirror[family_id] = mirror
 
     def push_student(self, student: Student) -> StudentSyncResult:
         """Record a per-child push (never sends) — the v1 simulated path (A-24)."""
@@ -245,14 +268,16 @@ class SimulatedCRMAdapter(CRMAdapter):
     def read_mirror(self, family_id: UUID) -> MirrorState:
         """Return the simulated mirror for ``family_id`` as a core MirrorState.
 
-        Nothing pushed yet ⇒ an empty mirror (``stage=None``), which the §4.7
-        deriver reads as "not pushed" (an ``unsynced`` concern, not divergence).
+        R1: the stored mirror is the full multi-field :class:`MirrorState`
+        (stage + ``funding_state`` + ``owner`` + timestamp), returned as-is so the
+        §4.7 deriver compares every tracked field. Nothing pushed/seeded yet ⇒ an
+        empty mirror (all ``None``), which the deriver reads as "not pushed" (an
+        ``unsynced`` concern, not divergence).
         """
         entry = self._mirror.get(family_id)
         if entry is None:
             return MirrorState(stage=None, mirror_updated_at=None)
-        stage, mirror_updated_at = entry
-        return MirrorState(stage=stage, mirror_updated_at=mirror_updated_at)
+        return entry
 
     def send_message(self, message: dict[str, Any]) -> SendResult:
         """Record an outbound send (email/nudge) and return it. No live send."""

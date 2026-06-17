@@ -17,11 +17,12 @@ and LOGS the human-gated reconcile to the §10 observability spine (NFR-6).
     ``apply_reconcile`` returns ``applied=False`` and the seam stays ``conflict``.
     Derive-and-return per A-7: the read-only A-3 store is not mutated.
 
-The seam status source is the family's seeded ``crm_seam_status`` column (the §4.7
-derived seam; the simulated CRM mirror is push-rebuilt and empty on a fresh
-adapter, so the seeded column is the authoritative per-family seam here). For the
-reconcile we synthesize the :class:`MirrorState` that reproduces that seeded status
-deterministically, so the pure core flow runs exactly as on a live mirror.
+The seam status source is the REAL CRM mirror (R1): each endpoint calls
+``crm_adapter.read_mirror(family_id)`` and derives the §4.7 status by comparing the
+DB record to that mirror across every tracked field (stage, funding_state, owner).
+The adapter is injected via :func:`app.api.deps.get_seam_crm_adapter_dep`, so v1
+reads the SIMULATED (seeded) mirror by default and a live portal mirror only under
+``CRM_MODE=live`` (INV-9) — the deriver/reconcile flow runs identically either way.
 
 This module may import ``app.core`` / ``app.observability`` (it is the composition
 root); ``app/core/`` stays pure. No live external send is ever made here.
@@ -35,14 +36,18 @@ from uuid import UUID, uuid4
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
-from app.api.deps import get_observability_log, get_repository
+from app.adapters.hubspot.crm_adapter import CRMAdapter
+from app.api.deps import (
+    get_observability_log,
+    get_repository,
+    get_seam_crm_adapter_dep,
+)
 from app.core.seam import (
-    MirrorState,
     apply_reconcile,
     derive_seam_status,
     propose_reconcile,
 )
-from app.data.models import FamilyRecord, SeamStatus, Stage
+from app.data.models import SeamStatus
 from app.data.repository import FamilyRepository
 from app.observability.log_store import DecisionAction, ObservabilityLog
 
@@ -52,6 +57,7 @@ router = APIRouter(tags=["seam"])
 # idiomatic FastAPI style matching app/api/families.py + app/api/ai_actions.py).
 RepositoryDep = Annotated[FamilyRepository, Depends(get_repository)]
 LogDep = Annotated[ObservabilityLog, Depends(get_observability_log)]
+CRMAdapterDep = Annotated[CRMAdapter, Depends(get_seam_crm_adapter_dep)]
 
 # The audited §10 flow tag + schema version for a seam reconcile (the audit head).
 RECONCILE_FLOW = "seam_reconcile"
@@ -79,39 +85,18 @@ class ReconcileResponse(BaseModel):
     seam_status: SeamStatus
 
 
-def _mirror_for_seam(record: FamilyRecord) -> MirrorState:
-    """Synthesize the §4.7 mirror that reproduces a record's seeded seam status.
-
-    The fresh simulated CRM mirror is empty (push-rebuilt), so we reconstruct the
-    mirror the §4.7 deriver would read for the family's seeded ``crm_seam_status``,
-    keeping the pure reconcile flow faithful:
-
-    - ``conflict`` — the mirror diverges (a different tracked stage) with neither
-      side clearly newer (equal instant) ⇒ :func:`derive_seam_status` ⇒ conflict.
-    - ``unsynced`` — an empty mirror (nothing pushed) ⇒ unsynced.
-    - ``synced``   — the mirror mirrors the local stage at the same instant.
-
-    A post-condition test guards that ``derive_seam_status(record, mirror)`` equals
-    the seeded status for every seeded family (no silent drift).
-    """
-    if record.crm_seam_status is SeamStatus.CONFLICT:
-        # A tracked stage that differs from local, at an equal instant ⇒ no clear
-        # winner ⇒ a genuine §4.7 conflict.
-        diverging_stage = next(stage for stage in Stage if stage != record.current_stage)
-        return MirrorState(stage=diverging_stage, mirror_updated_at=record.updated_at)
-    if record.crm_seam_status is SeamStatus.UNSYNCED:
-        # Nothing pushed ⇒ unsynced (local changes unpushed).
-        return MirrorState(stage=None, mirror_updated_at=None)
-    # SYNCED: mirror reflects local at the same instant.
-    return MirrorState(stage=record.current_stage, mirror_updated_at=record.updated_at)
-
-
 @router.get("/seam", response_model=list[SeamRow])
-def list_non_synced(repository: RepositoryDep) -> list[SeamRow]:
-    """List families whose derived §4.7 seam status is not ``synced`` (FR-1.3/2.6)."""
+def list_non_synced(repository: RepositoryDep, crm_adapter: CRMAdapterDep) -> list[SeamRow]:
+    """List families whose derived §4.7 seam status is not ``synced`` (FR-1.3/2.6).
+
+    Derives each family's status from the REAL CRM mirror (R1): the adapter's
+    ``read_mirror`` vs the DB record, across every tracked field. No fabricated
+    mirror — the simulated (v1) adapter is seeded so this stays demoable.
+    """
     rows: list[SeamRow] = []
     for record in repository.list_families():
-        status = derive_seam_status(record, _mirror_for_seam(record))
+        mirror = crm_adapter.read_mirror(record.family_id)
+        status = derive_seam_status(record, mirror)
         if status is not SeamStatus.SYNCED:
             rows.append(SeamRow(family_id=record.family_id, seam_status=status))
     return rows
@@ -121,6 +106,7 @@ def list_non_synced(repository: RepositoryDep) -> list[SeamRow]:
 def reconcile_seam(
     family_id: UUID,
     repository: RepositoryDep,
+    crm_adapter: CRMAdapterDep,
     log: LogDep,
 ) -> ReconcileResponse:
     """Reconcile one family's seam — propose, apply (approved), log (FR-2.6; NFR-6).
@@ -135,7 +121,7 @@ def reconcile_seam(
     if joined is None:
         raise HTTPException(status_code=404, detail="family not found")
     record = joined.family
-    mirror = _mirror_for_seam(record)
+    mirror = crm_adapter.read_mirror(family_id)
 
     proposal = propose_reconcile(record, mirror)
     if proposal is None:

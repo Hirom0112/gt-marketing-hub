@@ -104,14 +104,24 @@ class _FakeHubSpot:
     same family PATCHes (upsert) rather than creating a duplicate.
     """
 
-    def __init__(self, *, existing_deal_stage_id: str | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        existing_deal_stage_id: str | None = None,
+        existing_funding_state: str | None = None,
+        existing_owner_id: str | None = None,
+    ) -> None:
         self.requests: list[httpx.Request] = []
         self._contacts: dict[str, str] = {}  # gt_synthetic_id -> object id
         self._deals: dict[str, str] = {}  # gt_synthetic_id -> object id
         self._deal_stage: dict[str, str] = {}  # object id -> dealstage id
         self._seq = 0
-        # Optional pre-seeded deal (used by read_mirror tests).
+        # Optional pre-seeded deal (used by read_mirror tests). R1: a pre-seeded
+        # gt_funding_state + hubspot_owner_id let read_mirror tests exercise the
+        # multi-field firewall (the two new PII-free scalars).
         self._preseed_stage = existing_deal_stage_id
+        self._preseed_funding_state = existing_funding_state
+        self._preseed_owner_id = existing_owner_id
 
     def _next_id(self, prefix: str) -> str:
         self._seq += 1
@@ -159,23 +169,22 @@ class _FakeHubSpot:
         # Pre-seeded deal path (read_mirror against an existing portal deal).
         if kind == "deals" and self._preseed_stage is not None:
             obj_id = self._next_id("deal")
+            props = {
+                "gt_synthetic_id": gt_id or "",
+                "dealstage": self._preseed_stage,
+                "hs_lastmodifieddate": "2026-01-02T00:00:00Z",
+                # PII the firewall must drop — a REAL-looking name.
+                "_pii_probe_name": "Margaret Realparent",
+            }
+            # R1 multi-field scalars (only when seeded) — the funding-gate enum +
+            # the HubSpot staff owner id (NOT contact PII).
+            if self._preseed_funding_state is not None:
+                props["gt_funding_state"] = self._preseed_funding_state
+            if self._preseed_owner_id is not None:
+                props["hubspot_owner_id"] = self._preseed_owner_id
             return httpx.Response(
                 200,
-                json={
-                    "total": 1,
-                    "results": [
-                        {
-                            "id": obj_id,
-                            "properties": {
-                                "gt_synthetic_id": gt_id or "",
-                                "dealstage": self._preseed_stage,
-                                "hs_lastmodifieddate": "2026-01-02T00:00:00Z",
-                                # PII the firewall must drop — a REAL-looking name.
-                                "_pii_probe_name": "Margaret Realparent",
-                            },
-                        }
-                    ],
-                },
+                json={"total": 1, "results": [{"id": obj_id, "properties": props}]},
             )
         return httpx.Response(200, json={"total": 0, "results": []})
 
@@ -516,6 +525,48 @@ def test_guard2_read_mirror_returns_only_stage_and_timestamp() -> None:
         "owner",
     }
     assert mirror.stage is Stage.APPLY
+
+
+def test_read_mirror_reads_funding_state_and_owner_multifield() -> None:
+    """R1: read_mirror lifts gt_funding_state + hubspot_owner_id into the MirrorState.
+
+    The §4.7 deriver now compares stage + funding_state + owner; the live adapter
+    must populate all three off the deal (the owner is a HubSpot staff/user id, NOT
+    contact PII — guard 2 stays intact). A mapped funding_state parses to the enum;
+    the owner is carried as the raw string.
+    """
+    from app.data.models import FundingState
+
+    crm = _crm()
+    fake = _FakeHubSpot(
+        existing_deal_stage_id=crm.stage_map["enroll"],
+        existing_funding_state=FundingState.GT_CONFIRMED.value,
+        existing_owner_id="hs-owner-4242",
+    )
+    adapter = _adapter(fake, crm=crm)
+
+    mirror = adapter.read_mirror(uuid4())
+
+    assert mirror.stage is Stage.ENROLL
+    assert mirror.funding_state is FundingState.GT_CONFIRMED
+    assert mirror.owner == "hs-owner-4242"
+
+
+def test_read_mirror_absent_multifield_props_stay_none() -> None:
+    """R1: a deal with no funding_state/owner props ⇒ those fields stay None.
+
+    Divergence detection safely skips a ``None`` mirror field, so an un-mapped /
+    un-set property must not fabricate a value — it leaves the field ``None``.
+    """
+    crm = _crm()
+    fake = _FakeHubSpot(existing_deal_stage_id=crm.stage_map["apply"])  # no funding/owner
+    adapter = _adapter(fake, crm=crm)
+
+    mirror = adapter.read_mirror(uuid4())
+
+    assert mirror.stage is Stage.APPLY
+    assert mirror.funding_state is None
+    assert mirror.owner is None
 
 
 def test_guard2_real_name_in_payload_never_surfaces(caplog: pytest.LogCaptureFixture) -> None:

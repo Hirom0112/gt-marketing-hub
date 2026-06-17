@@ -53,7 +53,7 @@ from app.adapters.hubspot.stage_map import (
 from app.core.funding_gate import award_for_tier
 from app.core.params import AwardAmounts, Crm
 from app.core.seam import MirrorState
-from app.data.models import FamilyRecord, Student
+from app.data.models import FamilyRecord, FundingState, Student
 from app.marketing.schemas.publish import PlatformDispatch, PublishRequest
 
 logger = logging.getLogger(__name__)
@@ -313,31 +313,60 @@ class LiveHubSpotCRMAdapter(CRMAdapter):
         )
 
     def read_mirror(self, family_id: UUID) -> MirrorState:
-        """Read ONLY the deal's stage + timestamp (guard 2 — inbound PII firewall).
+        """Read ONLY the deal's tracked scalars (guard 2 — inbound PII firewall).
 
-        Searches the deal by ``gt_synthetic_id`` and reads ``dealstage`` +
-        ``hs_lastmodifieddate``. A contact name/phone/real email is NEVER read,
-        returned, or logged — :class:`MirrorState` structurally carries only the
-        stage and timestamp. An unmapped/legacy stage id is caught
-        (:class:`StageMappingError`) and surfaced as a divergence-shaped mirror so
-        the §4.7 deriver flags a conflict rather than the adapter crashing.
+        Searches the deal by ``gt_synthetic_id`` and reads the four tracked-field
+        scalars the §4.7 multi-field deriver compares (R1):
+
+        - ``dealstage`` + ``hs_lastmodifieddate`` — the funnel stage + the mirror
+          timestamp (the original v1 pair);
+        - ``gt_funding_state`` — the DB-authoritative funding-gate state, when the
+          property is mapped on this portal (else ``None``, safely skipped);
+        - ``hubspot_owner_id`` — the deal's HubSpot OWNER, a staff/user id (NOT a
+          contact name/email/phone — it is safe to read; CRM-authoritative).
+
+        A contact name/phone/real email is NEVER read, returned, or logged —
+        :class:`MirrorState` structurally carries only these four PII-free fields,
+        and we lift ONLY them off the payload (never the whole dict). A field that
+        is absent stays ``None`` (divergence detection safely skips ``None``). An
+        unmapped/legacy stage id is caught (:class:`StageMappingError`) and
+        surfaced as a divergence-shaped mirror so the §4.7 deriver flags a conflict
+        rather than the adapter crashing.
         """
         gt_id = str(family_id)
-        # Read ONLY stage + timestamp — never a contact/identity property (guard 2).
+        # Read ONLY the four PII-free tracked scalars — never a contact/identity
+        # property (guard 2). ``hubspot_owner_id`` is a HubSpot staff/user id, not
+        # contact PII; ``gt_funding_state`` is the funding-gate enum value.
         match = self._search_by_gt_id(
-            _DEALS, gt_id, ["dealstage", "hs_lastmodifieddate", _GT_SYNTHETIC_ID]
+            _DEALS,
+            gt_id,
+            [
+                "dealstage",
+                "hs_lastmodifieddate",
+                "gt_funding_state",
+                "hubspot_owner_id",
+                _GT_SYNTHETIC_ID,
+            ],
         )
         if match is None:
             return MirrorState(stage=None, mirror_updated_at=None)
 
-        # Pull ONLY the two safe scalars off the payload — never the whole dict, so
-        # any stray contact PII the portal returned never enters app memory/logs.
+        # Pull ONLY the safe scalars off the payload — never the whole dict, so any
+        # stray contact PII the portal returned never enters app memory/logs.
         properties = match.get("properties", {})
         stage_id = properties.get("dealstage")
         mirror_updated_at = _parse_hs_timestamp(properties.get("hs_lastmodifieddate"))
+        funding_state = _parse_funding_state(properties.get("gt_funding_state"))
+        owner_raw = properties.get("hubspot_owner_id")
+        owner = str(owner_raw) if owner_raw else None
 
         if not stage_id:
-            return MirrorState(stage=None, mirror_updated_at=mirror_updated_at)
+            return MirrorState(
+                stage=None,
+                mirror_updated_at=mirror_updated_at,
+                funding_state=funding_state,
+                owner=owner,
+            )
 
         try:
             stage = hubspot_id_to_cockpit_stage(str(stage_id), self._crm)
@@ -349,9 +378,19 @@ class LiveHubSpotCRMAdapter(CRMAdapter):
                 "read_mirror: deal holds an unmapped HubSpot stage id; "
                 "surfacing as divergence (no crash, no PII)."
             )
-            return MirrorState(stage=None, mirror_updated_at=mirror_updated_at)
+            return MirrorState(
+                stage=None,
+                mirror_updated_at=mirror_updated_at,
+                funding_state=funding_state,
+                owner=owner,
+            )
 
-        return MirrorState(stage=stage, mirror_updated_at=mirror_updated_at)
+        return MirrorState(
+            stage=stage,
+            mirror_updated_at=mirror_updated_at,
+            funding_state=funding_state,
+            owner=owner,
+        )
 
     def send_message(self, message: dict[str, Any]) -> SendResult:
         """Create a Note (``hs_note_body`` + ``hs_timestamp``) and associate it (§7.1).
@@ -464,6 +503,23 @@ def _parse_hs_timestamp(raw: object) -> datetime | None:
     text = str(raw).replace("Z", "+00:00")
     try:
         return datetime.fromisoformat(text)
+    except ValueError:
+        return None
+
+
+def _parse_funding_state(raw: object) -> FundingState | None:
+    """Parse a HubSpot ``gt_funding_state`` value to a :class:`FundingState`.
+
+    Tolerant of a missing/blank value (returns ``None`` ⇒ the field is "not
+    tracked", which divergence detection safely skips) and of an unknown value
+    (also ``None`` rather than raising — like ``_parse_hs_timestamp``, this feeds
+    conflict detection, never a correctness gate; an unrecognized state degrades
+    to "not comparable" instead of crashing read_mirror).
+    """
+    if not raw:
+        return None
+    try:
+        return FundingState(str(raw))
     except ValueError:
         return None
 

@@ -18,7 +18,7 @@ from app.adapters.brand_memory.base import BrandMemoryStore
 from app.adapters.brand_memory.sqlite_store import SqliteBrandMemoryStore
 from app.adapters.funding.base import FundingSignalAdapter
 from app.adapters.geo_sampling.base import GeoSamplingAdapter
-from app.adapters.hubspot.crm_adapter import CRMAdapter
+from app.adapters.hubspot.crm_adapter import CRMAdapter, SimulatedCRMAdapter
 from app.adapters.media.base import MediaGenAdapter
 from app.adapters.sentiment.base import SentimentAdapter
 from app.adapters.social.base import SocialAdapter
@@ -26,6 +26,7 @@ from app.ai.client import AnthropicLLMClient, LLMClient
 from app.ai.schemas.brand import BrandRule
 from app.core.eval_gate import BrandJudge
 from app.core.params import Params, load_params
+from app.core.seam import MirrorState
 from app.core.settings import Settings
 from app.data.notes_repository import InMemoryNotesRepository, NotesRepository
 from app.data.repository import FamilyRepository, InMemoryFamilyRepository
@@ -249,12 +250,92 @@ def _build_observability_log() -> ObservabilityLog:
     return log
 
 
+def _build_simulated_crm_adapter() -> SimulatedCRMAdapter:
+    """Build the demo simulated CRM adapter, seeding its mirror per family (R1; §7.1).
+
+    The §4.7 seam compares the DB record to the CRM mirror; a fresh
+    :class:`SimulatedCRMAdapter` mirror is empty (push-rebuilt), so the demo seeds
+    it from each seeded family's ``crm_seam_status`` column — reproducing, in the
+    REAL adapter mirror, the divergence the deriver would read. This is what keeps
+    ``GET /seam`` and ``POST /seam/{id}/reconcile`` demoable end-to-end on
+    synthetic data once the seam endpoint reads the adapter (not a fabricated
+    mirror). The seeded mirror shape per seeded status:
+
+    - ``synced``   — the mirror mirrors local exactly (stage + funding_state +
+      owner at the same instant) ⇒ ``synced``.
+    - ``unsynced`` — an empty mirror (nothing pushed) ⇒ ``unsynced`` ⇒ a
+      ``push_local`` reconcile.
+    - ``conflict`` — a tracked stage that diverges from local at an equal instant
+      (no clear winner) ⇒ a genuine §4.7 ``conflict`` ⇒ ``flag_conflict``.
+
+    INV-9: pure in-memory seeding (``seed_mirror``), no network, no live call.
+    """
+    from app.data.models import SeamStatus, Stage
+
+    adapter = SimulatedCRMAdapter()
+    for record in _repository.list_families():
+        family_owner = None if record.user_id is None else str(record.user_id)
+        if record.crm_seam_status is SeamStatus.CONFLICT:
+            # A tracked stage that differs from local, at an equal instant ⇒ no
+            # clear winner ⇒ a genuine §4.7 conflict (flag_conflict).
+            diverging_stage = next(stage for stage in Stage if stage != record.current_stage)
+            adapter.seed_mirror(
+                record.family_id,
+                MirrorState(
+                    stage=diverging_stage,
+                    mirror_updated_at=record.updated_at,
+                    funding_state=record.funding_state,
+                    owner=family_owner,
+                ),
+            )
+        elif record.crm_seam_status is SeamStatus.UNSYNCED:
+            # Nothing pushed ⇒ leave the mirror empty (the default), which the
+            # deriver reads as unsynced (local changes unpushed) ⇒ push_local.
+            continue
+        else:  # SYNCED — the mirror reflects local across every tracked field.
+            adapter.seed_mirror(
+                record.family_id,
+                MirrorState(
+                    stage=record.current_stage,
+                    mirror_updated_at=record.updated_at,
+                    funding_state=record.funding_state,
+                    owner=family_owner,
+                ),
+            )
+    return adapter
+
+
 # Singleton observability log — the A-3 in-memory NFR-6 audit store. Production
 # swaps a Supabase-backed `ObservabilityLog` behind the same interface (the seam
 # pattern as `_repository`). Held in a one-slot list so `reset_observability_log`
 # can rebind it for test isolation without a `global` statement. Seeded with a
 # few approved outbounds so the demo situation bar shows a followed_up slice.
 _observability: list[ObservabilityLog] = [_build_observability_log()]
+
+# Singleton demo CRM adapter for the SIMULATE path — a SimulatedCRMAdapter whose
+# mirror is pre-seeded per family (R1) so the §4.7 seam endpoints read a populated
+# mirror and stay demoable on synthetic data. Held in a one-slot list so
+# `reset_crm_adapter` can rebind it for test isolation (the `_observability`
+# pattern). The LIVE path is unaffected: `get_crm_adapter_dep` still delegates to
+# the registry whenever the effective CRM mode is live (CRM_MODE=live + token + no
+# kill switch). Built lazily from `_simulated_crm_adapter()` so it tracks any
+# repository rebind/reseed a test performed before first use.
+_simulated_crm: list[SimulatedCRMAdapter | None] = [None]
+
+
+def _simulated_crm_adapter() -> SimulatedCRMAdapter:
+    """The seeded demo simulated CRM adapter, built once on first use (R1; §7.1)."""
+    adapter = _simulated_crm[0]
+    if adapter is None:
+        adapter = _build_simulated_crm_adapter()
+        _simulated_crm[0] = adapter
+    return adapter
+
+
+def reset_crm_adapter() -> None:
+    """Rebind the demo simulated CRM adapter to a fresh seeded one (test isolation)."""
+    _simulated_crm[0] = None
+
 
 # Singleton consolidated eval-suite verdict (FR-4.5) — the last `run_suite(...)`
 # result, or `None` until a suite has run. Held in a one-slot list (the same
@@ -463,6 +544,33 @@ def get_crm_adapter_dep() -> CRMAdapter:
     Delegates to the §7 registry (v1 ⇒ a simulated recorder; live ⇒ fail-loud).
     Tests override this with a known `SimulatedCRMAdapter` to inspect `sent_log`.
     """
+    return registry.get_crm_adapter()
+
+
+def get_seam_crm_adapter_dep() -> CRMAdapter:
+    """FastAPI dependency yielding the CRM adapter the §4.7 SEAM endpoints read (R1).
+
+    The seam endpoints (``GET /seam`` + ``POST /seam/{id}/reconcile``) reconcile
+    the DB record against the CRM mirror, so they need a mirror with real
+    multi-field data — not the fresh, empty recorder a per-request
+    ``registry.get_crm_adapter()`` hands back (its mirror is push-rebuilt and so
+    starts empty every request). The §7 registry owns the simulate-vs-live
+    precedence (:func:`app.adapters.registry.effective_crm_mode`):
+
+    - ``simulate`` (the v1 default, or a kill-switched live) ⇒ the process-wide
+      SEEDED demo :class:`SimulatedCRMAdapter` (mirror pre-populated per family,
+      R1) so the seam stays demoable on synthetic data.
+    - ``live`` ⇒ delegate to ``registry.get_crm_adapter()`` (the live HubSpot
+      adapter, or its fail-loud misconfig) — the seam then reconciles DB truth
+      against the real portal mirror.
+
+    Other routers (enrollment push, ai_actions send, publish) keep
+    :func:`get_crm_adapter_dep` unchanged — their fresh-per-request recorder is
+    correct for a write-then-read in one request; only the seam needs the seeded,
+    persistent mirror. Tests override this with their own seeded adapter.
+    """
+    if registry.effective_crm_mode(_settings) == "simulate":
+        return _simulated_crm_adapter()
     return registry.get_crm_adapter()
 
 
