@@ -730,13 +730,15 @@ def test_sales_agent_and_assigned_rep() -> None:
     ), "assigned_rep_id must NOT be defined as a reuse of user_id (R1: distinct columns)"
 
     # --- deterministic 2-agent seed (rank 1 closer, rank 2 setter) ---
-    inserts = re.findall(r"INSERT\s+INTO\s+sales_agent\b", sql, re.IGNORECASE)
-    rank_values = re.findall(r"\brank\b", sql, re.IGNORECASE)
     assert re.search(r"INSERT\s+INTO\s+sales_agent\b", sql, re.IGNORECASE), (
         "0013 must seed sales_agent rows"
     )
-    assert re.search(r"\bcloser\b", sql, re.IGNORECASE), "seed must include the closer tier (rank 1)"
-    assert re.search(r"\bsetter\b", sql, re.IGNORECASE), "seed must include the setter tier (rank 2)"
+    assert re.search(r"\bcloser\b", sql, re.IGNORECASE), (
+        "seed must include the closer tier (rank 1)"
+    )
+    assert re.search(r"\bsetter\b", sql, re.IGNORECASE), (
+        "seed must include the setter tier (rank 2)"
+    )
     # Two demo agents: either two INSERT statements or a multi-row VALUES with two
     # rank literals (1 and 2). Assert both ranks are present.
     assert re.search(r"\b1\b", sql), "seed must include rank 1 (the closer)"
