@@ -66,6 +66,25 @@ files = ["app"]
 module = ["anthropic", "anthropic.*"]
 ignore_missing_imports = true
 
+# `mcp` is an OPTIONAL transport-only dependency (M6 coworker; ASSUMPTIONS A-33 —
+# NOT in the runtime dep set; import-guarded in app/coworker/mcp_server.py). The
+# coworker CORE is dependency-free and fully gate-tested; the MCP wrapper is glue.
+# mypy must pass whether or not the SDK is installed: absent ⇒ this suppresses
+# import-not-found (no inline ignore to go stale under strict's warn_unused_ignores).
+[[tool.mypy.overrides]]
+module = ["mcp", "mcp.*"]
+ignore_missing_imports = true
+
+# The import-guarded MCP wrapper itself: its tool callables are decorated by the
+# optional, untyped FastMCP SDK (untyped-decorator) and rebind `FastMCP = None` on
+# the absent-SDK branch. It is thin glue around the tested core (A-33), so strict
+# is relaxed on this ONE module — the core (app/coworker/core.py) stays fully strict.
+[[tool.mypy.overrides]]
+module = ["app.coworker.mcp_server"]
+disallow_untyped_decorators = false
+allow_untyped_defs = true
+warn_unused_ignores = false
+
 # ---------------------------------------------------------------------------
 # pytest (TECH_STACK.md §3.2).
 # ---------------------------------------------------------------------------
