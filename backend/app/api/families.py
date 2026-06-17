@@ -48,6 +48,7 @@ from app.api.schemas import (
 )
 from app.core.contact_log import last_contact_at
 from app.core.contact_status import ContactStatus, derive_contact_status
+from app.core.conversion import ConversionScore, ConversionSignals, conversion_likelihood
 from app.core.family_record import assemble_deal_view
 from app.core.params import Params
 from app.core.recovery_state import (
@@ -138,6 +139,32 @@ def _work_queue_family(joined: JoinedFamily, params: Params) -> WorkQueueFamily:
         num_children=num_children,
         funding_type=joined.family.funding_type,
     )
+
+
+def _conversion_for(joined: JoinedFamily, params: Params, *, now: datetime) -> ConversionScore:
+    """Score a joined family's conversion likelihood (DH-1) for the deal view.
+
+    Projects the family's already-present signals into :class:`ConversionSignals`
+    and runs the pure :func:`conversion_likelihood` scorer. The ``depth`` dimension
+    REUSES the work-queue ``recoverability`` term (funnel depth) — built from the
+    same :func:`_work_queue_family` projection and scored with the API-layer ``now``
+    — so DH-1 invents NO second funnel/depth score. The neighborhood area LABEL and
+    self-reported income come off the joined lead / app_form (aggregate only —
+    P-4 / INV-6); funding type off the spine. Composed HERE (not in the pure
+    projection) because the depth term needs ``now``, which the core never touches.
+    """
+    depth = recoverability(_work_queue_family(joined, params), params, now=now)
+    funding_type = joined.family.funding_type
+    signals = ConversionSignals(
+        neighborhood=joined.lead.neighborhood if joined.lead else "Unspecified",
+        self_reported_income=joined.app_form.self_reported_income if joined.app_form else None,
+        num_children=joined.lead.num_children if joined.lead else 1,
+        # The scorer reads the funding-type TOKEN (the StrEnum value) so it stays
+        # decoupled from the enum import (core purity); None ⇒ default affinity.
+        funding_type=funding_type.value if funding_type is not None else None,
+        depth=depth,
+    )
+    return conversion_likelihood(signals, params)
 
 
 def _work_queue_student(joined: JoinedStudent, params: Params) -> WorkQueueStudent:
@@ -494,11 +521,19 @@ def get_family(
     now = datetime.now(UTC)
     contact_status, contacted_at = _recency_for(joined, log=log, now=now, params=params)
     recovery_state = _recovery_state_for(joined, log=log, now=now, params=params)
+    # Conversion likelihood (DH-1) — replaces the MAP signal in the deal view. The
+    # depth dimension reuses the recoverability term, so it is composed here (the
+    # composition root), not in the pure projection (it needs ``now``).
+    conversion = _conversion_for(joined, params, now=now)
     deal_view = assemble_deal_view(joined).model_copy(
         update={
             "contact_status": contact_status,
             "last_contact_at": contacted_at,
             "recovery_state": recovery_state,
+            "conversion_score": conversion.score,
+            "conversion_band": conversion.band,
+            "conversion_top_factor": conversion.top_factor,
+            "conversion_top_factor_label": conversion.top_factor_label,
         }
     )
     return FamilyDetailResponse(

@@ -871,10 +871,97 @@ class Security(_StrictModel):
         return self
 
 
+class ConversionWeights(_StrictModel):
+    """conversion.weights — the five conversion-likelihood dimension weights (DH-1).
+
+    Each weight multiplies a [0,1] dimension sub-score; together they form the
+    conversion-likelihood score. They MUST partition to 1.0 so the consumer can
+    trust the score stays in [0,1] — a drifted set fails to load (INV-11, §4.1),
+    mirroring :class:`CreatorScoringFit`. The five dimensions:
+
+    * ``affluence`` — neighborhood-affluence weight (richer area ⇒ more likely to
+      afford tuition; an AGGREGATE area label only — P-4/INV-6).
+    * ``income`` — self-reported family income weight (higher ⇒ higher).
+    * ``children`` — number-of-children weight (more children ⇒ more commitment/value).
+    * ``funding`` — funding-type weight (a funded voucher path ⇒ money is lined up).
+    * ``depth`` — application-depth weight (the REUSED ``recoverability`` term —
+      deeper into the funnel ⇒ higher; NOT a new funnel score).
+    """
+
+    affluence: float
+    income: float
+    children: float
+    funding: float
+    depth: float
+
+    @model_validator(mode="after")
+    def _weights_sum_to_one(self) -> ConversionWeights:
+        total = self.affluence + self.income + self.children + self.funding + self.depth
+        if abs(total - 1.0) > 1e-9:
+            raise ValueError(f"conversion.weights must sum to 1.0, got {total!r}")
+        return self
+
+
+class Conversion(_StrictModel):
+    """DH-1 conversion-likelihood signal tunables (ARCHITECTURE.md §8; INV-11).
+
+    The single home for every magic number the conversion-likelihood scorer
+    (``core/conversion.py``) needs — it replaces the meaningless "MAP signal" in
+    the deal view with a deterministic, params-weighted "who is most likely to
+    enroll, and the top contributing factor" signal:
+
+    * ``weights`` — the five dimension weights (partition to 1.0).
+    * ``band_high_cutoff`` / ``band_med_cutoff`` — score thresholds for the coarse
+      band: ``score >= band_high_cutoff`` ⇒ "High", ``>= band_med_cutoff`` ⇒ "Med",
+      else "Low" (``band_high_cutoff`` MUST exceed ``band_med_cutoff``).
+    * ``neighborhood_affluence`` — the coarse AGGREGATE-area-label → [0,1] affluence
+      table (P-4/INV-6: an area label, never precise minor geo);
+      ``neighborhood_affluence_default`` is the affluence for an UNKNOWN label.
+    * ``income_reference`` — the self-reported income (whole USD) that maps to ~1.0
+      affluence-of-income (``income/reference`` clamped to [0,1]).
+    * ``income_neutral`` — the NEUTRAL [0,1] contribution used when income is
+      ``None`` (not provided): missing income is UNKNOWN, never treated as low/zero.
+    * ``num_children_cap`` — the child count that maps to 1.0 (``num_children/cap``
+      clamped to [0,1]).
+    * ``funding_affinity`` — funding-type token → [0,1] close affinity (a funded
+      voucher path ⇒ money is lined up ⇒ higher); ``funding_affinity_default`` is
+      the affinity for an unknown/None funding type.
+    """
+
+    weights: ConversionWeights
+    band_high_cutoff: float
+    band_med_cutoff: float
+    neighborhood_affluence: dict[str, float]
+    neighborhood_affluence_default: float
+    income_reference: float
+    income_neutral: float
+    num_children_cap: int
+    funding_affinity: dict[str, float]
+    funding_affinity_default: float
+
+    @model_validator(mode="after")
+    def _bounds_valid(self) -> Conversion:
+        if not self.band_med_cutoff < self.band_high_cutoff:
+            raise ValueError(
+                "conversion.band_high_cutoff must exceed band_med_cutoff, got "
+                f"{self.band_high_cutoff!r} <= {self.band_med_cutoff!r}"
+            )
+        if self.num_children_cap < 1:
+            raise ValueError(
+                f"conversion.num_children_cap must be >= 1, got {self.num_children_cap!r}"
+            )
+        if self.income_reference <= 0:
+            raise ValueError(
+                f"conversion.income_reference must be > 0, got {self.income_reference!r}"
+            )
+        return self
+
+
 class Params(_StrictModel):
     """Typed view of the whole params file — one field per §8 top-level block."""
 
     work_queue: WorkQueue
+    conversion: Conversion
     enrollment: Enrollment
     assignment: Assignment
     sis: Sis

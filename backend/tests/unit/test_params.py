@@ -20,6 +20,7 @@ from pydantic import ValidationError
 
 from app.core.params import (
     ContactWindows,
+    ConversionWeights,
     CreatorScoringFit,
     MessageSafetyGrounding,
     PostedGallery,
@@ -380,6 +381,69 @@ def test_posted_gallery_window_must_be_positive() -> None:
     """A non-positive posted_within_days fails to load (drift fails the build, INV-11)."""
     with pytest.raises(ValidationError):
         PostedGallery(value_min=1.0, value_max=100.0, posted_within_days=0)
+
+
+def test_params_loads_conversion_block() -> None:
+    """The DH-1 `conversion:` block parses from the committed example (INV-11).
+
+    The conversion-likelihood scorer's five dimension WEIGHTS, band cutoffs, the
+    neighborhood→affluence table (+ its default), the income reference + neutral,
+    and the child-count cap are the single home for that signal's tunables; the
+    scorer reads them from here, never a code literal. This asserts the block
+    loads, the committed values are present, and the five weights partition to 1.0.
+    """
+    params = load_params(EXAMPLE_PARAMS)
+    conversion = params.conversion
+
+    # Five dimension weights — MUST sum to 1.0 (the value term partition guard).
+    w = conversion.weights
+    assert (w.affluence, w.income, w.children, w.funding, w.depth) == (
+        0.20,
+        0.20,
+        0.15,
+        0.25,
+        0.20,
+    )
+    assert w.affluence + w.income + w.children + w.funding + w.depth == pytest.approx(1.0)
+
+    # Band cutoffs (High >= high_cutoff, Med >= med_cutoff, else Low).
+    assert conversion.band_high_cutoff == 0.65
+    assert conversion.band_med_cutoff == 0.40
+
+    # Neighborhood→affluence table (aggregate area labels only — P-4/INV-6) + default.
+    assert conversion.neighborhood_affluence["Highland Park"] == 0.95
+    assert conversion.neighborhood_affluence["Riverside"] == 0.60
+    assert conversion.neighborhood_affluence["Lakeview"] == 0.60
+    assert conversion.neighborhood_affluence["Eastgate"] == 0.30
+    assert conversion.neighborhood_affluence_default == 0.50
+
+    # Income reference + the NEUTRAL value used when income is None.
+    assert conversion.income_reference == 200_000
+    assert conversion.income_neutral == 0.50
+
+    # Child-count normalizer + the funding-type affinity table (+ default).
+    assert conversion.num_children_cap == 5
+    assert conversion.funding_affinity["tefa_standard"] == 0.90
+    assert conversion.funding_affinity["tefa_disability"] == 0.90
+    assert conversion.funding_affinity["tefa_homeschool"] == 0.70
+    assert conversion.funding_affinity["self_pay"] == 0.50
+    assert conversion.funding_affinity_default == 0.50
+
+
+def test_conversion_weights_must_sum_to_one() -> None:
+    """A conversion-weight set that does not sum to 1.0 fails to load (INV-11, §4.1).
+
+    The five dimension weights MUST partition to 1.0 so the consumer can trust the
+    conversion score stays in [0,1]; a drifted set raises at load.
+    """
+    with pytest.raises(ValidationError):
+        ConversionWeights(
+            affluence=0.20,
+            income=0.20,
+            children=0.15,
+            funding=0.25,
+            depth=0.30,  # sums to 1.10 — drift
+        )
 
 
 def test_creator_scoring_fit_weights_must_sum_to_one() -> None:

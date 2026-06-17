@@ -60,8 +60,21 @@ class DealView(BaseModel):
     attribution_utm: dict[str, object]
 
     # Academic signals (§4.3 app_form) — null until an application exists.
+    # ``map_score`` is RETAINED on the projection (DH-2 / the AI draft pack still
+    # read it) but the DEAL VIEW now presents conversion likelihood instead (DH-1).
     map_score: float | None
     academic_signals: dict[str, object]
+
+    # Conversion-likelihood signal (DH-1) — the deal view's "who is most likely to
+    # enroll + the top contributing factor", REPLACING the meaningless MAP signal.
+    # Composed in the API layer (NOT here): the ``depth`` dimension reuses the
+    # ``recoverability`` term, whose ``now`` the pure core never touches. So
+    # ``assemble_deal_view`` leaves these None; ``api/families.py`` fills them via
+    # ``model_copy`` from the family's signals + params (mirrors contact_status).
+    conversion_score: float | None = None
+    conversion_band: str | None = None
+    conversion_top_factor: str | None = None
+    conversion_top_factor_label: str | None = None
 
     # Drop-off signal (S9 W2; FR-2.2) — PURE, projected from the source rows:
     # how far the application got (``completion_pct``), the six-form gauntlet

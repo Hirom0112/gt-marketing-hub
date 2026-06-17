@@ -17,6 +17,31 @@ work_queue:                 # FR-2.5 — score = w_recoverability·recoverabilit
   freshness_window_days: 30         # S12 — recoverable_now freshness decays to floor over this window
   freshness_floor: 0.15             # S12 — minimum freshness once past the window (never 0 ⇒ stays rankable)
 
+conversion:                 # DH-1 — deterministic conversion-likelihood signal (replaces the "MAP signal" in the deal view): who is most likely to enroll + the top contributing factor. score = Σ weight·dimension, each dimension ∈ [0,1] ⇒ score ∈ [0,1].
+  weights:                  # the five dimension weights — MUST sum to 1.0 (value-term partition guard, INV-11)
+    affluence: 0.20           # neighborhood affluence (richer area ⇒ more likely to afford tuition) — aggregate area LABEL only (P-4/INV-6)
+    income: 0.20              # self-reported family income (higher ⇒ higher)
+    children: 0.15            # number of children (more ⇒ more commitment/value)
+    funding: 0.25             # funding type (a funded voucher path ⇒ money lined up ⇒ likelier to close) — the heaviest single dimension
+    depth: 0.20               # application depth — the REUSED recoverability term (funnel depth), NOT a new funnel score
+  band_high_cutoff: 0.65    # score >= this ⇒ "High"
+  band_med_cutoff: 0.40     # score >= this (and < high) ⇒ "Med"; else "Low"
+  neighborhood_affluence:   # coarse AGGREGATE area label → [0,1] affluence (P-4/INV-6: a district label, NEVER precise minor geo)
+    Highland Park: 0.95       # affluent district (HIGH)
+    Riverside: 0.60           # middle district (MED)
+    Lakeview: 0.60            # mixed district (MED)
+    Eastgate: 0.30            # modest district (LOW)
+  neighborhood_affluence_default: 0.50   # affluence for an UNKNOWN/unmapped label (neutral, not penalized)
+  income_reference: 200000  # self-reported income (whole USD) that maps to ~1.0; income/reference clamped to [0,1]
+  income_neutral: 0.50      # the NEUTRAL [0,1] income contribution when income is None (UNKNOWN — never treated as low/zero)
+  num_children_cap: 5       # child count mapping to 1.0; num_children/cap clamped to [0,1] (mirrors the Interest form "1-5+")
+  funding_affinity:         # funding-type token → [0,1] close affinity (money lined up ⇒ likelier to close)
+    tefa_standard: 0.90       # funded standard voucher
+    tefa_disability: 0.90     # funded disability-IEP voucher
+    tefa_homeschool: 0.70     # funded homeschool voucher (smaller award)
+    self_pay: 0.50            # no voucher — pays directly
+  funding_affinity_default: 0.50   # affinity for an unknown / None funding type (neutral)
+
 enrollment:                 # S9 — enrollment-depth deterministic core
   contact:                  # contact-recency color thresholds (S9 W1); age measured from created_at
     grey_window_days: 3       # uncontacted & age <= this  => fresh (grey)

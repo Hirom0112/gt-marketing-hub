@@ -8,10 +8,11 @@ import SeamDot, { type SeamStatus } from './enrollment/SeamDot';
 import { fundingLabel } from './enrollment/format';
 
 // Deal view (FR-2.2). Fetches GET /families/{id} and surfaces the deal_view
-// summary: stall reason, funding type, MAP signal (map_score), attribution
-// source, and CRM seam status. Native fetch only (≤12-dep budget). Read-only
-// (INV-2). Interest-stage families have no app_form, so map_score / stall_reason
-// can be null — those render as an em-dash placeholder, never literal "null".
+// summary: stall reason, funding type, conversion likelihood (DH-1 — REPLACES the
+// old MAP signal: band + score + top contributing factor), attribution source, and
+// CRM seam status. Native fetch only (≤12-dep budget). Read-only (INV-2). Interest-
+// stage families have no app_form, so stall_reason / conversion fields can be null
+// — those render as an em-dash placeholder, never literal "null".
 // S8 Wave 2 re-skin: matches the reference deal panel — a name header with a
 // funding chip, a "Why they haven't converted" stall callout in a signal wash,
 // and a two-column field grid built from the Field primitive.
@@ -21,7 +22,12 @@ interface DealViewData {
   display_name: string;
   stall_reason: string | null;
   funding_type: string;
-  map_score: number | null;
+  // DH-1 conversion-likelihood signal — REPLACES the old `map_score` MAP signal:
+  // who is most likely to enroll (a [0,1] score + a coarse band) and the top
+  // contributing factor, surfaced "to use it to close". Composed in the API layer.
+  conversion_score?: number | null;
+  conversion_band?: string | null;
+  conversion_top_factor_label?: string | null;
   attribution_source: string;
   crm_seam_status: string;
   // S9 Wave 4 drop-off + recency projection (api-composed; may be null for an
@@ -138,6 +144,70 @@ function DealField({
       >
         {value}
       </div>
+    </div>
+  );
+}
+
+// DH-1 conversion-likelihood tile — REPLACES the old "MAP signal" tile in the
+// deal-view field grid. Shows the coarse band (High/Med/Low) with a tone-coded
+// dot, the [0,1] score as a percentage, and the single top contributing factor
+// (e.g. "Funding lined up") so the operator sees who is most likely to enroll and
+// WHY — the close signal. Mirrors the DealField look. Read-only (INV-2).
+function ConversionField({
+  band,
+  score,
+  topFactorLabel,
+}: {
+  band: string | null;
+  score: number | null;
+  topFactorLabel: string | null;
+}): JSX.Element {
+  // Band → tone color (reuses the signal palette). Unknown band ⇒ neutral ink.
+  const tone =
+    band === 'High'
+      ? 'var(--ok, #1a7f37)'
+      : band === 'Med'
+        ? 'var(--warn, #9a6700)'
+        : band === 'Low'
+          ? 'var(--signal-ink, #6b7280)'
+          : 'var(--ink)';
+  const pct = score === null ? null : Math.round(score * 100);
+  const headline =
+    band === null ? PLACEHOLDER : pct === null ? band : `${band} · ${pct}%`;
+  return (
+    <div
+      style={{
+        border: '1px solid var(--line)',
+        borderRadius: 'var(--r-sm)',
+        padding: '6px 9px',
+        background: 'var(--surface-2)',
+      }}
+    >
+      <div className="lab">Conversion likelihood</div>
+      <div
+        className="mono"
+        data-testid="deal-conversion"
+        style={{
+          fontSize: 'var(--fs-sm)',
+          marginTop: 2,
+          color: tone,
+          fontWeight: 600,
+        }}
+      >
+        {headline}
+      </div>
+      {topFactorLabel != null && (
+        <div
+          data-testid="deal-conversion-factor"
+          style={{
+            fontSize: 'var(--fs-xs, 11px)',
+            marginTop: 2,
+            color: 'var(--signal-ink, #6b7280)',
+          }}
+        >
+          Top factor: {topFactorLabel}
+        </div>
+      )}
     </div>
   );
 }
@@ -462,10 +532,10 @@ export default function DealView({
           value={fundingDisplay}
           testId="deal-funding-type"
         />
-        <DealField
-          label="MAP signal"
-          value={deal.map_score === null ? PLACEHOLDER : String(deal.map_score)}
-          testId="deal-map-score"
+        <ConversionField
+          band={deal.conversion_band ?? null}
+          score={deal.conversion_score ?? null}
+          topFactorLabel={deal.conversion_top_factor_label ?? null}
         />
         <DealField
           label="Attribution source"

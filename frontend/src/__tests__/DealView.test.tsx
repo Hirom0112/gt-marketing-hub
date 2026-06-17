@@ -4,8 +4,9 @@ import DealView from '../DealView';
 
 // Acceptance test (CLAUDE §4.2). The deal view (FR-2.2) fetches GET
 // /families/{id} and surfaces the deal_view fields: stall reason, funding type,
-// MAP signal (map_score), attribution source, and CRM seam status. Native fetch
-// only (≤12-dep budget). Read-only (INV-2).
+// conversion likelihood (DH-1 — band + score + top contributing factor, REPLACING
+// the old MAP signal), attribution source, and CRM seam status. Native fetch only
+// (≤12-dep budget). Read-only (INV-2).
 
 // A funded, enrolled family with a full deal_view.
 const ENROLLED_PAYLOAD = {
@@ -13,7 +14,10 @@ const ENROLLED_PAYLOAD = {
     display_name: 'The Rivera Family',
     stall_reason: 'Awaiting funding confirmation',
     funding_type: 'tefa_standard',
-    map_score: 0.82,
+    conversion_score: 0.79,
+    conversion_band: 'High',
+    conversion_top_factor: 'funding',
+    conversion_top_factor_label: 'Funding lined up',
     attribution_source: 'Paid Search',
     crm_seam_status: 'synced',
     // Application submitted (100%), now stalled 2/6 into the ENROLLMENT packet.
@@ -36,7 +40,10 @@ const APPLICATION_PAYLOAD = {
     display_name: 'The Vance Family',
     stall_reason: 'Application incomplete',
     funding_type: 'self_pay',
-    map_score: null,
+    conversion_score: 0.42,
+    conversion_band: 'Med',
+    conversion_top_factor: 'funding',
+    conversion_top_factor_label: 'Funding lined up',
     attribution_source: 'Referral',
     crm_seam_status: 'unsynced',
     completion_pct: 60,
@@ -51,13 +58,16 @@ const APPLICATION_PAYLOAD = {
   app_form: {},
 };
 
-// An interest-stage family: no app_form yet ⇒ null map_score / null stall.
+// An interest-stage family: no app_form yet ⇒ null conversion / null stall.
 const INTEREST_PAYLOAD = {
   deal_view: {
     display_name: 'The Okafor Family',
     stall_reason: null,
     funding_type: 'self_pay',
-    map_score: null,
+    conversion_score: null,
+    conversion_band: null,
+    conversion_top_factor: null,
+    conversion_top_factor_label: null,
     attribution_source: 'Referral',
     crm_seam_status: 'unsynced',
   },
@@ -97,7 +107,16 @@ describe('DealView', () => {
     expect(screen.getByTestId('deal-funding-type')).toHaveTextContent(
       'Texas voucher',
     );
-    expect(screen.getByTestId('deal-map-score')).toHaveTextContent('0.82');
+    // DH-1 conversion-likelihood tile (REPLACES the old MAP signal): the band +
+    // score percentage and the top contributing factor — and the "MAP signal"
+    // label is GONE.
+    expect(screen.getByTestId('deal-conversion')).toHaveTextContent('High');
+    expect(screen.getByTestId('deal-conversion')).toHaveTextContent('79%');
+    expect(screen.getByTestId('deal-conversion-factor')).toHaveTextContent(
+      'Funding lined up',
+    );
+    expect(screen.queryByText('MAP signal')).toBeNull();
+    expect(screen.queryByTestId('deal-map-score')).toBeNull();
     expect(screen.getByTestId('deal-attribution')).toHaveTextContent(
       'Paid Search',
     );
@@ -158,14 +177,15 @@ describe('DealView', () => {
     expect(screen.queryByTestId('deal-next-form')).toBeNull();
   });
 
-  it('handles a null map_score and null stall_reason gracefully', async () => {
+  it('handles a null conversion signal and null stall_reason gracefully', async () => {
     vi.unstubAllGlobals();
     mockFetch(INTEREST_PAYLOAD);
     render(<DealView familyId="fam-456" />);
 
     expect(await screen.findByText('The Okafor Family')).toBeInTheDocument();
-    // No app_form ⇒ no MAP score yet; shown as a dash placeholder, not "null".
-    expect(screen.getByTestId('deal-map-score')).toHaveTextContent('—');
+    // No conversion band yet ⇒ a dash placeholder, not "null"; no top-factor line.
+    expect(screen.getByTestId('deal-conversion')).toHaveTextContent('—');
+    expect(screen.queryByTestId('deal-conversion-factor')).toBeNull();
     expect(screen.getByTestId('deal-stall-reason')).toHaveTextContent('—');
     expect(screen.getByTestId('deal-funding-type')).toHaveTextContent(
       'Self-pay',
