@@ -22,6 +22,7 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
+from datetime import datetime
 from uuid import UUID
 
 from app.core.pipeline import pipeline_counts as core_pipeline_counts
@@ -134,6 +135,33 @@ class FamilyRepository(ABC):
         """Per-stage tally over ``family_record.current_stage`` (FR-2.1)."""
         raise NotImplementedError
 
+    # ----------------------------------------------------------- write seam
+    # The reconcile flow (FR-2.6) PERSISTS its result through these write methods
+    # (TODO.md R1). The deterministic core still owns the *derivation* (INV-2);
+    # these only commit the already-approved, already-derived state. A production
+    # impl issues a PostgREST PATCH via service_role (server-only — INV-5 /
+    # D-RLS-4). Both writes are idempotent: re-applying the same value is a no-op.
+
+    @abstractmethod
+    def mark_synced(self, family_id: UUID, synced_at: datetime) -> None:
+        """Persist ``crm_synced_at`` for one family (the push_local/accept commit).
+
+        Advances the seam-freshness marker so the family's derived §4.7 status
+        reads ``synced`` on the next read. An unknown ``family_id`` is a silent
+        no-op (nothing to write).
+        """
+        raise NotImplementedError
+
+    @abstractmethod
+    def apply_field(self, family_id: UUID, field: str, value: object) -> None:
+        """Persist one adopted tracked field for the ACCEPT_MIRROR resolution.
+
+        Overwrites ``field`` (e.g. ``current_stage`` / ``funding_state``) on the
+        stored record with the mirror-adopted ``value``. An unknown ``family_id``
+        is a silent no-op.
+        """
+        raise NotImplementedError
+
 
 class InMemoryFamilyRepository(FamilyRepository):
     """In-memory impl seeded once from ``synthetic.generate`` (A-3).
@@ -243,3 +271,29 @@ class InMemoryFamilyRepository(FamilyRepository):
         # in `core/pipeline.py` so it is defined once. A SQL-backed store maps the
         # same contract to a `GROUP BY current_stage`.
         return core_pipeline_counts(self._families)
+
+    # ----------------------------------------------------------- write seam
+    def _replace(self, family_id: UUID, **update: object) -> None:
+        """Write a field-update onto the stored record in BOTH the list and index.
+
+        FamilyRecord is replaced via ``model_copy`` (not mutated in place) so the
+        list and the O(1) index stay pointing at the SAME refreshed object — one
+        store, no divergence. An unknown id is a silent no-op.
+        """
+        current = self._family_index.get(family_id)
+        if current is None:
+            return
+        updated = current.model_copy(update=update)
+        self._family_index[family_id] = updated
+        for i, family in enumerate(self._families):
+            if family.family_id == family_id:
+                self._families[i] = updated
+                break
+
+    def mark_synced(self, family_id: UUID, synced_at: datetime) -> None:
+        # Commit the push_local/accept freshness marker onto the in-mem record.
+        self._replace(family_id, crm_synced_at=synced_at)
+
+    def apply_field(self, family_id: UUID, field: str, value: object) -> None:
+        # Adopt one mirror field (ACCEPT_MIRROR) onto the in-mem record.
+        self._replace(family_id, **{field: value})

@@ -43,11 +43,12 @@ from app.api.deps import (
     get_seam_crm_adapter_dep,
 )
 from app.core.seam import (
+    ReconcileDirection,
     apply_reconcile,
     derive_seam_status,
     propose_reconcile,
 )
-from app.data.models import SeamStatus
+from app.data.models import FamilyRecord, SeamStatus
 from app.data.repository import FamilyRepository
 from app.observability.log_store import DecisionAction, ObservabilityLog
 
@@ -64,6 +65,22 @@ RECONCILE_FLOW = "seam_reconcile"
 RECONCILE_SCHEMA_VERSION = "1"
 # The audited reviewer identity. v1 has no auth; the operator is a fixed seam (A-3).
 DEFAULT_HUMAN = "operator"
+
+
+def _local_advanced(record: FamilyRecord) -> bool:
+    """The idempotency fence — true iff local ``updated_at`` is unpushed (§4.7).
+
+    Reuses the seam freshness rule (``synced`` iff ``crm_synced_at >= updated_at``)
+    inverted: a write/re-push is warranted only when local ``updated_at`` strictly
+    advanced past the stored ``crm_synced_at`` (or nothing was ever synced). An
+    already-synced record returns ``False`` so the reconcile never re-pushes —
+    no write loops.
+    """
+    updated_at = record.updated_at
+    if updated_at is None:
+        return False
+    synced_at = record.crm_synced_at
+    return synced_at is None or synced_at < updated_at
 
 
 class SeamRow(BaseModel):
@@ -109,13 +126,21 @@ def reconcile_seam(
     crm_adapter: CRMAdapterDep,
     log: LogDep,
 ) -> ReconcileResponse:
-    """Reconcile one family's seam — propose, apply (approved), log (FR-2.6; NFR-6).
+    """Reconcile one family's seam — propose, apply, PERSIST, log (FR-2.6; NFR-6).
 
     404 on an unknown family. Already-synced ⇒ a no-op (``applied=False``,
     ``synced``). Otherwise propose → apply: ``push_local`` syncs; a flagged
-    ``conflict`` stays conflict (``applied=False``, INV-4 fail-closed). The
-    proposal + the approve decision are LOGGED to the §10 spine (NFR-6).
-    Derive-and-return per A-7: the read-only store is not mutated.
+    ``conflict`` stays conflict (``applied=False``, INV-4 fail-closed).
+
+    On an APPLIED ``push_local`` / ``accept_mirror`` the result is now PERSISTED
+    through the store seam (TODO.md R1): the adopted field (on accept) and the
+    advanced ``crm_synced_at`` are written back via the repository, then the
+    family is re-pushed through the CRM adapter (simulated v1 — INV-9). An
+    idempotency fence reuses the §4.7 freshness rule — the family is persisted/
+    re-pushed only when local ``updated_at`` strictly advanced past the stored
+    ``crm_synced_at`` (an already-synced record never re-pushes, so no write
+    loops). A flagged ``conflict`` persists NOTHING — fail-closed, human-gated.
+    The proposal + the approve decision are LOGGED to the §10 spine (NFR-6).
     """
     joined = repository.get_family(family_id)
     if joined is None:
@@ -129,6 +154,23 @@ def reconcile_seam(
         return ReconcileResponse(family_id=family_id, applied=False, seam_status=SeamStatus.SYNCED)
 
     result = apply_reconcile(record, proposal)
+
+    # PERSIST the approved result through the store seam (TODO.md R1). Only an
+    # APPLIED push_local/accept_mirror writes; a flagged conflict fails closed
+    # (applied=False) and persists nothing. The idempotency fence reuses the §4.7
+    # freshness rule: write only when local `updated_at` strictly advanced past
+    # the stored `crm_synced_at` — an already-synced record never re-pushes.
+    if result.applied and _local_advanced(record):
+        if proposal.direction is ReconcileDirection.ACCEPT_MIRROR:
+            # Adopt the mirror's tracked fields onto the stored record first, then
+            # mark synced (the post-reconcile record already reflects both).
+            repository.apply_field(family_id, "current_stage", result.record.current_stage)
+            repository.apply_field(family_id, "funding_state", result.record.funding_state)
+        synced_at = result.record.crm_synced_at
+        if synced_at is not None:
+            repository.mark_synced(family_id, synced_at)
+        # Re-push the synced record through the CRM adapter (simulated v1 — INV-9).
+        crm_adapter.push_family(result.record)
 
     # LOG the human-gated reconcile (NFR-6, M-2): the proposal, then the approve
     # decision. A flagged conflict is logged too — the audit records the flag even

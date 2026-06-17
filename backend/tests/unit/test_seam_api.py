@@ -30,20 +30,35 @@ from app.main import app
 client = TestClient(app)
 
 
+# The per-test in-memory store. The reconcile now PERSISTS (R1), so the booted
+# app's module-singleton repo would carry writes ACROSS tests; each test gets a
+# FRESH seeded repo via a dependency override so isolation holds.
+_active_repo: list[InMemoryFamilyRepository] = []
+
+
 @pytest.fixture(autouse=True)
 def _isolation() -> Iterator[None]:
-    """Fresh observability log + CRM adapter + no stray dependency overrides per test."""
+    """Fresh observability log + CRM adapter + a fresh seeded repo per test (R1)."""
     deps.reset_observability_log()
     deps.reset_crm_adapter()
     app.dependency_overrides.clear()
+    repo = InMemoryFamilyRepository.seeded()
+    _active_repo[:] = [repo]
+    app.dependency_overrides[deps.get_repository] = lambda: repo
     yield
     app.dependency_overrides.clear()
+    _active_repo.clear()
     deps.reset_observability_log()
     deps.reset_crm_adapter()
 
 
 def _repo() -> InMemoryFamilyRepository:
-    return deps.get_repository()  # type: ignore[return-value]
+    # The repo the route will actually use this test — the override if a test
+    # installed its own, else the fixture's fresh seeded repo.
+    override = app.dependency_overrides.get(deps.get_repository)
+    if override is not None:
+        return override()  # type: ignore[return-value]
+    return _active_repo[0]
 
 
 def _family_with_seam(status: SeamStatus):
@@ -320,3 +335,78 @@ def test_stage_drift_with_local_newer_proposes_push_local() -> None:
     body = resp.json()
     assert body["applied"] is True
     assert body["seam_status"] == SeamStatus.SYNCED.value
+
+
+# ===========================================================================
+# R1 — PERSIST the reconcile result through the store seam (TODO.md R1). A
+# push_local apply writes crm_synced_at back + re-pushes; a flagged conflict
+# persists NOTHING (fail-closed). The idempotency fence reuses the seam freshness
+# rule so a synced family does not re-push (no write loops).
+# ===========================================================================
+
+
+def test_push_local_persists_crm_synced_at_through_the_store() -> None:
+    """A push_local reconcile PERSISTS crm_synced_at — a re-read shows the advance.
+
+    The reconcile is no longer derive-and-return: after a PUSH_LOCAL apply the
+    endpoint writes ``crm_synced_at`` back through the store seam. The persisted
+    record advances (its seam derives ``synced`` on the next read) and a second
+    reconcile is a clean no-op (the idempotency fence — local ``updated_at`` did
+    not advance, so nothing re-pushes).
+    """
+    family = _family_with_seam(SeamStatus.UNSYNCED)
+    before = family.crm_synced_at
+    adapter = SimulatedCRMAdapter()  # empty mirror ⇒ pending push.
+    _override_seam_adapter(adapter)
+
+    resp = client.post(f"/seam/{family.family_id}/reconcile")
+    assert resp.status_code == 200
+    assert resp.json()["applied"] is True
+
+    # PERSISTED: the stored record's crm_synced_at advanced to updated_at.
+    reloaded = _repo().get_family(family.family_id)
+    assert reloaded is not None
+    assert reloaded.family.crm_synced_at == family.updated_at
+    assert reloaded.family.crm_synced_at != before
+
+    # The push went through the adapter on the persisted advance.
+    assert any(p.family_id == family.family_id for p in adapter.pushed_log)
+
+    # Idempotency fence: a second reconcile re-reads the now-synced record + the
+    # mirror the first push wrote, so it is a no-op — no second push.
+    pushes_after_first = len(adapter.pushed_log)
+    resp2 = client.post(f"/seam/{family.family_id}/reconcile")
+    assert resp2.status_code == 200
+    assert resp2.json()["seam_status"] == SeamStatus.SYNCED.value
+    assert len(adapter.pushed_log) == pushes_after_first
+
+
+def test_conflict_persists_nothing_fail_closed() -> None:
+    """A flagged conflict writes NOTHING — crm_synced_at unchanged, no push (INV-4).
+
+    A CRM-authoritative owner divergence flags a conflict; the endpoint must not
+    persist a sync or push the family — the store record is untouched until a human
+    resolves it.
+    """
+    family = next(iter(_repo().list_families()))
+    before = family.crm_synced_at
+    adapter = SimulatedCRMAdapter()
+    adapter.seed_mirror(
+        family.family_id,
+        MirrorState(
+            stage=family.current_stage,
+            mirror_updated_at=family.updated_at,
+            funding_state=family.funding_state,
+            owner="hubspot-owner-9999-divergent",
+        ),
+    )
+    _override_seam_adapter(adapter)
+
+    resp = client.post(f"/seam/{family.family_id}/reconcile")
+    assert resp.status_code == 200
+    assert resp.json()["applied"] is False
+
+    reloaded = _repo().get_family(family.family_id)
+    assert reloaded is not None
+    assert reloaded.family.crm_synced_at == before  # nothing persisted.
+    assert not any(p.family_id == family.family_id for p in adapter.pushed_log)

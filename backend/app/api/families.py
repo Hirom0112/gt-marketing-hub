@@ -12,6 +12,7 @@ from typing import Annotated, Literal
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
+from pydantic import BaseModel
 
 from app.adapters.hubspot.crm_adapter import CRMAdapter, StudentSyncResult
 from app.api.deps import (
@@ -980,3 +981,74 @@ def get_enrollment_calendar(
         for wqf in (_work_queue_family(joined, params),)
     ]
     return CalendarResponse(month=resolved_month, entries=entries)
+
+
+# ===========================================================================
+# Household roll-up (TODO.md R1) — GET /households. Exposes the existing
+# repository.household_roll_up() over the SAME store seam: one row per household,
+# each child's DERIVED stage (A-24 M2) plus the household worst-stage rollup (the
+# least-advanced child — the weakest link). The response model lives HERE (not in
+# api/schemas.py); the route is registered on the existing families router (no new
+# router, so no main.py/deps.py change).
+# ===========================================================================
+
+
+class HouseholdChildStageResponse(BaseModel):
+    """One child's DERIVED funnel position within a household roll-up (TODO.md R1)."""
+
+    student_id: UUID
+    display_label: str
+    stage: Stage
+
+
+class HouseholdRollUpResponse(BaseModel):
+    """One household rolled up to a single row — per-child stages + worst-stage (R1)."""
+
+    user_id: UUID | None
+    family_id: UUID
+    children: list[HouseholdChildStageResponse]
+    worst_stage: Stage
+
+
+class HouseholdsResponse(BaseModel):
+    """The household roll-up surface — one row per household (TODO.md R1)."""
+
+    households: list[HouseholdRollUpResponse]
+
+
+@router.get("/households", response_model=HouseholdsResponse)
+def get_households(repository: RepositoryDep) -> HouseholdsResponse:
+    """The household roll-up — children grouped by household, with a worst-stage (R1).
+
+    Exposes ``repository.household_roll_up()``: one row per household keyed by the
+    household identity (``family_record.user_id``; a NULL-owner server-only
+    household stays its own group), each child's DERIVED stage (A-24 M2), and the
+    household ``worst_stage`` — the least-advanced child (the weakest link most in
+    need of attention).
+
+    Degrades cleanly off the store seam (the same posture as
+    :func:`get_drop_off_heatmap`): the roll-up lives only on the live
+    :class:`SupabaseFamilyRepository`; the in-memory v1 fallback (A-3) has no
+    ``household_roll_up``, so the route returns ``households: []`` rather than a
+    500. Read-only, no AI (INV-2).
+    """
+    resolver = getattr(repository, "household_roll_up", None)
+    rollups = resolver() if callable(resolver) else []
+    return HouseholdsResponse(
+        households=[
+            HouseholdRollUpResponse(
+                user_id=r.user_id,
+                family_id=r.family_id,
+                children=[
+                    HouseholdChildStageResponse(
+                        student_id=c.student_id,
+                        display_label=c.display_label,
+                        stage=c.stage,
+                    )
+                    for c in r.children
+                ],
+                worst_stage=r.worst_stage,
+            )
+            for r in rollups
+        ]
+    )

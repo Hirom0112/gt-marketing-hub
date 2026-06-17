@@ -41,6 +41,8 @@ from __future__ import annotations
 import os
 from collections import Counter
 from dataclasses import dataclass
+from datetime import datetime
+from enum import Enum
 from typing import Any
 from uuid import UUID
 
@@ -226,6 +228,30 @@ class SupabaseFamilyRepository(FamilyRepository):
         if not isinstance(body, list):  # PostgREST returns an array for a table select.
             raise SupabaseError(f"PostgREST GET {path} returned a non-array body")
         return body
+
+    def _patch(self, path: str, params: dict[str, str], payload: dict[str, Any]) -> None:
+        """One PostgREST PATCH (the reconcile write seam — TODO.md R1; fail loud).
+
+        A row-scoped UPDATE via the service_role key (BYPASSRLS, server-only —
+        INV-5 / D-RLS-4): the ``params`` carry the ``family_id=eq.<id>`` filter so
+        exactly one row is written. ``Prefer: return=minimal`` keeps the response
+        body empty (we do not re-read here). The key never leaves the backend.
+        """
+        url = f"{self._base_url}{path}"
+        headers = {
+            **self._headers(),
+            "Content-Type": "application/json",
+            "Prefer": "return=minimal",
+        }
+        if self._client is not None:
+            response = self._client.patch(url, params=params, headers=headers, json=payload)
+        else:
+            with httpx.Client(timeout=self._timeout) as client:
+                response = client.patch(url, params=params, headers=headers, json=payload)
+        if response.status_code >= 400:
+            raise SupabaseError(
+                f"PostgREST PATCH {path} → {response.status_code}: {response.text[:300]}"
+            )
 
     # ---------------------------------------------------------------- mapping
     @staticmethod
@@ -508,6 +534,35 @@ class SupabaseFamilyRepository(FamilyRepository):
         for joined in self._fetch_joined():
             counts[self._derived_stage(joined)] += 1
         return counts
+
+    # ----------------------------------------------------------- write seam
+    @staticmethod
+    def _json_value(value: object) -> Any:
+        """Coerce a field value to its JSON form (an enum → its ``.value`` string)."""
+        if isinstance(value, Enum):
+            return value.value
+        if isinstance(value, datetime):
+            return value.isoformat()
+        return value
+
+    def mark_synced(self, family_id: UUID, synced_at: datetime) -> None:
+        # PATCH crm_synced_at on the one spine row via service_role (INV-5). The
+        # reconcile flow's push_local/accept commit — the deterministic core
+        # derived the value (INV-2); this only persists it.
+        self._patch(
+            f"{_REST}/family_record",
+            {"family_id": f"eq.{family_id}"},
+            {"crm_synced_at": synced_at.isoformat()},
+        )
+
+    def apply_field(self, family_id: UUID, field: str, value: object) -> None:
+        # PATCH one adopted tracked field (ACCEPT_MIRROR) on the spine row. Enums
+        # serialize to their string value so PostgREST stores the DB column form.
+        self._patch(
+            f"{_REST}/family_record",
+            {"family_id": f"eq.{family_id}"},
+            {field: self._json_value(value)},
+        )
 
     # ------------------------------------------------------- drop-off views
     def drop_off_for_family(self, family_id: UUID) -> DropOffPoint | None:

@@ -673,3 +673,69 @@ def test_household_roll_up_keeps_null_owner_households_separate() -> None:
         UUID("00000000-0000-0000-0000-00000000a001"),
         UUID("00000000-0000-0000-0000-00000000b001"),
     }
+
+
+# ---------------------------------------------------------------------------
+# Write seam (TODO.md R1) — mark_synced / apply_field PATCH via service_role
+# (BYPASSRLS, server-only — INV-5 / D-RLS-4). The reconcile flow's persist step.
+# ---------------------------------------------------------------------------
+
+
+def _capture_patch_handler(captured: dict[str, Any]) -> Any:
+    """Serve a PostgREST PATCH on /family_record, recording method/query/body."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        parsed = urlparse(str(request.url))
+        assert parsed.path == "/rest/v1/family_record"
+        # service_role auth (server-only — INV-5 / D-RLS-4).
+        assert request.headers["apikey"] == "synthetic-service-role-key"
+        assert request.headers["Authorization"] == "Bearer synthetic-service-role-key"
+        captured["method"] = request.method
+        captured["query"] = parse_qs(parsed.query)
+        captured["body"] = json.loads(request.content.decode() or "{}")
+        captured["prefer"] = request.headers.get("Prefer")
+        return httpx.Response(204)
+
+    return handler
+
+
+def test_mark_synced_patches_crm_synced_at_via_service_role() -> None:
+    """mark_synced issues a row-scoped PATCH of crm_synced_at (service_role)."""
+    from datetime import UTC, datetime
+
+    captured: dict[str, Any] = {}
+    repo = _make_repo(_capture_patch_handler(captured))
+    fid = UUID(_FID_INTEREST)
+    when = datetime(2030, 1, 1, tzinfo=UTC)
+
+    repo.mark_synced(fid, when)
+
+    assert captured["method"] == "PATCH"
+    assert captured["query"]["family_id"] == [f"eq.{fid}"]
+    assert captured["body"] == {"crm_synced_at": when.isoformat()}
+    assert captured["prefer"] == "return=minimal"
+
+
+def test_apply_field_patches_adopted_enum_as_its_value() -> None:
+    """apply_field PATCHes one tracked field, serializing an enum to its .value."""
+    captured: dict[str, Any] = {}
+    repo = _make_repo(_capture_patch_handler(captured))
+    fid = UUID(_FID_APPLY)
+
+    repo.apply_field(fid, "current_stage", Stage.TUITION)
+
+    assert captured["method"] == "PATCH"
+    assert captured["query"]["family_id"] == [f"eq.{fid}"]
+    assert captured["body"] == {"current_stage": "tuition"}
+
+
+def test_patch_non_2xx_fails_loud() -> None:
+    """A non-2xx PATCH raises SupabaseError (fail loud, never a silent lost write)."""
+    from datetime import UTC, datetime
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(500, content="boom")
+
+    repo = _make_repo(handler)
+    with pytest.raises(SupabaseError):
+        repo.mark_synced(UUID(_FID_INTEREST), datetime(2030, 1, 1, tzinfo=UTC))
