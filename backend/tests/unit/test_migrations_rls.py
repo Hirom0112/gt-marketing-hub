@@ -55,6 +55,11 @@ def _owner_delete_sql() -> str:
     return _strip_comments((MIGRATIONS_DIR / "0007_owner_delete.sql").read_text(encoding="utf-8"))
 
 
+def _student_grain_sql() -> str:
+    """The 0009 per-child `student` grain migration DDL (comments stripped)."""
+    return _strip_comments((MIGRATIONS_DIR / "0009_student_grain.sql").read_text(encoding="utf-8"))
+
+
 def _all_sql() -> str:
     return "\n".join(p.read_text(encoding="utf-8") for p in _sql_files())
 
@@ -246,3 +251,106 @@ def test_0007_changes_nothing_else() -> None:
         "0007 must not disable RLS"
     )
     assert not _SECURITY_DEFINER.search(sql), "0007 must not use SECURITY DEFINER"
+
+
+# ---------------------------------------------------------------------------
+# 0009 per-child `student` grain (TODO.md R1) — the live household→child grain.
+# A new CREATE TABLE that MUST ENABLE *and* FORCE RLS (D-RLS-1) and carry
+# owner-scoped, null-guarded SELECT + owner DELETE policies, scoped through the
+# owned `family_record.user_id` subquery (D-RLS-2/D-RLS-3) — exactly the pattern
+# 0001/0003/0007 use for the other `family_id`-owned source tables. The household
+# identity key is `family_record.user_id` (no new household_id column). The
+# all-migrations enable/force/null-guard invariants above already cover the table
+# in aggregate; these tests pin the table's specific policy shape.
+# ---------------------------------------------------------------------------
+
+
+def test_0009_creates_student_with_enable_and_force_rls() -> None:
+    """0009 adds the `student` table and both ENABLEs and FORCEs RLS on it (D-RLS-1)."""
+    sql = _student_grain_sql()
+    assert re.search(r"CREATE\s+TABLE\s+student\b", sql, re.IGNORECASE), (
+        "0009 must CREATE TABLE student"
+    )
+    assert re.search(
+        r"ALTER\s+TABLE\s+student\s+ENABLE\s+ROW\s+LEVEL\s+SECURITY", sql, re.IGNORECASE
+    ), "0009 must ENABLE RLS on student"
+    assert re.search(
+        r"ALTER\s+TABLE\s+student\s+FORCE\s+ROW\s+LEVEL\s+SECURITY", sql, re.IGNORECASE
+    ), "0009 must FORCE RLS on student (owner-role escape hatch, D-RLS-1)"
+
+
+def test_0009_student_owned_via_family_record_user_id() -> None:
+    """0009 scopes `student` ownership through family_id → family_record.user_id.
+
+    The household identity key is `family_record.user_id` (no separate
+    household_id column): the student FKs to family_record, and the policies scope
+    via the owned-family subquery on `user_id` — the same predicate as the other
+    family_id-owned source tables.
+    """
+    sql = _student_grain_sql()
+    assert re.search(
+        r"family_id\s+uuid\s+NOT\s+NULL\s+REFERENCES\s+family_record\s*\(\s*family_id\s*\)",
+        sql,
+        re.IGNORECASE,
+    ), "student.family_id must REFERENCE family_record(family_id)"
+    assert re.search(
+        r"FROM\s+family_record\s+fr\s+WHERE\s+fr\.user_id\s*=\s*\(\s*SELECT\s+auth\.uid\(\)\s*\)",
+        sql,
+        re.IGNORECASE,
+    ), "student policies must scope via family_record.user_id = auth.uid() (the household key)"
+    # No household_id column (least churn — user_id IS the household key).
+    assert not re.search(r"\bhousehold_id\b", sql, re.IGNORECASE), (
+        "0009 must NOT add a household_id column (family_record.user_id is the household key)"
+    )
+
+
+def test_0009_student_has_owner_select_and_delete_policies() -> None:
+    """0009 adds an owner-scoped SELECT and an owner-scoped DELETE policy on student.
+
+    Mirrors 0001 (SELECT) + 0007 (owner DELETE). No INSERT policy here (the
+    apply-SPA child-write path is a separate task; writes stay deny-by-default).
+    """
+    sql = _student_grain_sql()
+    assert re.search(
+        r"CREATE\s+POLICY\s+\w+\s+ON\s+student\b[^;]*FOR\s+SELECT", sql, re.IGNORECASE
+    ), "0009 must add an owner-scoped FOR SELECT policy on student"
+    assert re.search(
+        r"CREATE\s+POLICY\s+\w+\s+ON\s+student\b[^;]*FOR\s+DELETE", sql, re.IGNORECASE
+    ), "0009 must add an owner-scoped FOR DELETE policy on student"
+    # Exactly two policies, both null-guarded; no INSERT/UPDATE/ALL policy.
+    n_policies = len(_CREATE_POLICY.findall(sql))
+    n_guards = len(_NULL_GUARD.findall(sql))
+    assert n_policies == 2, f"0009 should add exactly 2 policies on student, found {n_policies}"
+    assert n_guards >= n_policies, (
+        f"unguarded student policy (D-RLS-2): {n_policies} policies but only "
+        f"{n_guards} `auth.uid() IS NOT NULL` guards"
+    )
+    assert not _FOR_ALL.search(sql), "0009 must not use FOR ALL on student"
+    assert not re.search(r"FOR\s+INSERT", sql, re.IGNORECASE), (
+        "0009 must not add an INSERT policy (apply-SPA write path is a separate task)"
+    )
+
+
+def test_0009_grants_select_and_delete_not_insert() -> None:
+    """0009 grants SELECT (anon+authenticated) + DELETE (authenticated only); no INSERT."""
+    sql = _student_grain_sql()
+    grant_select = re.search(r"GRANT\s+SELECT\s+ON\s+student\b[^;]*", sql, re.IGNORECASE)
+    assert grant_select, "0009 must GRANT SELECT ON student"
+    grant_delete = re.search(r"GRANT\s+DELETE\s+ON\s+student\b[^;]*", sql, re.IGNORECASE)
+    assert grant_delete, "0009 must GRANT DELETE ON student"
+    assert re.search(r"\bauthenticated\b", grant_delete.group(0), re.IGNORECASE), (
+        "0009 must grant DELETE to authenticated"
+    )
+    assert not re.search(r"\banon\b", grant_delete.group(0), re.IGNORECASE), (
+        "0009 must NOT grant DELETE to anon (D-RLS-3)"
+    )
+    assert not re.search(r"GRANT\s+INSERT\b", sql, re.IGNORECASE), (
+        "0009 must NOT grant INSERT (apply-SPA child-write path is a separate task)"
+    )
+
+
+def test_0009_no_security_definer() -> None:
+    """D-RLS-7: 0009 uses no security-definer helper (inline subqueries only)."""
+    assert not _SECURITY_DEFINER.search(_student_grain_sql()), (
+        "0009 must not use a SECURITY DEFINER helper (D-RLS-7)"
+    )

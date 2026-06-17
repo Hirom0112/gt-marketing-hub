@@ -32,6 +32,7 @@ from app.data.models import FundingState, SeamStatus, Stage
 from app.data.supabase_repository import (
     DropOffBucket,
     DropOffPoint,
+    HouseholdRollUp,
     SupabaseError,
     SupabaseFamilyRepository,
 )
@@ -462,4 +463,213 @@ def test_drop_off_heatmap_distinguishes_forms_within_a_step() -> None:
     assert {(b.form_key, b.count) for b in buckets} == {
         ("student_information", 1),
         ("tuition_agreement", 1),
+    }
+
+
+# ---------------------------------------------------------------------------
+# Per-child `student` grain (TODO.md R1) — list_students + household_roll_up.
+# The live read embeds the parent `family_record` (with its lead + community
+# profile) plus each child's OWN app_form/enrollment_forms (to-one FK embeds).
+# Stage is DERIVED on read with the SAME pure stage machine the family path uses
+# (A-24 M2): the stored student.current_stage is a placeholder, intentionally
+# wrong in the fixtures. Households group by family_record.user_id.
+# ---------------------------------------------------------------------------
+
+_UID_A = "00000000-0000-0000-0000-0000000000b1"  # household A (two children)
+_UID_B = "00000000-0000-0000-0000-0000000000b2"  # household B (one child)
+_SID_A1 = "00000000-0000-0000-0000-0000000000f1"
+_SID_A2 = "00000000-0000-0000-0000-0000000000f2"
+_SID_B1 = "00000000-0000-0000-0000-0000000000f3"
+
+
+def _family_embed(family_id: str, *, user_id: str | None) -> dict[str, Any]:
+    """A parent family_record embed (with its lead + community profile) for a student."""
+    return {
+        "family_id": family_id,
+        "user_id": user_id,
+        "display_name": "Synthetic Household",
+        "primary_contact_synthetic_email": "synthetic@example.invalid",
+        "lead_id": None,
+        "app_form_id": None,
+        "enrollment_form_id": None,
+        "community_profile_id": None,
+        "current_stage": "interest",
+        "stall_reason": None,
+        "stalled_since": None,
+        "funding_type": None,
+        "funding_state": "none",
+        "attribution_source": "web",
+        "attribution_utm": {},
+        "crm_seam_status": "unsynced",
+        "crm_synced_at": None,
+        "work_queue_score": None,
+        "created_at": "2026-06-01T00:00:00+00:00",
+        "updated_at": "2026-06-01T00:00:00+00:00",
+        "leads_new": [_lead(family_id)],
+        "community_profiles": [],
+    }
+
+
+def _student_row(
+    student_id: str,
+    family_id: str,
+    *,
+    user_id: str | None,
+    label: str,
+    stored_stage: str = "tuition",  # stale placeholder, deliberately wrong.
+    app_form: dict[str, Any] | None = None,
+    enrollment_forms: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """A `student` PostgREST row: student cols + parent family embed + own app/enroll."""
+    return {
+        "student_id": student_id,
+        "family_id": family_id,
+        "display_label": label,
+        "synthetic_first_name": "Syn",
+        "grade": "3",
+        "current_stage": stored_stage,
+        "stall_reason": None,
+        "stalled_since": None,
+        "funding_type": None,
+        "funding_state": "none",
+        "app_form_id": None,
+        "enrollment_form_id": None,
+        "crm_seam_status": "unsynced",
+        "crm_synced_at": None,
+        "work_queue_score": None,
+        "created_at": "2026-06-01T00:00:00+00:00",
+        "updated_at": "2026-06-01T00:00:00+00:00",
+        "family_record": _family_embed(family_id, user_id=user_id),
+        # To-one FK embeds: a single object (or null), NOT a list.
+        "app_form": app_form,
+        "enrollment_forms": enrollment_forms,
+    }
+
+
+def _student_handler(rows: list[dict[str, Any]]) -> Any:
+    """Serve /rest/v1/student, honoring family_record!inner (drop null-parent rows)."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        parsed = urlparse(str(request.url))
+        assert parsed.path == "/rest/v1/student"
+        assert request.headers["apikey"] == "synthetic-service-role-key"
+        served = [r for r in rows if r.get("family_record")]
+        return httpx.Response(200, content=json.dumps(served))
+
+    return handler
+
+
+def test_list_students_non_empty_with_per_child_derived_stage() -> None:
+    """list_students returns one JoinedStudent per child, stage DERIVED per-child."""
+    rows = [
+        # Household A, child 1: submitted app, no forms → derives `apply`.
+        _student_row(
+            _SID_A1,
+            "00000000-0000-0000-0000-00000000a001",
+            user_id=_UID_A,
+            label="Household A — Alex",
+            app_form=_app_form("00000000-0000-0000-0000-00000000a001", submitted=True),
+        ),
+        # Household A, child 2: no app at all → derives `interest`
+        # (proves per-child derivation: same household, different stage).
+        _student_row(
+            _SID_A2,
+            "00000000-0000-0000-0000-00000000a002",
+            user_id=_UID_A,
+            label="Household A — Bea",
+        ),
+    ]
+    repo = _make_repo(_student_handler(rows))
+    students = repo.list_students()
+    assert len(students) == 2
+    by_label = {js.student.display_label: js for js in students}
+    # Per-child DERIVED stage, NOT the stored "tuition" placeholder.
+    assert by_label["Household A — Alex"].student.current_stage == Stage.APPLY
+    assert by_label["Household A — Bea"].student.current_stage == Stage.INTEREST
+    # Parent household + its lead are attached.
+    assert by_label["Household A — Alex"].family.user_id == UUID(_UID_A)
+    assert by_label["Household A — Alex"].lead is not None
+    # The child's own app_form rode along; the lead-less child has none.
+    assert by_label["Household A — Alex"].app_form is not None
+    assert by_label["Household A — Bea"].app_form is None
+
+
+def test_list_students_empty_when_no_student_rows() -> None:
+    """An empty live `student` table → [] (a real query, not the old stub)."""
+    repo = _make_repo(_student_handler([]))
+    assert repo.list_students() == []
+
+
+def test_household_roll_up_groups_children_with_worst_stage() -> None:
+    """household_roll_up: one row per household, per-child stages + worst-stage rollup."""
+    rows = [
+        # Household A — Alex at `tuition` (full forms + unlock).
+        _student_row(
+            _SID_A1,
+            "00000000-0000-0000-0000-00000000a001",
+            user_id=_UID_A,
+            label="Household A — Alex",
+            stored_stage="interest",
+            app_form=_app_form("00000000-0000-0000-0000-00000000a001", submitted=True),
+            enrollment_forms=_enrollment(
+                "00000000-0000-0000-0000-00000000a001", signed=6, unlocked=True
+            ),
+        ),
+        # Household A — Bea at `interest` (the household's weakest link).
+        _student_row(
+            _SID_A2,
+            "00000000-0000-0000-0000-00000000a002",
+            user_id=_UID_A,
+            label="Household A — Bea",
+        ),
+        # Household B — one child at `apply`.
+        _student_row(
+            _SID_B1,
+            "00000000-0000-0000-0000-00000000b001",
+            user_id=_UID_B,
+            label="Household B — Cy",
+            app_form=_app_form("00000000-0000-0000-0000-00000000b001", submitted=True),
+        ),
+    ]
+    repo = _make_repo(_student_handler(rows))
+    rollups = repo.household_roll_up()
+    assert len(rollups) == 2
+    by_uid = {r.user_id: r for r in rollups}
+    a = by_uid[UUID(_UID_A)]
+    assert {c.display_label: c.stage for c in a.children} == {
+        "Household A — Alex": Stage.TUITION,
+        "Household A — Bea": Stage.INTEREST,
+    }
+    # Worst stage = the least-advanced child (the weakest link).
+    assert a.worst_stage == Stage.INTEREST
+    b = by_uid[UUID(_UID_B)]
+    assert [c.stage for c in b.children] == [Stage.APPLY]
+    assert b.worst_stage == Stage.APPLY
+    assert isinstance(a, HouseholdRollUp)
+
+
+def test_household_roll_up_keeps_null_owner_households_separate() -> None:
+    """NULL-owner (server-only) households are NOT collapsed into one group."""
+    rows = [
+        _student_row(
+            _SID_A1,
+            "00000000-0000-0000-0000-00000000a001",
+            user_id=None,
+            label="Unowned 1",
+        ),
+        _student_row(
+            _SID_B1,
+            "00000000-0000-0000-0000-00000000b001",
+            user_id=None,
+            label="Unowned 2",
+        ),
+    ]
+    repo = _make_repo(_student_handler(rows))
+    rollups = repo.household_roll_up()
+    # Two distinct family_ids ⇒ two separate rollups, both with user_id None.
+    assert len(rollups) == 2
+    assert all(r.user_id is None for r in rollups)
+    assert {r.family_id for r in rollups} == {
+        UUID("00000000-0000-0000-0000-00000000a001"),
+        UUID("00000000-0000-0000-0000-00000000b001"),
     }
