@@ -184,12 +184,16 @@ class Sis(_StrictModel):
     * ``records_lag_days`` — a confirmed-paid family absent from the SIS export
       this many days past payment is flagged RECORDS-LAG (expected to appear once
       the SIS catches up) rather than as a hard discrepancy.
+    * ``phone_only_confidence`` — the normalized match score a phone-only match
+      earns (email mismatched/absent). Sits in the ambiguous band by default so a
+      phone-only match routes to the merge queue, never an auto-confirm.
     """
 
     match_confidence_cutoff: float
     confirmed_min_confidence: float
     paid_not_in_sis_max_confidence: float
     records_lag_days: int
+    phone_only_confidence: float
 
 
 class Bulk(_StrictModel):
