@@ -2,6 +2,7 @@
 
 import { describe, expect, it } from 'vitest';
 import {
+  addStudent,
   createFamily,
   deleteApplication,
   deriveInterestAnswers,
@@ -195,6 +196,68 @@ describe('apply_events are metadata-only (INV-1/INV-6/COPPA)', () => {
   });
 });
 
+describe('submitTuition (R2 — persist funding_type)', () => {
+  it('UPDATEs family_record.funding_type, owner-scoped by family_id', async () => {
+    const sb = makeMockSupabase();
+    const uid = await ensureAnonSession(sb);
+    const session = await createFamily(sb, uid, 'direct');
+    await submitTuition(sb, session, 'tefa_standard');
+
+    const upd = sb.updates.find(
+      (u) => u.table === 'family_record' && 'funding_type' in u.values,
+    )!;
+    expect(upd).toBeDefined();
+    expect(upd.filter.family_id).toBe(session.familyId);
+    expect(upd.values.funding_type).toBe('tefa_standard');
+    // It persisted onto the row the cockpit reads.
+    expect(sb.rowsFor('family_record')[0]!.funding_type).toBe('tefa_standard');
+    // Fail-closed (INV-10): the SPA never advances funding_state itself.
+    expect(upd.values.funding_state).toBeUndefined();
+  });
+
+  it('surfaces a funding_type update failure to the caller', async () => {
+    const sb = makeMockSupabase({ failUpdateOn: 'family_record' });
+    const uid = await ensureAnonSession(sb);
+    const session = await createFamily(sb, uid, 'direct');
+    await expect(submitTuition(sb, session, 'self_pay')).rejects.toThrow(
+      /funding_type/,
+    );
+  });
+});
+
+describe('addStudent (R1 — per-child grain under an existing household)', () => {
+  it('inserts a synthetic-shaped student keyed to the household family_id (no new family_record)', async () => {
+    const sb = makeMockSupabase();
+    const uid = await ensureAnonSession(sb);
+    const session = await createFamily(sb, uid, 'direct');
+    const before = sb.rowsFor('family_record').length;
+
+    const studentId = await addStudent(sb, session.familyId);
+
+    expect(sb.rowsFor('family_record')).toHaveLength(before); // no new family
+    const students = sb.rowsFor('student');
+    expect(students).toHaveLength(1);
+    const s = students[0]!;
+    expect(s.student_id).toBe(studentId);
+    expect(s.family_id).toBe(session.familyId); // FK → the household spine
+    expect(s.current_stage).toBe('interest'); // write-time placeholder
+    expect(s.funding_state).toBe('none'); // fail-closed default (INV-10)
+    // Synthetic-shaped, no PII (INV-1/INV-6): name/grade/label only, no DOB.
+    expect(String(s.synthetic_first_name).length).toBeGreaterThan(0);
+    expect(String(s.grade).length).toBeGreaterThan(0);
+    for (const key of Object.keys(s)) {
+      expect(key.toLowerCase()).not.toContain('dob');
+    }
+  });
+
+  it('surfaces a student insert failure to the caller', async () => {
+    const sb = makeMockSupabase({ failInsertOn: 'student' });
+    const uid = await ensureAnonSession(sb);
+    const session = await createFamily(sb, uid, 'direct');
+    await expect(addStudent(sb, session.familyId)).rejects.toThrow(/student/);
+  });
+});
+
 describe('deriveInterestAnswers (S18 candidacy — derive uncollected columns)', () => {
   it('derives every leads_new column the candidacy modal does not collect, from the closed option sets', () => {
     const a = deriveInterestAnswers('11111111-1111-4111-8111-111111111111', 'direct');
@@ -244,7 +307,45 @@ describe('fetchApplications (S18 dashboard — owner-scoped read + X/4 derivatio
     expect(apps[0]!.stagesComplete).toBe(4);
   });
 
-  it('returns one card per family_record (Add Another Child = a new family)', async () => {
+  it('projects funding fields + per-lane booleans (R3), voucher fail-closed', async () => {
+    const sb = makeMockSupabase();
+    const uid = await ensureAnonSession(sb);
+    const session = await createFamily(sb, uid, 'direct');
+    await submitInterest(sb, session, deriveInterestAnswers(session.familyId, 'direct'));
+    await submitApply(sb, session);
+    await submitEnroll(sb, session, 3); // partial enrollment
+
+    let apps = await fetchApplications(sb);
+    let a = apps[0]!;
+    // Per-lane booleans projected from the source rows.
+    expect(a.applicationDone).toBe(true);
+    expect(a.enrollmentDone).toBe(false);
+    expect(a.formsSigned).toBe(3);
+    expect(a.formsTotal).toBe(6);
+    // Funding fields default fail-closed before any tier is persisted.
+    expect(a.fundingType).toBeNull();
+    expect(a.fundingState).toBe('none');
+    expect(a.voucherConfirmed).toBe(false);
+
+    // After tuition: a tier is persisted, but funding_state stays 'none' (the SPA
+    // never self-confirms a voucher) → voucherConfirmed STAYS false (INV-10).
+    await submitTuition(sb, session, 'tefa_standard');
+    apps = await fetchApplications(sb);
+    a = apps[0]!;
+    expect(a.fundingType).toBe('tefa_standard');
+    expect(a.enrollmentDone).toBe(true);
+    expect(a.voucherConfirmed).toBe(false);
+
+    // Only a money-in-hand state flips the voucher lane to confirmed.
+    await sb
+      .from('family_record')
+      .update({ funding_state: 'first_installment_received' })
+      .eq('family_id', session.familyId);
+    apps = await fetchApplications(sb);
+    expect(apps[0]!.voucherConfirmed).toBe(true);
+  });
+
+  it('returns one card per family_record (separate households are separate cards)', async () => {
     const sb = makeMockSupabase();
     const uid = await ensureAnonSession(sb);
     const s1 = await createFamily(sb, uid, 'direct');

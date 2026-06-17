@@ -230,7 +230,10 @@ describe('mock apply SPA — acceptance', () => {
     expect(within(card).getByText('4/4')).toBeInTheDocument();
   });
 
-  it('Add Another Child starts a fresh application (a new family_record) under the same uid', async () => {
+  // R1 — "Add Another Child" inserts a `student` UNDER the existing household's
+  // family_record, NOT a new family_record. The child is a row in the live
+  // `student` table keyed by family_id → the household spine.
+  it('Add Another Child inserts a student under the existing household, not a new family_record', async () => {
     const sb = makeMockSupabase();
     render(<App supabase={sb} />);
     await begin();
@@ -241,17 +244,54 @@ describe('mock apply SPA — acceptance', () => {
 
     await waitFor(() => screen.getByText('My Applications'));
     expect(sb.rowsFor('family_record')).toHaveLength(1);
+    expect(sb.rowsFor('student')).toHaveLength(0);
+    const householdFamilyId = sb.rowsFor('family_record')[0]!.family_id as string;
 
     await userEvent.click(screen.getByText('+ Add Another Child'));
+
+    // A `student` row was inserted — NOT a second family_record.
+    await waitFor(() => expect(sb.rowsFor('student')).toHaveLength(1));
+    expect(sb.rowsFor('family_record')).toHaveLength(1);
+
+    const student = sb.rowsFor('student')[0]!;
+    // The child is a child of the EXISTING household (FK family_id → the spine).
+    expect(student.family_id).toBe(householdFamilyId);
+    // Synthetic-shaped child identity only (INV-1/INV-6): a name, a grade, a
+    // display label — no DOB, no precise geo, never a typed value.
+    expect(student.synthetic_first_name).toBeDefined();
+    expect(student.grade).toBeDefined();
+    expect(student.display_label).toBeDefined();
+    // The new child surfaces on the dashboard as a household child.
     await waitFor(() =>
-      expect(
-        screen.getByText('Secure Your Candidacy for Fall 2026'),
-      ).toBeInTheDocument(),
+      expect(screen.getByLabelText('student_card')).toBeInTheDocument(),
     );
-    const families = sb.rowsFor('family_record');
-    expect(families).toHaveLength(2);
-    // Both families belong to the SAME auth.uid().
-    expect(new Set(families.map((f) => f.user_id))).toEqual(new Set([sb.uid]));
+  });
+
+  // The student write must go through the SAME anon+RLS path — never the
+  // service_role/cockpit path (INV-5). The SPA's only client is the anon one;
+  // this asserts the insert is the only write and carries no privileged key.
+  it('the Add-Another-Child student insert is an ordinary owner-scoped insert (anon+RLS, never service_role)', async () => {
+    const sb = makeMockSupabase();
+    render(<App supabase={sb} />);
+    await begin();
+    await fillCandidacy();
+    await fillApply();
+    await signRequiredEnrollForms();
+    await payDeposit();
+    await waitFor(() => screen.getByText('My Applications'));
+
+    await userEvent.click(screen.getByText('+ Add Another Child'));
+    await waitFor(() => expect(sb.rowsFor('student')).toHaveLength(1));
+
+    const studentInserts = sb.inserts.filter((i) => i.table === 'student');
+    expect(studentInserts).toHaveLength(1);
+    // No service_role / privileged column ever leaves the client.
+    for (const row of studentInserts[0]!.rows) {
+      for (const key of Object.keys(row)) {
+        expect(key.toLowerCase()).not.toContain('service_role');
+        expect(key.toLowerCase()).not.toContain('user_id'); // ownership is via the FK
+      }
+    }
   });
 
   it('delete issues a delete on the owned rows and removes the card', async () => {
@@ -410,6 +450,147 @@ describe('mock apply SPA — acceptance', () => {
     const events = sb.rowsFor('apply_events');
     expect(events.map((e) => e.event_type)).toContain('validation_error_shown');
     expect(sb.rowsFor('leads_new')).toHaveLength(0);
+  });
+
+  // R2 — the chosen funding_type is PERSISTED onto the household's family_record
+  // (owner-scoped UPDATE), so the cockpit's funding gate reads live truth.
+  it('persists the chosen funding_type onto family_record when tuition is submitted', async () => {
+    const sb = makeMockSupabase();
+    render(<App supabase={sb} />);
+    await begin();
+    await fillCandidacy();
+    await fillApply();
+    await signRequiredEnrollForms();
+    await payDeposit(); // selects 'self_pay'
+
+    await waitFor(() => screen.getByText('My Applications'));
+
+    const familyId = sb.rowsFor('family_record')[0]!.family_id as string;
+    // The update was issued, owner-scoped by family_id, carrying the chosen tier.
+    const ftUpdate = sb.updates.find(
+      (u) => u.table === 'family_record' && 'funding_type' in u.values,
+    );
+    expect(ftUpdate).toBeDefined();
+    expect(ftUpdate!.filter.family_id).toBe(familyId);
+    expect(ftUpdate!.values.funding_type).toBe('self_pay');
+    // It landed on the row.
+    expect(sb.rowsFor('family_record')[0]!.funding_type).toBe('self_pay');
+    // Fail-closed: funding_state is NOT advanced to confirmed by the SPA (INV-10).
+    expect(ftUpdate!.values.funding_state).toBeUndefined();
+  });
+
+  // R3 — the four-lane status page: Application · Enrollment · Voucher
+  // Confirmation · Next Step, with the voucher lane FAIL-CLOSED.
+  it('renders the four status lanes; voucher lane is fail-closed (not "confirmed" after a completed flow with no installment)', async () => {
+    const sb = makeMockSupabase();
+    render(<App supabase={sb} />);
+    await begin();
+    await fillCandidacy();
+    await fillApply();
+    await signRequiredEnrollForms();
+    await payDeposit();
+
+    await waitFor(() => screen.getByText('My Applications'));
+    const card = await screen.findByLabelText('application_card');
+
+    // All four lanes are present.
+    expect(within(card).getByLabelText('lane_application')).toBeInTheDocument();
+    expect(within(card).getByLabelText('lane_enrollment')).toBeInTheDocument();
+    expect(within(card).getByLabelText('lane_voucher')).toBeInTheDocument();
+    expect(within(card).getByLabelText('lane_next_step')).toBeInTheDocument();
+
+    // Application + Enrollment are complete after the full flow.
+    expect(within(card).getByLabelText('lane_application')).toHaveTextContent(
+      'Submitted',
+    );
+    expect(within(card).getByLabelText('lane_enrollment')).toHaveTextContent(
+      'Complete',
+    );
+
+    // FAIL-CLOSED: the family submitted a deposit + chose a tier, but no voucher
+    // installment is in hand → the voucher lane is NEVER "Confirmed" (INV-10).
+    const voucher = within(card).getByLabelText('lane_voucher');
+    expect(voucher).not.toHaveTextContent('Confirmed');
+    expect(voucher.className).not.toContain('done');
+
+    // The Next Step lane shows the params-driven reconfirm action + a by-when.
+    const next = within(card).getByLabelText('lane_next_step');
+    expect(next.textContent?.toLowerCase()).toContain('reconfirm');
+    expect(next.textContent).toMatch(/by \d{4}-\d{2}-\d{2}/);
+  });
+
+  it('voucher lane reads "Confirmed" ONLY once a voucher installment is in hand', async () => {
+    const sb = makeMockSupabase();
+    render(<App supabase={sb} />);
+    await begin();
+    await fillCandidacy();
+    await fillApply();
+    await signRequiredEnrollForms();
+    await payDeposit();
+    await waitFor(() => screen.getByText('My Applications'));
+
+    // Simulate a GT-confirmed installment landing on the family_record (the only
+    // path to a confirmed voucher lane, INV-10) and re-render via Add Child refresh.
+    const fr = sb.rowsFor('family_record')[0]!;
+    await sb
+      .from('family_record')
+      .update({ funding_state: 'first_installment_received' })
+      .eq('family_id', fr.family_id);
+
+    // Trigger a dashboard refresh (adding a child re-fetches applications).
+    await userEvent.click(screen.getByText('+ Add Another Child'));
+    await waitFor(() => {
+      const card = screen.getByLabelText('application_card');
+      expect(within(card).getByLabelText('lane_voucher')).toHaveTextContent(
+        'Confirmed',
+      );
+    });
+  });
+
+  // R3 anon-resume — a returning family with a PERSISTED anon session + an owned
+  // application sees a resume affordance and lands back on their status page.
+  it('offers a synthetic resume affordance when the persisted anon session owns an application', async () => {
+    const uid = '00000000-0000-4000-8000-000000000abc';
+    const familyId = '11111111-1111-4111-8111-111111111111';
+    const sb = makeMockSupabase({
+      uid,
+      persistedSession: true,
+      seed: {
+        family_record: [
+          {
+            family_id: familyId,
+            user_id: uid,
+            display_name: 'Maple Household',
+            funding_state: 'none',
+          },
+        ],
+        leads_new: [{ lead_id: 'l1', family_id: familyId }],
+        app_form: [{ app_form_id: 'a1', family_id: familyId }],
+      },
+    });
+    render(<App supabase={sb} />);
+
+    // The resume banner appears (no new sign-in, no PII — the persisted anon
+    // session was reused).
+    await waitFor(() =>
+      expect(screen.getByLabelText('resume_banner')).toBeInTheDocument(),
+    );
+    expect(screen.getByText(/Welcome back/)).toBeInTheDocument();
+
+    // Resuming reaches the status page with the family's owned application.
+    await userEvent.click(screen.getByText('Resume my status page'));
+    await waitFor(() => screen.getByText('My Applications'));
+    const card = await screen.findByLabelText('application_card');
+    expect(within(card).getByText('Maple Household')).toBeInTheDocument();
+    expect(within(card).getByLabelText('lane_application')).toBeInTheDocument();
+  });
+
+  it('shows NO resume affordance on a first visit (no persisted applications)', async () => {
+    const sb = makeMockSupabase();
+    render(<App supabase={sb} />);
+    await waitFor(() => screen.getByText(/The MIT of K/));
+    // No applications owned ⇒ no resume banner.
+    expect(screen.queryByLabelText('resume_banner')).toBeNull();
   });
 
   it('the deposit amount is exactly $1,000 (simulated)', async () => {

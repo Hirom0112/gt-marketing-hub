@@ -646,12 +646,112 @@ button:disabled {
 
 .app-card {
   display: flex;
-  justify-content: space-between;
-  align-items: flex-start;
+  flex-direction: column;
   padding: 18px 18px 16px;
   border: 1px solid var(--line-2);
   border-radius: var(--radius);
   background: var(--paper);
+}
+
+.app-card-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+}
+
+/* ---- R3: four-lane status page ---- */
+.status-lanes {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 8px;
+  margin-top: 14px;
+  padding-top: 14px;
+  border-top: 1px solid var(--line);
+}
+
+.lane {
+  display: grid;
+  grid-template-columns: 22px 1fr auto;
+  align-items: center;
+  gap: 10px;
+  font-size: 13px;
+  color: var(--ink);
+}
+
+.lane-mark {
+  font-size: 15px;
+  text-align: center;
+  font-weight: 700;
+}
+
+.lane.done .lane-mark {
+  color: #2e7d4f;
+}
+.lane.partial .lane-mark {
+  color: var(--terracotta);
+}
+.lane.pending .lane-mark {
+  color: var(--teal);
+  opacity: 0.6;
+}
+.lane.next .lane-mark {
+  color: var(--terracotta);
+}
+
+.lane-name {
+  font-weight: 600;
+}
+
+.lane-state {
+  color: var(--teal);
+  text-align: right;
+}
+
+.lane.next .lane-state {
+  color: var(--ink);
+  font-weight: 600;
+}
+
+.lane-bywhen {
+  font-family: 'Inconsolata', monospace;
+  color: var(--terracotta);
+  font-weight: 700;
+}
+
+/* ---- R1: children under the household ---- */
+.student-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 8px 0;
+}
+
+.student-card {
+  padding: 10px 14px;
+  border: 1px dashed var(--line-2);
+  border-radius: var(--radius);
+  background: var(--paper);
+  font-size: 14px;
+}
+
+.student-name {
+  font-weight: 600;
+  color: var(--ink);
+}
+
+/* ---- R3: anon-resume affordance ---- */
+.resume-banner {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 16px;
+  flex-wrap: wrap;
+  margin: 14px 0 4px;
+  padding: 14px 16px;
+  border: 1px solid var(--terracotta);
+  border-radius: var(--radius);
+  background: color-mix(in srgb, var(--terracotta) 8%, var(--paper));
+  font-size: 14px;
 }
 
 .app-card-name {

@@ -12,6 +12,7 @@ import type {
   DeleteBuilder,
   MinimalSupabase,
   SelectBuilder,
+  UpdateBuilder,
 } from '../lib/apply';
 
 export interface RecordedInsert {
@@ -24,32 +25,60 @@ export interface RecordedDelete {
   filter: Record<string, unknown>;
 }
 
+export interface RecordedUpdate {
+  table: string;
+  values: Record<string, unknown>;
+  filter: Record<string, unknown>;
+}
+
 export interface MockSupabase extends MinimalSupabase {
   inserts: RecordedInsert[];
   deletes: RecordedDelete[];
+  updates: RecordedUpdate[];
   rowsFor: (table: string) => Record<string, unknown>[];
   uid: string;
 }
 
 export function makeMockSupabase(
-  opts: { uid?: string; failInsertOn?: string; failDeleteOn?: string } = {},
+  opts: {
+    uid?: string;
+    failInsertOn?: string;
+    failDeleteOn?: string;
+    failUpdateOn?: string;
+    // R3 anon-resume: when true, getSession() returns a PERSISTED session (the
+    // returning-family path) instead of null — mirrors persistSession: true.
+    persistedSession?: boolean;
+    // Pre-seed the row store (e.g. an application the persisted session owns).
+    seed?: Record<string, Record<string, unknown>[]>;
+  } = {},
 ): MockSupabase {
   const uid = opts.uid ?? '00000000-0000-4000-8000-000000000abc';
   const inserts: RecordedInsert[] = [];
   const deletes: RecordedDelete[] = [];
+  const updates: RecordedUpdate[] = [];
   // The live row store per table — what a `select('*')` (RLS owner-scoped) sees.
   const store: Record<string, Record<string, unknown>[]> = {};
+  for (const [table, rows] of Object.entries(opts.seed ?? {})) {
+    store[table] = rows.map((r) => ({ ...r }));
+  }
 
   const mock: MockSupabase = {
     inserts,
     deletes,
+    updates,
     uid,
     rowsFor(table: string) {
       return store[table] ? [...store[table]!] : [];
     },
     auth: {
       async getSession() {
-        return { data: { session: null } };
+        // Persisted session ⇒ the returning-family resume path (R3); else null
+        // ⇒ first visit, which triggers signInAnonymously below.
+        return {
+          data: {
+            session: opts.persistedSession ? { user: { id: uid } } : null,
+          },
+        };
       },
       async signInAnonymously() {
         return { data: { user: { id: uid } }, error: null };
@@ -81,6 +110,33 @@ export function makeMockSupabase(
                 Object.entries(filters).every(([k, v]) => r[k] === v),
               );
               return Promise.resolve(onfulfilled({ data: rows, error: null }));
+            },
+          };
+          return builder;
+        },
+        update(values: unknown): UpdateBuilder {
+          const vals = values as Record<string, unknown>;
+          const filter: Record<string, unknown> = {};
+          const builder: UpdateBuilder = {
+            eq(column: string, value: unknown) {
+              filter[column] = value;
+              return builder;
+            },
+            then(onfulfilled) {
+              updates.push({ table, values: { ...vals }, filter: { ...filter } });
+              if (opts.failUpdateOn === table) {
+                return Promise.resolve(
+                  onfulfilled({
+                    error: { message: `simulated update failure on ${table}` },
+                  }),
+                );
+              }
+              for (const row of store[table] ?? []) {
+                if (Object.entries(filter).every(([k, v]) => row[k] === v)) {
+                  Object.assign(row, vals);
+                }
+              }
+              return Promise.resolve(onfulfilled({ error: null }));
             },
           };
           return builder;

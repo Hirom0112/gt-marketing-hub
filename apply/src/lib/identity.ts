@@ -80,3 +80,38 @@ export function generateSyntheticIdentity(): SyntheticIdentity {
 
 /** The reserved synthetic email domain, asserted by tests + the DB CHECK. */
 export const SYNTHETIC_EMAIL_DOMAIN = '@example.invalid';
+
+// ---------------------------------------------------------------------------
+// Synthetic CHILD identity (R1 — the per-child `student` grain). A child is a
+// `student` row under a household's `family_record`; it carries ONLY non-PII,
+// synthetic-shaped labels (migration 0009: `synthetic_first_name`, `grade`,
+// `display_label`). Names come from the same fixed word lists — never typed,
+// never a real child's name (INV-1 / INV-6 / COPPA). No DOB, no precise geo.
+// ---------------------------------------------------------------------------
+
+// Grade BANDS only — mirror the leads_new grade_interest set (never a real DOB).
+const CHILD_GRADES = ['K', '1', '2', '3', '4', '5', '6', '7', '8'] as const;
+
+export interface SyntheticChild {
+  /** Synthetic given name (word-list, never typed). */
+  syntheticFirstName: string;
+  /** Grade BAND only — never a DOB (INV-1/INV-6). */
+  grade: string;
+  /** Non-PII human display label for the per-child card. */
+  displayLabel: string;
+}
+
+/**
+ * Generate a fully synthetic child for the `student` grain. Every field is drawn
+ * from the fixed word/grade lists — no input the user provides ever reaches it,
+ * so a real child's name/DOB can never land here (INV-1 / INV-6 by shape).
+ */
+export function generateSyntheticChild(): SyntheticChild {
+  const first = pick(FIRST_WORDS);
+  const grade = pick(CHILD_GRADES);
+  return {
+    syntheticFirstName: first,
+    grade,
+    displayLabel: `${first} · Grade ${grade}`,
+  };
+}

@@ -9,6 +9,7 @@
 //     owner-scoped null-guarded RLS INSERT policies accept them.
 
 import {
+  generateSyntheticChild,
   generateSyntheticIdentity,
   type SyntheticIdentity,
 } from './identity';
@@ -89,6 +90,17 @@ export interface DeleteBuilder {
   ) => Promise<R>;
 }
 
+// The UPDATE builder mirrors supabase-js's `.update(obj).eq(col, val)` then-await
+// shape. R2 uses it to persist the chosen `funding_type` onto the owner-scoped
+// `family_record` row (the cockpit reads funding from there). RLS keeps the write
+// owner-scoped (auth.uid()) — never service_role (INV-5).
+export interface UpdateBuilder {
+  eq: (column: string, value: unknown) => UpdateBuilder;
+  then: <R>(
+    onfulfilled: (r: { error: { message: string } | null }) => R,
+  ) => Promise<R>;
+}
+
 export interface MinimalSupabase {
   auth: {
     getSession: () => Promise<{
@@ -102,6 +114,7 @@ export interface MinimalSupabase {
   from: (table: string) => {
     insert: (rows: unknown) => Promise<{ error: { message: string } | null }>;
     select: (columns?: string) => SelectBuilder;
+    update: (values: unknown) => UpdateBuilder;
     delete: () => DeleteBuilder;
   };
 }
@@ -223,6 +236,38 @@ export async function createFamily(
 }
 
 /**
+ * R1 — "Add Another Child": INSERT a `student` under an EXISTING household's
+ * `family_record`, NOT a new `family_record`. The child is a row in the live
+ * `student` table (migration 0009) keyed by `family_id` → the household spine, so
+ * children are CHILDREN of a household, not separate families (ENROLLMENT_REFACTOR
+ * §2/§5.3). The write goes through the anon+RLS path under the household's
+ * `auth.uid()` — NEVER service_role (INV-5). Every field is synthetic-shaped
+ * (INV-1/INV-6): no real name, no DOB, no precise geo. `current_stage` is a
+ * write-time placeholder; the cockpit re-derives each child's stage on read.
+ *
+ * Returns the new `student_id`.
+ */
+export async function addStudent(
+  sb: MinimalSupabase,
+  householdFamilyId: string,
+): Promise<string> {
+  const child = generateSyntheticChild();
+  const studentId = uuid();
+  const { error } = await sb.from('student').insert({
+    student_id: studentId,
+    family_id: householdFamilyId,
+    display_label: child.displayLabel,
+    synthetic_first_name: child.syntheticFirstName,
+    grade: child.grade,
+    // Write-time placeholder; the cockpit derives the real stage on read.
+    current_stage: 'interest',
+    funding_state: 'none',
+  });
+  if (error) throw new Error(`student insert: ${error.message}`);
+  return studentId;
+}
+
+/**
  * Step 1 (end of Interest) — INSERT leads_new. The family becomes visible in the
  * cockpit at THIS point (it INNER-joins family_record ⋈ leads_new).
  */
@@ -313,12 +358,18 @@ export async function submitTuition(
   });
   if (cpErr) throw new Error(`community_profiles insert: ${cpErr.message}`);
 
-  // funding_type is informational; the cockpit reads it from family_record. We
-  // cannot UPDATE family_record under the insert-only flow, so funding selection
-  // is surfaced via the deposit-confirmed enrollment state above. The chosen
-  // tier is recorded as a metadata event field_key only (no value leak): we emit
-  // it as a step_completed on the tuition step keyed by the field name.
-  void funding_type;
+  // R2 — PERSIST the chosen funding_type onto the household's family_record so the
+  // cockpit's funding gate has live truth to read (without it every live family is
+  // funding_state=none, ENROLLMENT_REFACTOR §1/§5.4). The write is an owner-scoped
+  // UPDATE filtered by family_id under the SAME anon+RLS path (auth.uid()) — never
+  // service_role (INV-5). funding_state is NOT set here: it is a DERIVED, GT-signal
+  // gated state (INV-10) and stays fail-closed at 'none' until GT confirms the
+  // first installment — the SPA must never self-report a voucher as confirmed.
+  const { error: ftErr } = await sb
+    .from('family_record')
+    .update({ funding_type })
+    .eq('family_id', session.familyId);
+  if (ftErr) throw new Error(`family_record funding_type update: ${ftErr.message}`);
 }
 
 /**
@@ -374,6 +425,27 @@ export interface ApplicationSummary {
   currentStage: (typeof APPLICATION_STAGES)[number];
   /** School year derived from the most-complete enrollment year, synthetic default. */
   schoolYear: string;
+
+  // R3 — projected from the already-read family_record + enrollment_forms rows so
+  // the four-lane status page (Application · Enrollment · Voucher · Next Step) can
+  // render without a second read. The voucher fields default fail-closed.
+  /** The chosen funding tier (family_record.funding_type), or null if unset. */
+  fundingType: string | null;
+  /** The DERIVED voucher funding_state (family_record.funding_state); 'none' default. */
+  fundingState: string;
+  /** Application lane: the app was submitted (app_form exists). */
+  applicationDone: boolean;
+  /** Enrollment lane: every required form is signed. */
+  enrollmentDone: boolean;
+  /** Enrollment-form progress for the lane subtitle. */
+  formsSigned: number;
+  formsTotal: number;
+  /**
+   * Voucher lane: FAIL-CLOSED — true ONLY when the voucher is money-in-hand
+   * (first_installment_received | funded), NEVER on a self-report/GT-confirm
+   * before the first installment (INV-10).
+   */
+  voucherConfirmed: boolean;
 }
 
 async function selectRows(
@@ -414,6 +486,14 @@ export async function fetchApplications(
       (r) => r.family_id === familyId && (predicate ? predicate(r) : true),
     );
 
+  // The voucher lane is fail-closed (INV-10): only money-in-hand states count as
+  // "confirmed" — a self-report or a GT confirmation before the first installment
+  // is NOT confirmed and must never render as such.
+  const CONFIRMED_FUNDING = new Set([
+    'first_installment_received',
+    'funded',
+  ]);
+
   return families.map((fr) => {
     const familyId = String(fr.family_id);
     const interestDone = has(leads, familyId);
@@ -430,6 +510,26 @@ export async function fetchApplications(
     const currentStage =
       APPLICATION_STAGES[Math.min(stagesComplete, APPLICATION_STAGE_TOTAL - 1)]!;
 
+    // Enrollment-form progress: the most-complete enrollment_forms row for the
+    // family (submitTuition writes a forms_signed=6 row on deposit confirm).
+    const familyEnrolls = enrolls.filter((r) => r.family_id === familyId);
+    const formsSigned = familyEnrolls.reduce(
+      (m, r) => Math.max(m, Number(r.forms_signed ?? 0)),
+      0,
+    );
+    const formsTotal = familyEnrolls.reduce(
+      (m, r) => Math.max(m, Number(r.forms_total ?? 0)),
+      6,
+    );
+
+    // R3 — project the already-read family_record funding fields (just not
+    // surfaced before). fail-closed defaults when the columns are absent.
+    const fundingType =
+      fr.funding_type === undefined || fr.funding_type === null
+        ? null
+        : String(fr.funding_type);
+    const fundingState = String(fr.funding_state ?? 'none');
+
     return {
       familyId,
       displayName: String(fr.display_name ?? 'New application'),
@@ -437,8 +537,46 @@ export async function fetchApplications(
       stagesTotal: APPLICATION_STAGE_TOTAL,
       currentStage,
       schoolYear: '2026-2027',
+      fundingType,
+      fundingState,
+      applicationDone: applyDone,
+      // Enrollment lane is "complete" only when every required form is signed —
+      // the mere existence of an enrollment_forms row means the stage is REACHED,
+      // not that enrollment is finished.
+      enrollmentDone: formsSigned >= formsTotal && formsTotal > 0,
+      formsSigned,
+      formsTotal,
+      voucherConfirmed: CONFIRMED_FUNDING.has(fundingState),
     };
   });
+}
+
+// ---------------------------------------------------------------------------
+// Students under a household (R1). Each `student` row is a CHILD of a household's
+// `family_record`. RLS auto-scopes the read to auth.uid() (the 0009 owner-scoped
+// SELECT policy), so this returns only the session's own children — the boundary
+// is the database, never the client.
+// ---------------------------------------------------------------------------
+
+export interface StudentSummary {
+  studentId: string;
+  /** The household this child belongs to (its `family_record.family_id`). */
+  familyId: string;
+  displayLabel: string;
+  grade: string;
+}
+
+/** Fetch the session's children (the live `student` grain), owner-scoped by RLS. */
+export async function fetchStudents(
+  sb: MinimalSupabase,
+): Promise<StudentSummary[]> {
+  const rows = await selectRows(sb, 'student');
+  return rows.map((r) => ({
+    studentId: String(r.student_id),
+    familyId: String(r.family_id),
+    displayLabel: String(r.display_label ?? 'Child'),
+    grade: String(r.grade ?? ''),
+  }));
 }
 
 /**
@@ -451,13 +589,16 @@ export async function deleteApplication(
   sb: MinimalSupabase,
   familyId: string,
 ): Promise<void> {
-  // FK-safe order: dependents first, family_record (the spine) last.
+  // FK-safe order: dependents first, family_record (the spine) last. `student`
+  // rows are children of the household spine (FK family_id) → delete with the
+  // other family_id-owned dependents (0009 owner-scoped DELETE policy).
   const dependents = [
     'apply_events',
     'community_profiles',
     'enrollment_forms',
     'app_form',
     'leads_new',
+    'student',
   ];
   for (const table of dependents) {
     const { error } = await sb.from(table).delete().eq('family_id', familyId);

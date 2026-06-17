@@ -20,11 +20,13 @@
 
 import { useCallback, useEffect, useState, type ReactElement } from 'react';
 import {
+  addStudent,
   createFamily,
   deleteApplication,
   deriveInterestAnswers,
   ensureAnonSession,
   fetchApplications,
+  fetchStudents,
   submitApply,
   submitEnroll,
   submitInterest,
@@ -32,6 +34,7 @@ import {
   type ApplicationSummary,
   type ApplySession,
   type MinimalSupabase,
+  type StudentSummary,
 } from './lib/apply';
 import {
   ATTRIBUTION_SOURCE,
@@ -78,6 +81,12 @@ import {
   type UsState,
   type YesNo,
 } from './lib/options';
+import {
+  deriveNextStep,
+  type ApplyStage,
+  type FundingState,
+} from './lib/deriveNextStep';
+import { APPLY_PARAMS } from './lib/params';
 import {
   resetNavSeq,
   useStepTelemetry,
@@ -135,18 +144,34 @@ export function App({ supabase }: { supabase: MinimalSupabase }) {
   const [session, setSession] = useState<ApplySession | null>(null);
   const [step, setStep] = useState<StepName>('landing');
   const [fatal, setFatal] = useState<string | null>(null);
+  // R3 anon-resume: how many applications the PERSISTED anon session already owns.
+  // > 0 ⇒ a returning family can resume their status page. Synthetic-only, INV-1.
+  const [resumableCount, setResumableCount] = useState<number | null>(null);
 
-  // Sign in anonymously on load (mirrors gtschool's OTP gate → an auth.uid()).
-  // The owning family_record is created when the applicant actually starts an
-  // application (Begin Application → candidacy), so an empty session shows the
-  // dashboard with no cards rather than a phantom record.
+  // Sign in anonymously on load — REUSING the persisted anon session if one
+  // already exists (supabase.ts sets persistSession: true), so a returning family
+  // lands on the SAME auth.uid() and RLS surfaces their own rows. This is the
+  // anon-resume path (R3): no email, no PII — just the persisted anon token
+  // (INV-1). Real magic-link/email OTP auth is explicitly OUT OF SCOPE here (a
+  // THREAT_MODEL-owned escalation, ENROLLMENT_REFACTOR §6/§9).
+  // The owning family_record is created only when the applicant actually starts
+  // an application, so an empty session shows an empty dashboard, not a phantom.
   useEffect(() => {
     resetNavSeq();
     let cancelled = false;
     (async () => {
       try {
         const id = await ensureAnonSession(supabase);
-        if (!cancelled) setUid(id);
+        if (cancelled) return;
+        setUid(id);
+        // Probe whether the persisted session already owns applications, so the
+        // landing can offer a "resume" affordance to a returning family.
+        try {
+          const apps = await fetchApplications(supabase);
+          if (!cancelled) setResumableCount(apps.length);
+        } catch {
+          if (!cancelled) setResumableCount(0);
+        }
       } catch (e) {
         if (!cancelled) setFatal((e as Error).message);
       }
@@ -156,8 +181,10 @@ export function App({ supabase }: { supabase: MinimalSupabase }) {
     };
   }, [supabase]);
 
-  // Begin / Add Another Child: create a fresh family_record under the SAME uid
-  // and enter the candidacy modal.
+  // Begin Application: create a fresh family_record (a new household, or the
+  // FIRST application) under the SAME uid and enter the candidacy modal. Note:
+  // "Add Another Child" for an EXISTING household inserts a `student` under it
+  // (DashboardStep.addChild), NOT a new family_record (R1).
   const startApplication = useCallback(async () => {
     if (!uid) return;
     try {
@@ -205,6 +232,7 @@ export function App({ supabase }: { supabase: MinimalSupabase }) {
         <LandingStep
           supabase={supabase}
           uid={uid}
+          resumableCount={resumableCount}
           onBegin={startApplication}
           onDashboard={() => setStep('dashboard')}
         />
@@ -244,7 +272,7 @@ export function App({ supabase }: { supabase: MinimalSupabase }) {
       {!fatal && step === 'dashboard' && (
         <DashboardStep
           supabase={supabase}
-          onAddChild={startApplication}
+          onStartApplication={startApplication}
         />
       )}
 
@@ -261,11 +289,14 @@ export function App({ supabase }: { supabase: MinimalSupabase }) {
 function LandingStep({
   supabase,
   uid,
+  resumableCount,
   onBegin,
   onDashboard,
 }: {
   supabase: MinimalSupabase;
   uid: string | null;
+  /** Applications the persisted anon session owns; > 0 ⇒ offer a resume affordance. */
+  resumableCount: number | null;
   onBegin: () => void;
   onDashboard: () => void;
 }) {
@@ -274,6 +305,8 @@ function LandingStep({
   // brief's "a step_viewed for landing is fine".
   useStepTelemetry(supabase, null, 'landing');
   void uid;
+
+  const canResume = (resumableCount ?? 0) > 0;
 
   return (
     <div className="card landing">
@@ -291,6 +324,22 @@ function LandingStep({
         GT Anywhere — the Gifted Academy of Alpha School. A fully online program
         for students who want more.
       </p>
+
+      {/* R3 anon-resume affordance: a returning family (persisted anon session)
+          can jump straight back to their status page. Synthetic-only — no email,
+          no PII (INV-1). Shown only when the session already owns applications. */}
+      {canResume && (
+        <div className="resume-banner" aria-label="resume_banner">
+          <span>
+            Welcome back — you have {resumableCount}{' '}
+            {resumableCount === 1 ? 'application' : 'applications'} in progress.
+          </span>
+          <button className="primary" onClick={onDashboard}>
+            Resume my status page
+          </button>
+        </div>
+      )}
+
       <div className="actions">
         <button onClick={onDashboard}>My Applications</button>
         <button className="primary" onClick={onBegin} disabled={!uid}>
@@ -1172,20 +1221,104 @@ const STAGE_LABEL: Record<string, string> = {
   tuition: 'Pay Deposit',
 };
 
+// ---------------------------------------------------------------------------
+// R3 — the four-lane StatusStep, promoted from the single-lane dashboard card.
+// Lanes: Application · Enrollment · Voucher Confirmation · Next Step. The voucher
+// lane is FAIL-CLOSED (INV-10): it never reads "confirmed" before the first
+// installment (ApplicationSummary.voucherConfirmed is true only for
+// first_installment_received | funded). "Next step + by when" comes from the pure
+// params-driven deriveNextStep — no LLM (INV-2).
+// ---------------------------------------------------------------------------
+function lanePill(done: boolean, partial: boolean): { cls: string; mark: string } {
+  if (done) return { cls: 'lane done', mark: '✓' };
+  if (partial) return { cls: 'lane partial', mark: '◐' };
+  return { cls: 'lane pending', mark: '○' };
+}
+
+function StatusLanes({ app }: { app: ApplicationSummary }) {
+  const enrollPartial = !app.enrollmentDone && app.formsSigned > 0;
+  const next = deriveNextStep(
+    app.currentStage as ApplyStage,
+    app.fundingState as FundingState,
+    { signed: app.formsSigned, total: app.formsTotal },
+    APPLY_PARAMS,
+  );
+
+  const application = lanePill(app.applicationDone, false);
+  const enrollment = lanePill(app.enrollmentDone, enrollPartial);
+  // FAIL-CLOSED: a voucher is "confirmed" only when money is in hand; an
+  // awarded/self-reported/GT-confirmed-but-no-installment state shows as partial,
+  // never done.
+  const voucherPartial =
+    !app.voucherConfirmed && app.fundingState !== 'none';
+  const voucher = lanePill(app.voucherConfirmed, voucherPartial);
+
+  return (
+    <div className="status-lanes" aria-label="status_lanes">
+      <div className={application.cls} aria-label="lane_application">
+        <span className="lane-mark" aria-hidden="true">{application.mark}</span>
+        <span className="lane-name">Application</span>
+        <span className="lane-state">
+          {app.applicationDone ? 'Submitted' : 'Not submitted'}
+        </span>
+      </div>
+      <div className={enrollment.cls} aria-label="lane_enrollment">
+        <span className="lane-mark" aria-hidden="true">{enrollment.mark}</span>
+        <span className="lane-name">Enrollment</span>
+        <span className="lane-state">
+          {app.enrollmentDone
+            ? 'Complete'
+            : `${app.formsSigned}/${app.formsTotal} forms`}
+        </span>
+      </div>
+      <div className={voucher.cls} aria-label="lane_voucher">
+        <span className="lane-mark" aria-hidden="true">{voucher.mark}</span>
+        <span className="lane-name">Voucher Confirmation</span>
+        <span className="lane-state">
+          {app.voucherConfirmed
+            ? 'Confirmed'
+            : app.fundingState === 'none'
+              ? 'Not started'
+              : 'Awarded — not yet confirmed'}
+        </span>
+      </div>
+      <div className="lane next" aria-label="lane_next_step">
+        <span className="lane-mark" aria-hidden="true">→</span>
+        <span className="lane-name">Next Step</span>
+        <span className="lane-state">
+          {next.label}
+          {next.byWhen && (
+            <span className="lane-bywhen"> · by {next.byWhen}</span>
+          )}
+        </span>
+      </div>
+    </div>
+  );
+}
+
 function DashboardStep({
   supabase,
-  onAddChild,
+  onStartApplication,
 }: {
   supabase: MinimalSupabase;
-  onAddChild: () => void;
+  // Starts a brand-new application (creates the household's family_record). Used
+  // only when there is no household yet; once a household exists, "Add Another
+  // Child" inserts a `student` under it instead of forking a new family_record.
+  onStartApplication: () => void;
 }) {
   const [apps, setApps] = useState<ApplicationSummary[] | null>(null);
+  const [students, setStudents] = useState<StudentSummary[]>([]);
   const [err, setErr] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
 
   const refresh = useCallback(async () => {
     try {
-      const rows = await fetchApplications(supabase);
+      const [rows, kids] = await Promise.all([
+        fetchApplications(supabase),
+        fetchStudents(supabase),
+      ]);
       setApps(rows);
+      setStudents(kids);
     } catch (e) {
       setErr((e as Error).message);
     }
@@ -1195,12 +1328,35 @@ function DashboardStep({
     void refresh();
   }, [refresh]);
 
+  // The household spine = the first family_record created (its family_id is the
+  // household identity for the per-child `student` grain). Null until one exists.
+  const householdFamilyId = apps && apps.length > 0 ? apps[0]!.familyId : null;
+
   async function remove(familyId: string) {
     try {
       await deleteApplication(supabase, familyId);
       await refresh();
     } catch (e) {
       setErr((e as Error).message);
+    }
+  }
+
+  // R1 — "Add Another Child": with an existing household, INSERT a `student`
+  // under it (NOT a new family_record). With no household yet, start the first
+  // application (which creates the household's family_record).
+  async function addChild() {
+    if (!householdFamilyId) {
+      onStartApplication();
+      return;
+    }
+    setBusy(true);
+    try {
+      await addStudent(supabase, householdFamilyId);
+      await refresh();
+    } catch (e) {
+      setErr((e as Error).message);
+    } finally {
+      setBusy(false);
     }
   }
 
@@ -1220,32 +1376,50 @@ function DashboardStep({
       <div className="app-list">
         {(apps ?? []).map((app) => (
           <div className="app-card" key={app.familyId} aria-label="application_card">
-            <div className="app-card-main">
-              <div className="app-card-name">{app.displayName}</div>
-              <div className="app-card-year">{app.schoolYear} School Year</div>
-              <div className="app-card-progress">
-                <span className="progress-count">
-                  {app.stagesComplete}/{app.stagesTotal}
-                </span>{' '}
-                {STAGE_LABEL[app.currentStage]}
+            <div className="app-card-head">
+              <div className="app-card-main">
+                <div className="app-card-name">{app.displayName}</div>
+                <div className="app-card-year">{app.schoolYear} School Year</div>
+                <div className="app-card-progress">
+                  <span className="progress-count">
+                    {app.stagesComplete}/{app.stagesTotal}
+                  </span>{' '}
+                  {STAGE_LABEL[app.currentStage]}
+                </div>
               </div>
+              <button
+                className="trash"
+                aria-label={`delete_${app.familyId}`}
+                title="Delete application"
+                onClick={() => remove(app.familyId)}
+              >
+                🗑
+              </button>
             </div>
-            <button
-              className="trash"
-              aria-label={`delete_${app.familyId}`}
-              title="Delete application"
-              onClick={() => remove(app.familyId)}
-            >
-              🗑
-            </button>
+            <StatusLanes app={app} />
           </div>
         ))}
       </div>
 
+      {students.length > 0 && (
+        <div className="student-list" aria-label="children">
+          <h3 className="section-title">Children in your household</h3>
+          {students.map((s) => (
+            <div className="student-card" key={s.studentId} aria-label="student_card">
+              <span className="student-name">{s.displayLabel}</span>
+            </div>
+          ))}
+        </div>
+      )}
+
       <div className="actions">
         <span />
-        <button className="primary add-child" onClick={onAddChild}>
-          + Add Another Child
+        <button
+          className="primary add-child"
+          onClick={addChild}
+          disabled={busy}
+        >
+          {busy ? 'Adding…' : '+ Add Another Child'}
         </button>
       </div>
     </div>
