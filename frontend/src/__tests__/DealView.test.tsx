@@ -194,6 +194,144 @@ describe('DealView', () => {
 });
 
 // --------------------------------------------------------------------------- #
+// DH-5 — per-child "where each left off" in the deal view. The deal panel reads
+// GET /students (the SAME per-child board source, A-24), keeps only the SELECTED
+// family's children, and shows EACH child with its grade + the funnel stage it
+// left off at. The multi-child Rivera household shows BOTH children at their own
+// (possibly different) stages. Read-only (INV-2); synthetic identities (INV-1).
+// --------------------------------------------------------------------------- #
+
+// A /students board response: the Rivera household has TWO children stuck at
+// DIFFERENT stages (Alex in enrollment, Mia in tuition), plus an unrelated
+// household that must NOT leak into this family's panel.
+const STUDENT_BOARD = {
+  households: [
+    {
+      family_id: 'fam-123',
+      household_name: 'The Rivera Family',
+      value_at_risk: 20948,
+      students: [
+        {
+          student_id: 'stu-alex',
+          family_id: 'fam-123',
+          household_name: 'The Rivera Family',
+          display_label: 'Rivera household — Alex · Grade 3',
+          synthetic_first_name: 'Alex',
+          grade: '3',
+          current_stage: 'enroll',
+          funding_state: 'pending',
+          recovery_state: 'stalled',
+          score: 0.5,
+          recoverability: 0.5,
+          value: 10474,
+          recoverable_now: 5237,
+          freshness: 0.5,
+        },
+        {
+          student_id: 'stu-mia',
+          family_id: 'fam-123',
+          household_name: 'The Rivera Family',
+          display_label: 'Rivera household — Mia · Grade 1',
+          synthetic_first_name: 'Mia',
+          grade: '1',
+          current_stage: 'tuition',
+          funding_state: 'pending',
+          recovery_state: 'working',
+          score: 0.4,
+          recoverability: 0.4,
+          value: 10474,
+          recoverable_now: 4000,
+          freshness: 0.4,
+        },
+      ],
+    },
+    {
+      family_id: 'fam-OTHER',
+      household_name: 'The Vance Family',
+      value_at_risk: 10474,
+      students: [
+        {
+          student_id: 'stu-other',
+          family_id: 'fam-OTHER',
+          household_name: 'The Vance Family',
+          display_label: 'Vance household — Sam · Grade 5',
+          synthetic_first_name: 'Sam',
+          grade: '5',
+          current_stage: 'apply',
+          funding_state: 'pending',
+          recovery_state: 'stalled',
+          score: 0.3,
+          recoverability: 0.3,
+          value: 10474,
+          recoverable_now: 3000,
+          freshness: 0.3,
+        },
+      ],
+    },
+  ],
+  total_students: 3,
+  total_value_at_risk: 31422,
+};
+
+// A fetch stub routing GET /students → the board, everything else → the family.
+function mockChildrenFetch(family: unknown = ENROLLED_PAYLOAD): void {
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(async (url: string) => {
+      if (/\/students(\?|$)/.test(url)) {
+        return { ok: true, status: 200, json: async () => STUDENT_BOARD };
+      }
+      return { ok: true, status: 200, json: async () => family };
+    }),
+  );
+}
+
+describe('DealView — DH-5 per-child progress', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+
+  it('renders each child of the selected family with the stage it left off at', async () => {
+    mockChildrenFetch();
+    render(<DealView familyId="fam-123" />);
+
+    // The per-child section appears.
+    const section = await screen.findByTestId('deal-children');
+    expect(section).toBeInTheDocument();
+    expect(section).toHaveTextContent('Per-child progress');
+
+    // BOTH Rivera children render — each by its synthetic name + grade.
+    const alex = await screen.findByTestId('deal-child-stu-alex');
+    const mia = screen.getByTestId('deal-child-stu-mia');
+    expect(alex).toHaveTextContent('Alex');
+    expect(alex).toHaveTextContent('Grade 3');
+    expect(mia).toHaveTextContent('Mia');
+    expect(mia).toHaveTextContent('Grade 1');
+
+    // …at their OWN (different) stages, humanized (enroll → Enroll, tuition →
+    // Tuition) — proving the per-child grain, not a single family stage.
+    expect(alex).toHaveTextContent('Enroll');
+    expect(mia).toHaveTextContent('Tuition');
+
+    // A child from ANOTHER household must NOT leak into this family's panel.
+    expect(screen.queryByTestId('deal-child-stu-other')).toBeNull();
+    expect(section).not.toHaveTextContent('Sam');
+  });
+
+  it('does not render the per-child section when the board is unavailable (fail safe)', async () => {
+    // The blanket mock serves the FAMILY payload for /students too — no
+    // `households` array ⇒ the type guard rejects it ⇒ no per-child section,
+    // never a crash or bogus rows.
+    mockFetch(ENROLLED_PAYLOAD);
+    render(<DealView familyId="fam-123" />);
+
+    expect(await screen.findByText('The Rivera Family')).toBeInTheDocument();
+    expect(screen.queryByTestId('deal-children')).toBeNull();
+  });
+});
+
+// --------------------------------------------------------------------------- #
 // S10 W3 — "Seed to HubSpot" button + capture/trace panel (proof-of-capture).
 // --------------------------------------------------------------------------- #
 

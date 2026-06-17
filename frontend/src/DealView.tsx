@@ -5,7 +5,7 @@ import { Button, Chip } from './ui';
 import RecencyChip from './enrollment/RecencyChip';
 import CompletionRing from './enrollment/CompletionRing';
 import SeamDot, { type SeamStatus } from './enrollment/SeamDot';
-import { fundingLabel } from './enrollment/format';
+import { fundingLabel, humanizeSegment } from './enrollment/format';
 
 // Deal view (FR-2.2). Fetches GET /families/{id} and surfaces the deal_view
 // summary: stall reason, funding type, conversion likelihood (DH-1 — REPLACES the
@@ -44,6 +44,40 @@ interface DealViewData {
 // We only read deal_view; the rest of the family response is ignored here.
 interface FamilyResponse {
   deal_view: DealViewData;
+}
+
+// DH-5 — the per-child grain for the selected family. Each child runs its own
+// funnel (one application per child), so the deal panel must show WHICH children
+// the family has and WHERE EACH left off (current_stage). Sourced from the same
+// GET /students board StudentBoard reads (A-24) — no new shape invented. We read
+// only the identity + stage fields here; the board's score/recoverability terms
+// are ignored (this is the close panel, not the triage board). Read-only (INV-2).
+interface DealStudentRow {
+  student_id: string;
+  family_id: string;
+  display_label: string;
+  synthetic_first_name: string;
+  grade: string;
+  current_stage: string;
+}
+
+interface DealHouseholdGroup {
+  family_id: string;
+  students: DealStudentRow[];
+}
+
+interface StudentBoardResponse {
+  households: DealHouseholdGroup[];
+}
+
+// A response only counts as a student-board payload if it carries the
+// discriminating `households` array — so the blanket fetch stubs that serve the
+// /families payload for EVERY url (and the /crm/status, /seed payloads) do NOT
+// masquerade as the board and render bogus children. Fail SAFE on an unknown
+// shape: render no per-child section rather than crash (mirrors `isCrmStatus`).
+function isStudentBoard(value: unknown): value is StudentBoardResponse {
+  if (typeof value !== 'object' || value === null) return false;
+  return Array.isArray((value as Record<string, unknown>).households);
 }
 
 // POST /enrollment/families/{id}/seed response (S10 W3). The live HubSpot Deal +
@@ -278,6 +312,94 @@ function RecoveryTag({ state }: { state: string }): JSX.Element {
   );
 }
 
+// Per-child progress (DH-5). Lists EACH child of the selected family with its
+// grade and the funnel stage it LEFT OFF at (current_stage), humanized with the
+// SAME format.ts helper used across the enrollment views ("enroll" → "Enroll").
+// The child label reuses the board's `synthetic_first_name` (synthetic only —
+// INV-1, no real PII) + grade, the same identity StudentBoard shows. Read-only
+// (INV-2). States:
+//   - null     ⇒ still loading the board (or it failed / an unknown shape) — the
+//                section is omitted so a missing board never breaks the panel.
+//   - []       ⇒ the board resolved but this family has no children — an explicit
+//                "No children on file" placeholder, never literal "null".
+//   - [child…] ⇒ one row per child with its grade + stage chip.
+function ChildrenSection({
+  children,
+}: {
+  children: DealStudentRow[] | null;
+}): JSX.Element | null {
+  if (children === null) return null;
+  return (
+    <div
+      data-testid="deal-children"
+      style={{
+        marginTop: 'var(--s-3)',
+        padding: 'var(--s-3) var(--s-4)',
+        background: 'var(--surface-2)',
+        border: '1px solid var(--line)',
+        borderRadius: 'var(--r-md)',
+      }}
+    >
+      <div className="lab">Per-child progress</div>
+      {children.length === 0 ? (
+        <div
+          data-testid="deal-children-empty"
+          style={{
+            marginTop: 'var(--s-2)',
+            fontSize: 'var(--fs-sm)',
+            color: 'var(--muted)',
+          }}
+        >
+          No children on file
+        </div>
+      ) : (
+        <ul
+          style={{
+            listStyle: 'none',
+            margin: 'var(--s-2) 0 0',
+            padding: 0,
+            display: 'flex',
+            flexDirection: 'column',
+            gap: 'var(--s-1)',
+          }}
+        >
+          {children.map((child) => {
+            const grade = child.grade ? `Grade ${child.grade}` : PLACEHOLDER;
+            const name = child.synthetic_first_name || null;
+            const stageLabel = humanizeSegment(child.current_stage) || PLACEHOLDER;
+            return (
+              <li
+                key={child.student_id}
+                data-testid={`deal-child-${child.student_id}`}
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  gap: 'var(--s-2)',
+                }}
+              >
+                <span
+                  className="row-name"
+                  style={{ fontSize: 'var(--fs-sm)', minWidth: 0 }}
+                >
+                  {name != null ? `${name} · ${grade}` : grade}
+                </span>
+                <span
+                  className="row-stage"
+                  data-testid="deal-child-stage"
+                  title="Where this child left off"
+                >
+                  <Chip>{stageLabel}</Chip>
+                </span>
+              </li>
+            );
+          })}
+        </ul>
+      )}
+    </div>
+  );
+}
+
 export default function DealView({
   familyId,
   refreshKey,
@@ -292,6 +414,10 @@ export default function DealView({
   // unavailable / an unknown shape, in which case we fail OPEN: no banner, the
   // live-push stays enabled; the kill switch only blocks on a positive true).
   const [crm, setCrm] = useState<CrmStatus | null>(null);
+  // DH-5 — this family's children + where each left off. null until /students
+  // resolves; an unknown shape / error leaves it null ⇒ no per-child section
+  // (fail safe, never a crash or bogus rows).
+  const [children, setChildren] = useState<DealStudentRow[] | null>(null);
 
   function seedToHubSpot(): void {
     setSeed({ status: 'seeding' });
@@ -350,6 +476,36 @@ export default function DealView({
           const message = err instanceof Error ? err.message : 'unknown error';
           setState({ status: 'error', message });
         }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [familyId, refreshKey]);
+
+  useEffect(() => {
+    // DH-5 — fetch the per-child board (the SAME source StudentBoard reads, A-24)
+    // and keep only THIS family's children, so the deal panel can show which
+    // children the family has + where EACH left off. scope=all so a recovered /
+    // dismissed sibling still appears (the deal panel is the close view, not the
+    // active-only triage board). X-Demo-* headers ride along via apiFetch. Fail
+    // safe: any error / unknown shape ⇒ no children (never a crash). Read-only.
+    let cancelled = false;
+    setChildren(null);
+    apiFetch(`/students?scope=all`)
+      .then((res) => (res.ok ? (res.json() as Promise<unknown>) : null))
+      .then((data) => {
+        if (cancelled) return;
+        if (!isStudentBoard(data)) {
+          setChildren(null);
+          return;
+        }
+        const mine = data.households
+          .filter((h) => h.family_id === familyId)
+          .flatMap((h) => h.students);
+        setChildren(mine);
+      })
+      .catch(() => {
+        if (!cancelled) setChildren(null);
       });
     return () => {
       cancelled = true;
@@ -517,6 +673,12 @@ export default function DealView({
           </div>
         </div>
       )}
+
+      {/* Per-child progress (DH-5) — WHICH children this family has and where
+          EACH left off in the funnel. A single-child family shows its one child;
+          a multi-child household (e.g. the Riveras) shows BOTH at their own
+          (possibly different) stages. Sourced from GET /students (A-24). */}
+      <ChildrenSection children={children} />
 
       <dl
         className="deal-fields"
