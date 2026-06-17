@@ -75,6 +75,11 @@ def _funding_state_enum_sql() -> str:
     return (MIGRATIONS_DIR / "0012_funding_state_values.sql").read_text(encoding="utf-8")
 
 
+def _sales_agents_sql() -> str:
+    """The 0013 sales_agent registry + family_record.assigned_rep_id DDL (comments stripped)."""
+    return _strip_comments((MIGRATIONS_DIR / "0013_sales_agents.sql").read_text(encoding="utf-8"))
+
+
 def _all_sql() -> str:
     return "\n".join(p.read_text(encoding="utf-8") for p in _sql_files())
 
@@ -645,3 +650,101 @@ def test_0012_does_not_alter_rls_or_tables() -> None:
     assert not _CREATE_TABLE.search(sql), "0012 must not create a table (enum-only)"
     assert not _CREATE_POLICY.search(sql), "0012 must not add a policy (enum-only)"
     assert not _ENABLE_RLS.search(sql), "0012 must not re-toggle RLS (enum-only)"
+
+
+# ---------------------------------------------------------------------------
+# 0013 sales_agent registry + family_record.assigned_rep_id (MULTI_AGENT_COCKPIT
+# §3, PLAN.md M0 R1) — the DB-authoritative ownership seam. Adds:
+#   * `sales_agent` — an N-configurable registry of demo agents (deterministic
+#     seed of 2: #1 closer = the founder's seat, #2 setter), each with a stable
+#     per-rank uuid, rank, synthetic_name (INV-1), tier (closer|setter), and a
+#     simulated hubspot_owner_id (INV-9 live owner mirror). A new CREATE TABLE
+#     that MUST ENABLE *and* FORCE RLS (D-RLS-1) and carry a null-guarded policy
+#     (a registry every authenticated app user may read ⇒ `auth.uid() IS NOT
+#     NULL`, the same guard shape as the source tables — keeps the global
+#     CREATE==ENABLE==FORCE + one-guard-per-policy invariants green).
+#   * `family_record.assigned_rep_id` — a NEW NULLABLE column, FK→sales_agent,
+#     DISTINCT from `user_id`. `user_id` = the applicant family's RLS owner;
+#     `assigned_rep_id` = the salesperson who owns the deal (NULL ⇒ unassigned /
+#     the intake pool). Plus `assigned_at timestamptz`. This is PLAN.md M0's R1
+#     risk: assigned_rep_id MUST NOT be a reuse of user_id.
+# ---------------------------------------------------------------------------
+
+
+def test_sales_agent_and_assigned_rep() -> None:
+    """0013 adds the sales_agent registry (ENABLE+FORCE+null-guarded RLS), the
+    distinct family_record.assigned_rep_id FK + assigned_at, and a deterministic
+    2-agent (closer/setter) seed — keeping the global RLS count invariants green.
+    """
+    sql = _sales_agents_sql()
+
+    # --- the sales_agent registry table ---
+    assert re.search(r"CREATE\s+TABLE\s+sales_agent\b", sql, re.IGNORECASE), (
+        "0013 must CREATE TABLE sales_agent"
+    )
+    assert re.search(
+        r"ALTER\s+TABLE\s+sales_agent\s+ENABLE\s+ROW\s+LEVEL\s+SECURITY", sql, re.IGNORECASE
+    ), "0013 must ENABLE RLS on sales_agent (D-RLS-1)"
+    assert re.search(
+        r"ALTER\s+TABLE\s+sales_agent\s+FORCE\s+ROW\s+LEVEL\s+SECURITY", sql, re.IGNORECASE
+    ), "0013 must FORCE RLS on sales_agent (owner-role escape hatch, D-RLS-1)"
+
+    # At least one CREATE POLICY on sales_agent carrying the auth.uid() null guard.
+    sales_agent_policy = re.search(
+        r"CREATE\s+POLICY\s+\w+\s+ON\s+sales_agent\b[^;]*;", sql, re.IGNORECASE | re.DOTALL
+    )
+    assert sales_agent_policy, "0013 must add at least one CREATE POLICY on sales_agent"
+    assert _NULL_GUARD.search(sales_agent_policy.group(0)), (
+        "0013 sales_agent policy must carry the auth.uid() IS NOT NULL guard (D-RLS-2)"
+    )
+
+    # --- family_record.assigned_rep_id (FK→sales_agent, nullable) + assigned_at ---
+    add_rep = re.search(
+        r"ALTER\s+TABLE\s+family_record\s+ADD\s+COLUMN[^;]*\bassigned_rep_id\b[^;]*;",
+        sql,
+        re.IGNORECASE | re.DOTALL,
+    )
+    assert add_rep, "0013 must ALTER TABLE family_record ADD COLUMN assigned_rep_id"
+    assert re.search(r"REFERENCES\s+sales_agent\b", add_rep.group(0), re.IGNORECASE), (
+        "assigned_rep_id must be a FK REFERENCES sales_agent"
+    )
+    assert not re.search(r"\bNOT\s+NULL\b", add_rep.group(0), re.IGNORECASE), (
+        "assigned_rep_id must be NULLABLE (NULL ⇒ unassigned / intake pool)"
+    )
+    assert re.search(
+        r"ALTER\s+TABLE\s+family_record\s+ADD\s+COLUMN[^;]*\bassigned_at\b[^;]*timestamptz",
+        sql,
+        re.IGNORECASE | re.DOTALL,
+    ), "0013 must ADD COLUMN assigned_at timestamptz on family_record"
+
+    # --- assigned_rep_id is DISTINCT from user_id (R1) ---
+    # The new column is named assigned_rep_id, NOT a reuse of user_id; the header
+    # (un-stripped) documents user_id=applicant owner vs assigned_rep_id=rep.
+    raw = (MIGRATIONS_DIR / "0013_sales_agents.sql").read_text(encoding="utf-8")
+    assert re.search(r"\bassigned_rep_id\b", sql), "assigned_rep_id column must appear (DDL)"
+    assert re.search(r"\buser_id\b", raw), (
+        "user_id must be referenced (the distinct applicant owner — documented vs assigned_rep_id)"
+    )
+    assert not re.search(
+        r"ADD\s+COLUMN[^;]*\bassigned_rep_id\b[^;]*\buser_id\b", add_rep.group(0), re.IGNORECASE
+    ), "assigned_rep_id must NOT be defined as a reuse of user_id (R1: distinct columns)"
+
+    # --- deterministic 2-agent seed (rank 1 closer, rank 2 setter) ---
+    inserts = re.findall(r"INSERT\s+INTO\s+sales_agent\b", sql, re.IGNORECASE)
+    rank_values = re.findall(r"\brank\b", sql, re.IGNORECASE)
+    assert re.search(r"INSERT\s+INTO\s+sales_agent\b", sql, re.IGNORECASE), (
+        "0013 must seed sales_agent rows"
+    )
+    assert re.search(r"\bcloser\b", sql, re.IGNORECASE), "seed must include the closer tier (rank 1)"
+    assert re.search(r"\bsetter\b", sql, re.IGNORECASE), "seed must include the setter tier (rank 2)"
+    # Two demo agents: either two INSERT statements or a multi-row VALUES with two
+    # rank literals (1 and 2). Assert both ranks are present.
+    assert re.search(r"\b1\b", sql), "seed must include rank 1 (the closer)"
+    assert re.search(r"\b2\b", sql), "seed must include rank 2 (the setter)"
+    # Idempotent seed.
+    assert re.search(r"ON\s+CONFLICT", sql, re.IGNORECASE), (
+        "0013 seed must be idempotent (ON CONFLICT DO NOTHING or equivalent)"
+    )
+
+    # --- doctrine: no FOR ALL, no SECURITY DEFINER ---
+    assert not _SECURITY_DEFINER.search(sql), "0013 must not use SECURITY DEFINER (D-RLS-7)"
