@@ -1,8 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { CalendarDays, History, ListOrdered, Users } from 'lucide-react';
+import { CalendarDays, GitMerge, History, ListOrdered, Users } from 'lucide-react';
 import ActionPanel from '../ActionPanel';
 import DealView from '../DealView';
 import FundingTracker from '../FundingTracker';
+import HouseholdReconcileBoard from '../HouseholdReconcileBoard';
+import MergeQueue from '../MergeQueue';
 import CloseTipsPanel from '../enrollment/CloseTipsPanel';
 import EnrollmentCalendar, {
   type DrillBulk,
@@ -47,7 +49,9 @@ interface FamilySummary {
 
 // The left "find" views. Triage carries a scope dial; History is its own view.
 // Students (A-24) is the per-child board — one row per child, grouped by household.
-type LeftView = 'calendar' | 'triage' | 'students' | 'history';
+// Reconcile (the truth-layer staff view) is the household reconciliation board +
+// the human-review merge queue (ENROLLMENT_REFACTOR §8.1).
+type LeftView = 'calendar' | 'triage' | 'students' | 'reconcile' | 'history';
 
 type FamiliesState =
   | { status: 'loading' }
@@ -88,6 +92,9 @@ export default function EnrollmentWorkspace(): JSX.Element {
   });
   const [selectedFamilyId, setSelectedFamilyId] = useState<string | null>(null);
   const [leftView, setLeftView] = useState<LeftView>('calendar');
+  // The reconcile view shows the household board by default; a conflict row's
+  // "Merge queue" control flips to the human-review merge queue (and back).
+  const [mergeQueueOpen, setMergeQueueOpen] = useState(false);
   // The triage list's scope dial (Day/Week/All) + the day it's windowed around.
   const [triageScope, setTriageScope] = useState<TriageScope>('all');
   const [triageAnchor, setTriageAnchor] = useState<string | undefined>(
@@ -384,6 +391,7 @@ export default function EnrollmentWorkspace(): JSX.Element {
     { key: 'calendar' as const, label: 'Calendar', icon: CalendarDays },
     { key: 'triage' as const, label: 'Triage', icon: ListOrdered },
     { key: 'students' as const, label: 'Students', icon: Users },
+    { key: 'reconcile' as const, label: 'Reconcile', icon: GitMerge },
     { key: 'history' as const, label: 'History', icon: History },
   ];
 
@@ -422,7 +430,9 @@ export default function EnrollmentWorkspace(): JSX.Element {
         ? 'Triage — recover in priority order, the order to attack the wave'
         : leftView === 'students'
           ? 'Students — one application per child, grouped by household'
-          : 'History — recovered & dismissed (read-only audit)';
+          : leftView === 'reconcile'
+            ? 'Reconcile — one row per household, where the pipeline disagrees with itself'
+            : 'History — recovered & dismissed (read-only audit)';
 
   return (
     <section aria-label="Enrollment workspace" className="enrollment-workspace">
@@ -445,6 +455,8 @@ export default function EnrollmentWorkspace(): JSX.Element {
                     setTriageScope('all');
                     setTriageAnchor(undefined);
                   }
+                  // Leaving (or re-entering) Reconcile resets to the board view.
+                  if (v !== 'reconcile') setMergeQueueOpen(false);
                   setLeftView(v);
                   clearSel();
                 }}
@@ -479,6 +491,29 @@ export default function EnrollmentWorkspace(): JSX.Element {
               onSelectFamily={selectFamily}
             />
           )}
+          {leftView === 'reconcile' &&
+            (mergeQueueOpen ? (
+              <div data-testid="reconcile-merge-queue">
+                <WorkspaceToggle
+                  options={[
+                    { key: 'board' as const, label: 'Board', icon: GitMerge },
+                    {
+                      key: 'merge' as const,
+                      label: 'Merge queue',
+                      icon: GitMerge,
+                    },
+                  ]}
+                  active="merge"
+                  onSelect={(v) => setMergeQueueOpen(v === 'merge')}
+                  ariaLabel="Reconcile view"
+                />
+                <MergeQueue />
+              </div>
+            ) : (
+              <HouseholdReconcileBoard
+                onOpenMergeQueue={() => setMergeQueueOpen(true)}
+              />
+            ))}
           {leftView === 'history' && (
             <HistoryList
               selectedFamilyId={selectedFamilyId ?? undefined}

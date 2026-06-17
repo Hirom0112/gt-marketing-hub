@@ -10,6 +10,18 @@ import FundingTracker from '../FundingTracker';
 // Self-pay families have no installment schedule (installments:null) and must
 // not crash. Native fetch only (≤2 runtime deps). Read-only (INV-2).
 
+// The R2 voucher-standing fields the enriched GET …/funding view now carries
+// (program / next_action / due_by / days_remaining / at_risk /
+// award_full_vs_prorated). A confirmed family has no open reconfirm gap.
+const CONFIRMED_STANDING = {
+  program: 'tx_tefa',
+  next_action: 'Voucher confirmed — no action needed.',
+  due_by: null,
+  days_remaining: null,
+  at_risk: false,
+  award_full_vs_prorated: 'full',
+};
+
 // A TEFA family whose first installment has been received ⇒ tuition unlocked.
 const UNLOCKED_PAYLOAD = {
   family_id: 'fam-a',
@@ -17,6 +29,7 @@ const UNLOCKED_PAYLOAD = {
   funding_type: 'tefa_standard',
   installments: ['2618.50', '2618.50', '5237.00'],
   tuition_unlocked: true,
+  ...CONFIRMED_STANDING,
 };
 
 // A TEFA family still awaiting the first installment ⇒ tuition locked.
@@ -26,6 +39,7 @@ const LOCKED_PAYLOAD = {
   funding_type: 'tefa_standard',
   installments: ['2618.50', '2618.50', '5237.00'],
   tuition_unlocked: false,
+  ...CONFIRMED_STANDING,
 };
 
 // A self-pay family: no TEFA schedule (installments:null), tuition locked.
@@ -35,6 +49,24 @@ const SELF_PAY_PAYLOAD = {
   funding_type: null,
   installments: null,
   tuition_unlocked: false,
+  ...CONFIRMED_STANDING,
+};
+
+// An AWARDED-but-not-reconfirmed family near its select-by cutoff: the voucher
+// standing carries an open deadline, an at-risk flag, and a next-action line. The
+// demo's "ranked to the top of the work queue" family (ENROLLMENT_REFACTOR §8.2).
+const AT_RISK_PAYLOAD = {
+  family_id: 'fam-d',
+  funding_state: 'awarded',
+  funding_type: 'tefa_standard',
+  installments: ['2618.50', '2618.50', '5237.00'],
+  tuition_unlocked: false,
+  program: 'tx_tefa',
+  next_action: 'Family must reconfirm GT in the voucher portal.',
+  due_by: '2026-07-01',
+  days_remaining: 5,
+  at_risk: true,
+  award_full_vs_prorated: 'prorated',
 };
 
 function mockFetch(payload: unknown): void {
@@ -125,5 +157,44 @@ describe('FundingTracker', () => {
     expect(screen.getByTestId('funding-type')).not.toHaveTextContent('null');
     // Self-pay is still tuition locked.
     expect(screen.getByTestId('tuition-badge')).toHaveTextContent(/locked/i);
+  });
+
+  it('Test D: an awarded-but-unreconfirmed family shows the countdown, next-action line, and an at-risk badge', async () => {
+    vi.unstubAllGlobals();
+    mockFetch(AT_RISK_PAYLOAD);
+    render(<FundingTracker familyId="fam-d" />);
+
+    // The deadline countdown reads from days_remaining (and surfaces the due date).
+    const countdown = await screen.findByTestId('voucher-countdown');
+    expect(countdown).toHaveTextContent('5');
+    expect(countdown).toHaveTextContent(/day/i);
+
+    // The next-action line is the single next step the family must take.
+    expect(screen.getByTestId('voucher-next-action')).toHaveTextContent(
+      'Family must reconfirm GT in the voucher portal.',
+    );
+
+    // The at-risk badge is shown (selected/awarded, deadline at hand, prorating).
+    const badge = screen.getByTestId('voucher-at-risk-badge');
+    expect(badge).toBeInTheDocument();
+    expect(badge).toHaveTextContent(/at[\s-]?risk/i);
+  });
+
+  it('Test E: a confirmed family (due_by:null) shows NO countdown and NO at-risk badge (fail-closed)', async () => {
+    vi.unstubAllGlobals();
+    mockFetch(UNLOCKED_PAYLOAD);
+    render(<FundingTracker familyId="fam-a" />);
+
+    await screen.findByText('first_installment_received');
+    // No open reconfirm gap ⇒ no countdown clock and no at-risk badge. The voucher
+    // lane never invents a deadline or risk it can't prove (fail-closed, INV-10).
+    expect(screen.queryByTestId('voucher-countdown')).not.toBeInTheDocument();
+    expect(
+      screen.queryByTestId('voucher-at-risk-badge'),
+    ).not.toBeInTheDocument();
+    // The next-action line still renders the confirmed copy (a proven statement).
+    expect(screen.getByTestId('voucher-next-action')).toHaveTextContent(
+      'Voucher confirmed',
+    );
   });
 });

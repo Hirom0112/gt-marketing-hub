@@ -1,8 +1,8 @@
 import { useEffect, useState } from 'react';
-import { Lock, LockOpen } from 'lucide-react';
+import { AlertTriangle, Clock, Lock, LockOpen } from 'lucide-react';
 import { apiBaseUrl } from './config';
 import { Card } from './ui';
-import { fundingLabel } from './enrollment/format';
+import { fmtDay, fundingLabel } from './enrollment/format';
 
 // Funding tracker (FR-2.6/2.7). Fetches GET /families/{id}/funding and surfaces
 // the funding state, the funding tier (funding_type), the TEFA installment
@@ -14,13 +14,23 @@ import { fundingLabel } from './enrollment/format';
 // renders as a dash placeholder, never literal "null". S8 Wave 2 re-skin: gold
 // (gate) funding tone, a lock badge, and an installment ladder of inset rows.
 
-// GET /families/{id}/funding response (backend app/api/schemas.py).
+// GET /families/{id}/funding response (backend app/api/funding.py FundingView).
+// Carries the R2 voucher-standing fields: program / next_action / due_by /
+// days_remaining / at_risk / award_full_vs_prorated — the deadline clock and the
+// "by when" the family page and the work-queue deadline ranking read from.
 interface FundingView {
   family_id: string;
   funding_state: string;
   funding_type: string | null;
   installments: string[] | null; // TEFA amounts as strings; null for self-pay
   tuition_unlocked: boolean;
+  // R2 voucher standing (app.core.voucher.voucher_standing).
+  program: string;
+  next_action: string;
+  due_by: string | null; // ISO date of the operative reconfirm/select cutoff
+  days_remaining: number | null; // days from today to due_by
+  at_risk: boolean; // awarded/selected, not reconfirmed, deadline at hand
+  award_full_vs_prorated: string; // "full" on/before cutoff, else "prorated"
 }
 
 interface FundingTrackerProps {
@@ -82,6 +92,17 @@ export default function FundingTracker({
 
   const funding = state.data;
   const unlocked = funding.tuition_unlocked;
+
+  // The voucher-standing lane is FAIL-CLOSED: a countdown shows ONLY when the
+  // backend proves an open reconfirm/select gap (a due_by + a non-negative
+  // days_remaining). We never invent a deadline or risk we can't prove (INV-10).
+  const hasDeadline =
+    funding.due_by !== null &&
+    funding.days_remaining !== null &&
+    funding.days_remaining >= 0;
+  // The at-risk badge is shown ONLY on a proven open deadline (never an empty
+  // "at_risk" with no gap to point at) — fail-closed.
+  const showAtRisk = funding.at_risk && hasDeadline;
 
   return (
     <section aria-label="Funding tracker" data-testid="funding-tracker">
@@ -155,6 +176,104 @@ export default function FundingTracker({
             {unlocked ? <LockOpen size={11} aria-hidden /> : <Lock size={11} aria-hidden />}
             {unlocked ? 'Tuition unlocked' : 'Tuition locked'}
           </span>
+        </div>
+
+        {/* R2 voucher standing — the deadline countdown, the single next-action
+            line, and an at-risk badge. The lane is FAIL-CLOSED: the countdown and
+            the at-risk badge appear only when the backend proves an open
+            reconfirm/select gap (a due_by + days_remaining); a confirmed family
+            shows the next-action copy alone, never a fabricated clock. */}
+        <div
+          className="voucher-standing"
+          data-testid="voucher-standing"
+          style={{
+            marginTop: 'var(--s-3)',
+            paddingTop: 'var(--s-3)',
+            borderTop: '1px solid var(--line)',
+            display: 'grid',
+            gap: 'var(--s-2)',
+          }}
+        >
+          <div
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              gap: 'var(--s-2)',
+            }}
+          >
+            <span className="lab" style={{ color: 'var(--muted)' }}>
+              Voucher confirmation
+            </span>
+            {showAtRisk && (
+              <span
+                className="voucher-at-risk-badge mono"
+                data-testid="voucher-at-risk-badge"
+                role="status"
+                style={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: 'var(--s-1)',
+                  flexShrink: 0,
+                  fontSize: 'var(--fs-chip)',
+                  padding: '4px 9px',
+                  borderRadius: 'var(--r-xs)',
+                  whiteSpace: 'nowrap',
+                  color: 'var(--signal-ink)',
+                  background: 'var(--signal-wash)',
+                  border: '1px solid var(--signal)',
+                }}
+              >
+                <AlertTriangle size={11} aria-hidden /> At risk
+              </span>
+            )}
+          </div>
+
+          {hasDeadline && (
+            <div
+              className="voucher-countdown"
+              data-testid="voucher-countdown"
+              style={{
+                display: 'inline-flex',
+                alignItems: 'baseline',
+                gap: 'var(--s-1)',
+                color: showAtRisk ? 'var(--signal-ink)' : 'var(--ink)',
+              }}
+            >
+              <Clock
+                size={11}
+                aria-hidden
+                style={{ alignSelf: 'center', flexShrink: 0 }}
+              />
+              <span
+                className="mono"
+                style={{ fontSize: 'var(--fs-body)', fontWeight: 700 }}
+              >
+                {funding.days_remaining}
+              </span>
+              <span className="lab">
+                {funding.days_remaining === 1 ? 'day' : 'days'} left
+              </span>
+              <span className="lab" style={{ color: 'var(--muted)' }}>
+                · reconfirm by {fmtDay(funding.due_by ?? '')}
+                {funding.award_full_vs_prorated === 'prorated'
+                  ? ' or the award prorates'
+                  : ''}
+              </span>
+            </div>
+          )}
+
+          <p
+            className="voucher-next-action"
+            data-testid="voucher-next-action"
+            style={{
+              margin: 0,
+              fontSize: 'var(--fs-sm)',
+              color: 'var(--ink)',
+            }}
+          >
+            {funding.next_action}
+          </p>
         </div>
 
         {funding.installments !== null && (
