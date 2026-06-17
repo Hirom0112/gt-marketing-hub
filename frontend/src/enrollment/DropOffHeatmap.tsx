@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { TrendingDown } from 'lucide-react';
-import { apiBaseUrl } from '../config';
+import { apiFetch } from '../config';
 import { dropOffPath } from './format';
 
 // Aggregate apply-flow drop-off heatmap (S15 W2). Reads GET /drop-off/heatmap —
@@ -33,7 +33,7 @@ export default function DropOffHeatmap(): JSX.Element {
 
   useEffect(() => {
     let cancelled = false;
-    fetch(`${apiBaseUrl}/drop-off/heatmap`)
+    apiFetch(`/drop-off/heatmap`)
       .then((res) => {
         if (!res.ok) throw new Error(`heatmap request failed: ${res.status}`);
         return res.json() as Promise<HeatmapResponse>;

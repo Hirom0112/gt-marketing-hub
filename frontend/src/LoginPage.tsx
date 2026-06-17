@@ -8,19 +8,54 @@ import { useState } from 'react';
 
 export type DemoRole = 'admin' | 'agent';
 
+/** A sales agent's tier — "closer" is a tier, NOT a third role
+ *  (MULTI_AGENT_COCKPIT.md §2.2). */
+export type AgentTier = 'closer' | 'setter';
+
 export interface DemoSession {
   role: DemoRole;
-  /** The chosen agent (only when role === 'agent'). */
+  /** The chosen agent's canonical agent_id uuid (only when role === 'agent'). */
   agentId?: string;
-  agentLabel?: string;
+  /** The agent's pipeline rank (1 = closer seat, 2 = setter). */
+  agentRank?: number;
+  /** The agent's tier (only when role === 'agent'). */
+  tier?: AgentTier;
+  /** The agent's synthetic display name (only when role === 'agent'). */
+  agentName?: string;
 }
 
-// The demo runs N=2 agents: #1 closer (the founder's seat) + #2 average/setter
-// (MULTI_AGENT_COCKPIT.md §2). Synthetic, no PII.
-const DEMO_AGENTS = [
-  { id: 'agent-1', label: 'Agent #1 — Closer' },
-  { id: 'agent-2', label: 'Agent #2 — Sales Agent' },
+export interface DemoAgent {
+  /** The canonical seeded agent_id uuid (migration 0013) — this is the value
+   *  carried on X-Demo-Agent-Id so the backend's get_demo_principal scopes. */
+  readonly id: string;
+  readonly rank: number;
+  readonly tier: AgentTier;
+  readonly name: string;
+}
+
+// The demo runs exactly N=2 agents: rank 1 = closer (the founder's own seat),
+// rank 2 = average/setter (MULTI_AGENT_COCKPIT.md §2.2, §10.1). "Closer" is a
+// tier, not a third role. agent_ids are the canonical seeded uuids (migration
+// 0013) — the header value MUST match them. Synthetic names, no PII (INV-1).
+export const DEMO_AGENTS: ReadonlyArray<DemoAgent> = [
+  {
+    id: 'a0000000-0000-4000-8000-000000000001',
+    rank: 1,
+    tier: 'closer',
+    name: 'Riley Carter',
+  },
+  {
+    id: 'a0000000-0000-4000-8000-000000000002',
+    rank: 2,
+    tier: 'setter',
+    name: 'Jordan Avery',
+  },
 ] as const;
+
+/** Human label for a tier badge. */
+export function tierLabel(tier: AgentTier): string {
+  return tier === 'closer' ? 'Closer' : 'Setter';
+}
 
 const STORAGE_KEY = 'gt_demo_session';
 
@@ -56,16 +91,27 @@ export default function LoginPage({
   onEnter: (session: DemoSession) => void;
 }): JSX.Element {
   const [role, setRole] = useState<DemoRole>('admin');
-  const [agentId, setAgentId] = useState<string>(DEMO_AGENTS[0].id);
+  const firstAgent = DEMO_AGENTS[0];
+  const [agentId, setAgentId] = useState<string>(firstAgent?.id ?? '');
 
   function enter(): void {
     if (role === 'admin') {
       onEnter({ role: 'admin' });
       return;
     }
-    const agent = DEMO_AGENTS.find((a) => a.id === agentId) ?? DEMO_AGENTS[0];
-    onEnter({ role: 'agent', agentId: agent.id, agentLabel: agent.label });
+    const agent = DEMO_AGENTS.find((a) => a.id === agentId) ?? firstAgent;
+    if (!agent) return;
+    onEnter({
+      role: 'agent',
+      agentId: agent.id,
+      agentRank: agent.rank,
+      tier: agent.tier,
+      agentName: agent.name,
+    });
   }
+
+  const selectedAgent =
+    DEMO_AGENTS.find((a) => a.id === agentId) ?? firstAgent;
 
   return (
     <div className="login-page" data-testid="login-page">
@@ -110,19 +156,29 @@ export default function LoginPage({
         </div>
 
         {role === 'agent' && (
-          <select
-            className="login-select"
-            data-testid="login-agent-select"
-            aria-label="Sales agent"
-            value={agentId}
-            onChange={(e) => setAgentId(e.target.value)}
-          >
-            {DEMO_AGENTS.map((a) => (
-              <option key={a.id} value={a.id}>
-                {a.label}
-              </option>
-            ))}
-          </select>
+          <div className="login-agent-pick">
+            <select
+              className="login-select"
+              data-testid="login-agent-select"
+              aria-label="Sales agent"
+              value={agentId}
+              onChange={(e) => setAgentId(e.target.value)}
+            >
+              {DEMO_AGENTS.map((a) => (
+                <option key={a.id} value={a.id}>
+                  {`${a.name} — ${tierLabel(a.tier)}`}
+                </option>
+              ))}
+            </select>
+            {selectedAgent && (
+              <span
+                className={`login-tier-badge login-tier-${selectedAgent.tier}`}
+                data-testid="login-tier-badge"
+              >
+                {tierLabel(selectedAgent.tier)}
+              </span>
+            )}
+          </div>
         )}
 
         <button type="submit" className="login-enter" data-testid="login-enter">

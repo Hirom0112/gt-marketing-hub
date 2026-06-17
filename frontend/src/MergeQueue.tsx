@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { Check, GitMerge, X } from 'lucide-react';
-import { apiBaseUrl } from './config';
+import { apiFetch } from './config';
 import { Button, Card, Chip } from './ui';
 
 // Merge-queue human-review UI (ENROLLMENT_REFACTOR §5.2, §6 Phase 1).
@@ -53,7 +53,7 @@ export default function MergeQueue(): JSX.Element {
 
   useEffect(() => {
     let cancelled = false;
-    fetch(`${apiBaseUrl}/merge-queue`)
+    apiFetch(`/merge-queue`)
       .then((res) => {
         if (!res.ok) throw new Error(`merge-queue request failed: ${res.status}`);
         return res.json() as Promise<MergeCandidate[]>;
@@ -77,7 +77,7 @@ export default function MergeQueue(): JSX.Element {
   // approve decision; this client never merges. On a logged decision the
   // candidate leaves the queue.
   const decide = useCallback((proposalId: string, action: Verdict): void => {
-    fetch(`${apiBaseUrl}/proposals/${proposalId}/decision`, {
+    apiFetch(`/proposals/${proposalId}/decision`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ action }),

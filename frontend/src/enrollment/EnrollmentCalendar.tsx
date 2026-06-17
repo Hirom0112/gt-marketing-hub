@@ -6,7 +6,7 @@ import {
   ChevronRight,
   List,
 } from 'lucide-react';
-import { apiBaseUrl } from '../config';
+import { apiFetch } from '../config';
 import { Button, Card } from '../ui';
 import CalendarChip from './CalendarChip';
 import HeatCell from './HeatCell';
@@ -206,11 +206,11 @@ export default function EnrollmentCalendar({
     if (month !== null && loadedMonth.current === month) return;
     let cancelled = false;
     setState({ status: 'loading' });
-    const url =
+    const path =
       month === null
-        ? `${apiBaseUrl}/enrollment/calendar`
-        : `${apiBaseUrl}/enrollment/calendar?month=${month}`;
-    fetch(url)
+        ? `/enrollment/calendar`
+        : `/enrollment/calendar?month=${month}`;
+    apiFetch(path)
       .then((res) => {
         if (!res.ok) throw new Error(`calendar request failed: ${res.status}`);
         return res.json() as Promise<CalendarResponse>;

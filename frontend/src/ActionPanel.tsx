@@ -12,7 +12,7 @@ import {
   Trash2,
   Zap,
 } from 'lucide-react';
-import { apiBaseUrl, hubspotNoteUrl } from './config';
+import { hubspotNoteUrl, apiFetch } from './config';
 import { Button } from './ui';
 
 // Enrollment AI action panel (FR-2.4) + fail-closed eval gate (FR-4.5 / INV-3).
@@ -106,7 +106,7 @@ export default function ActionPanel({
     setDecision(null);
     setEditing(false);
     setState({ status: 'loading' });
-    fetch(`${apiBaseUrl}/ai/enrollment/draft`, {
+    apiFetch(`/ai/enrollment/draft`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ family_id: familyId, action }),
@@ -130,7 +130,7 @@ export default function ActionPanel({
     kind: DecisionKind,
     editedPayload?: string,
   ): void {
-    fetch(`${apiBaseUrl}/proposals/${proposalId}/decision`, {
+    apiFetch(`/proposals/${proposalId}/decision`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({

@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Link2, Users } from 'lucide-react';
-import { apiBaseUrl } from './config';
+import { apiFetch } from './config';
 import { Card } from './ui';
 
 // Read-only landing dashboard (FR-2.1/2.6). Renders the four per-stage pipeline
@@ -46,7 +46,7 @@ export default function LandingDashboard(): JSX.Element {
   useEffect(() => {
     let cancelled = false;
     // GET only — the landing surface is read-only (INV-2 for S0).
-    fetch(`${apiBaseUrl}/pipeline`)
+    apiFetch(`/pipeline`)
       .then((res) => {
         if (!res.ok) throw new Error(`pipeline request failed: ${res.status}`);
         return res.json() as Promise<PipelineResponse>;

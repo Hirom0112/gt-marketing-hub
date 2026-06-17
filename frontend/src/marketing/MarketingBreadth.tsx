@@ -10,7 +10,7 @@ import {
   Plus,
   Users,
 } from 'lucide-react';
-import { apiBaseUrl } from '../config';
+import { apiFetch } from '../config';
 import { Button, Card, Chip, PlaceholderBadge, Stat } from '../ui';
 
 // Marketing-breadth workspace (S6 / FR-3.8/3.9, OUT-1/2/5, INV-3/4/6/7).
@@ -154,7 +154,7 @@ function useGet<T>(path: string, nonce = 0): LoadState<T> {
   useEffect(() => {
     let cancelled = false;
     setState({ status: 'loading' });
-    fetch(`${apiBaseUrl}${path}`)
+    apiFetch(path)
       .then((res) => {
         if (!res.ok) throw new Error(`request failed: ${res.status}`);
         return res.json() as Promise<T>;
@@ -600,7 +600,7 @@ function PipelinePanel(): JSX.Element {
     setAdvance({ kind: 'advancing' });
     // The §4 guard advances the concept only when it is human-selected AND holds
     // a passing validation; the server returns 422 (fail-closed) otherwise.
-    fetch(`${apiBaseUrl}/content/pipeline/advance`, {
+    apiFetch(`/content/pipeline/advance`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -784,7 +784,7 @@ function SchedulerPanel(): JSX.Element {
     // email post one day out, which simulate-sends (dispatch_mode is forced to
     // simulated server-side, OUT-2). A channel/asset picker is a later slice.
     const scheduledFor = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
-    fetch(`${apiBaseUrl}/content/schedule`, {
+    apiFetch(`/content/schedule`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -1037,7 +1037,7 @@ function RecipeRunner(): JSX.Element {
   const [ran, setRan] = useState<Record<string, boolean>>({});
 
   function run(id: string): void {
-    fetch(`${apiBaseUrl}/recipes/${id}/run`, {
+    apiFetch(`/recipes/${id}/run`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({}),

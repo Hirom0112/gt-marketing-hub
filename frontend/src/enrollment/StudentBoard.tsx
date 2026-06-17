@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Users } from 'lucide-react';
-import { apiBaseUrl } from '../config';
+import { apiFetch } from '../config';
 import { Card, Chip } from '../ui';
 import { fmtUSD } from './format';
 
@@ -85,7 +85,7 @@ export default function StudentBoard({
   useEffect(() => {
     let cancelled = false;
     setState({ status: 'loading' });
-    fetch(`${apiBaseUrl}/students?scope=${scope}`)
+    apiFetch(`/students?scope=${scope}`)
       .then((res) => {
         if (!res.ok) throw new Error(`students request failed: ${res.status}`);
         return res.json() as Promise<StudentBoardResponse>;

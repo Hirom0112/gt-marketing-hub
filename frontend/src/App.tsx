@@ -9,12 +9,8 @@ import {
 } from 'lucide-react';
 import './theme.css';
 import Sidebar, { type SidebarItem } from './Sidebar';
-import LoginPage, {
-  type DemoSession,
-  loadSession,
-  saveSession,
-  clearSession,
-} from './LoginPage';
+import LoginPage from './LoginPage';
+import { SessionProvider, useSession } from './session/SessionContext';
 import EnrollmentWorkspace from './workspaces/EnrollmentWorkspace';
 import MarketingWorkspace from './workspaces/MarketingWorkspace';
 import LeadershipWorkspace from './workspaces/LeadershipWorkspace';
@@ -51,16 +47,24 @@ const SECONDARY_NAV: ReadonlyArray<SidebarItem<NavKey>> = [
 ];
 
 export default function App(): JSX.Element {
-  const [session, setSession] = useState<DemoSession | null>(() => loadSession());
+  return (
+    <SessionProvider>
+      <AppShell />
+    </SessionProvider>
+  );
+}
+
+function AppShell(): JSX.Element {
+  const { session, enter, leave } = useSession();
   const [workspace, setWorkspace] = useState<Workspace>('enrollment');
 
-  // No seat chosen yet ⇒ the demo login gate (M1).
+  // No seat chosen yet ⇒ the demo login gate (M1). The gate's chosen seat scopes
+  // the whole app (and rides on the X-Demo-* headers via apiFetch).
   if (session === null) {
     return (
       <LoginPage
         onEnter={(s) => {
-          saveSession(s);
-          setSession(s);
+          enter(s);
           setWorkspace('enrollment');
         }}
       />
@@ -69,8 +73,7 @@ export default function App(): JSX.Element {
 
   function onSelect(key: NavKey): void {
     if (key === 'switch-seat') {
-      clearSession();
-      setSession(null);
+      leave();
       return;
     }
     setWorkspace(key);

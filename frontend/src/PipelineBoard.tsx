@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { apiBaseUrl } from './config';
+import { apiFetch } from './config';
 import { Card } from './ui';
 import {
   type ContactStatus,
@@ -44,7 +44,7 @@ export default function PipelineBoard(): JSX.Element {
 
   useEffect(() => {
     let cancelled = false;
-    fetch(`${apiBaseUrl}/pipeline`)
+    apiFetch(`/pipeline`)
       .then((res) => {
         if (!res.ok) throw new Error(`pipeline request failed: ${res.status}`);
         return res.json() as Promise<PipelineResponse>;

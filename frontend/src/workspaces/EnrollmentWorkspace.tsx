@@ -20,7 +20,7 @@ import NotesTimeline, {
 import { ToastHost, useToasts } from '../enrollment/toast';
 import { type RecoverableRow, summarizeRecovery } from '../enrollment/recency';
 import { fmtUSD } from '../enrollment/format';
-import { apiBaseUrl } from '../config';
+import { apiFetch } from '../config';
 import { Card, WorkspaceToggle } from '../ui';
 import type { SendPartition } from '../enrollment/BulkBar';
 
@@ -125,7 +125,7 @@ export default function EnrollmentWorkspace(): JSX.Element {
   }, []);
 
   const reloadRows = useCallback((): void => {
-    fetch(`${apiBaseUrl}/work-queue`)
+    apiFetch(`/work-queue`)
       .then((res) => {
         if (!res.ok)
           throw new Error(`work-queue request failed: ${res.status}`);
@@ -137,7 +137,7 @@ export default function EnrollmentWorkspace(): JSX.Element {
 
   useEffect(() => {
     let cancelled = false;
-    fetch(`${apiBaseUrl}/families`)
+    apiFetch(`/families`)
       .then((res) => {
         if (!res.ok) throw new Error(`families request failed: ${res.status}`);
         return res.json() as Promise<FamilySummary[]>;
@@ -201,7 +201,7 @@ export default function EnrollmentWorkspace(): JSX.Element {
   const bulkNudge = useCallback((): void => {
     const ids = Array.from(selected);
     if (ids.length === 0) return;
-    fetch(`${apiBaseUrl}/ai/enrollment/bulk-nudge`, {
+    apiFetch(`/ai/enrollment/bulk-nudge`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ family_ids: ids }),
@@ -232,7 +232,7 @@ export default function EnrollmentWorkspace(): JSX.Element {
   const bulkCapture = useCallback((): void => {
     const ids = Array.from(selected);
     if (ids.length === 0) return;
-    fetch(`${apiBaseUrl}/enrollment/families/bulk-seed`, {
+    apiFetch(`/enrollment/families/bulk-seed`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ family_ids: ids }),
@@ -257,7 +257,7 @@ export default function EnrollmentWorkspace(): JSX.Element {
     (reason: string): void => {
       const ids = Array.from(selected);
       if (ids.length === 0) return;
-      fetch(`${apiBaseUrl}/enrollment/families/bulk-dismiss`, {
+      apiFetch(`/enrollment/families/bulk-dismiss`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ family_ids: ids, reason }),
@@ -285,7 +285,7 @@ export default function EnrollmentWorkspace(): JSX.Element {
   // bulk route with a one-id array (A-19 — one audited dismiss path).
   const dismissOne = useCallback(
     (familyId: string, reason: string): void => {
-      fetch(`${apiBaseUrl}/enrollment/families/bulk-dismiss`, {
+      apiFetch(`/enrollment/families/bulk-dismiss`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ family_ids: [familyId], reason }),

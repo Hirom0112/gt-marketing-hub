@@ -6,7 +6,7 @@ import {
   ShieldAlert,
   Sparkles,
 } from 'lucide-react';
-import { apiBaseUrl } from './config';
+import { apiFetch } from './config';
 import { Button, Card, Chip } from './ui';
 
 // Consolidated eval-suite gate (FR-4.5 / INV-3 fail-closed).
@@ -73,7 +73,7 @@ export default function EvalGate(): JSX.Element {
   useEffect(() => {
     let cancelled = false;
     setState({ status: 'loading' });
-    fetch(`${apiBaseUrl}/evals`)
+    apiFetch(`/evals`)
       .then((res) => {
         if (!res.ok) throw new Error(`evals request failed: ${res.status}`);
         return res.json() as Promise<EvalScoreboard>;
@@ -94,7 +94,7 @@ export default function EvalGate(): JSX.Element {
 
   function runSuite(): void {
     setRunning(true);
-    fetch(`${apiBaseUrl}/evals/run`, {
+    apiFetch(`/evals/run`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
     })

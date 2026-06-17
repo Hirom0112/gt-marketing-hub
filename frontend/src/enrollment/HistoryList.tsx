@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { apiBaseUrl } from '../config';
+import { apiFetch } from '../config';
 import { Card } from '../ui';
 import HistoryRow, { recoveredOutcomeLabel } from './HistoryRow';
 import { fmtDay, fmtUSD } from './format';
@@ -91,7 +91,7 @@ export default function HistoryList({
   useEffect(() => {
     let cancelled = false;
     setState({ status: 'loading' });
-    fetch(`${apiBaseUrl}/work-queue?scope=history&limit=${HISTORY_LIMIT}`)
+    apiFetch(`/work-queue?scope=history&limit=${HISTORY_LIMIT}`)
       .then((res) => {
         if (!res.ok) throw new Error(`history request failed: ${res.status}`);
         return res.json() as Promise<WorkQueueItem[]>;

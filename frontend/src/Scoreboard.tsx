@@ -6,7 +6,7 @@ import {
   TrendingDown,
   TrendingUp,
 } from 'lucide-react';
-import { apiBaseUrl } from './config';
+import { apiFetch } from './config';
 import { Card, Chip, type Tone } from './ui';
 
 // Leadership scoreboard (FR-6.1). A P2-readable view fronting BOTH funnels:
@@ -125,7 +125,7 @@ export default function Scoreboard(): JSX.Element {
   useEffect(() => {
     let cancelled = false;
     setState({ status: 'loading' });
-    fetch(`${apiBaseUrl}/scoreboard`)
+    apiFetch(`/scoreboard`)
       .then((res) => {
         if (!res.ok) throw new Error(`scoreboard request failed: ${res.status}`);
         return res.json() as Promise<ScoreboardView>;

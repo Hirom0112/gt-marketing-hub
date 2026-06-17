@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { ListOrdered } from 'lucide-react';
-import { apiBaseUrl } from './config';
+import { apiFetch } from './config';
 import { Button, Card, Chip } from './ui';
 import RecencyChip from './enrollment/RecencyChip';
 import { isContactStatus, recencyVars } from './enrollment/recency';
@@ -59,7 +59,7 @@ export default function WorkQueue({
 
   useEffect(() => {
     let cancelled = false;
-    fetch(`${apiBaseUrl}/work-queue`)
+    apiFetch(`/work-queue`)
       .then((res) => {
         if (!res.ok) throw new Error(`work-queue request failed: ${res.status}`);
         return res.json() as Promise<WorkQueueItem[]>;

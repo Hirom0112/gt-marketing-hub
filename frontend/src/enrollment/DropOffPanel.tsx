@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { LogOut } from 'lucide-react';
-import { apiBaseUrl } from '../config';
+import { apiFetch } from '../config';
 import { dropOffPath } from './format';
 
 // Per-family drop-off telemetry (S15 W2). Surfaces the last apply-flow position
@@ -50,7 +50,7 @@ export default function DropOffPanel({
   useEffect(() => {
     let cancelled = false;
     setState({ status: 'loading' });
-    fetch(`${apiBaseUrl}/families/${familyId}/drop-off`)
+    apiFetch(`/families/${familyId}/drop-off`)
       .then((res) => {
         // 204 (no telemetry) or any non-ok ⇒ empty; never throw on these.
         if (res.status === 204 || !res.ok) return null;

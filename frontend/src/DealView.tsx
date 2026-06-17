@@ -1,10 +1,6 @@
 import { useEffect, useState } from 'react';
 import { AlertTriangle, CheckCircle2, ExternalLink, UploadCloud, XCircle } from 'lucide-react';
-import {
-  apiBaseUrl,
-  hubspotContactUrl,
-  hubspotDealUrl,
-} from './config';
+import { hubspotContactUrl, hubspotDealUrl, apiFetch } from './config';
 import { Button, Chip } from './ui';
 import RecencyChip from './enrollment/RecencyChip';
 import CompletionRing from './enrollment/CompletionRing';
@@ -229,7 +225,7 @@ export default function DealView({
 
   function seedToHubSpot(): void {
     setSeed({ status: 'seeding' });
-    fetch(`${apiBaseUrl}/enrollment/families/${familyId}/seed`, {
+    apiFetch(`/enrollment/families/${familyId}/seed`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
     })
@@ -255,7 +251,7 @@ export default function DealView({
     // kill switch is on (S14 W4; INV-3/INV-8). Fail OPEN on any error / unknown
     // shape — a missing status never silently disables the action.
     let cancelled = false;
-    fetch(`${apiBaseUrl}/crm/status`)
+    apiFetch(`/crm/status`)
       .then((res) => (res.ok ? (res.json() as Promise<unknown>) : null))
       .then((data) => {
         if (!cancelled) setCrm(isCrmStatus(data) ? data : null);
@@ -271,7 +267,7 @@ export default function DealView({
   useEffect(() => {
     let cancelled = false;
     setState({ status: 'loading' });
-    fetch(`${apiBaseUrl}/families/${familyId}`)
+    apiFetch(`/families/${familyId}`)
       .then((res) => {
         if (!res.ok) throw new Error(`family request failed: ${res.status}`);
         return res.json() as Promise<FamilyResponse>;

@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { RefreshCw, Unlink } from 'lucide-react';
-import { apiBaseUrl } from './config';
+import { apiFetch } from './config';
 import { Button, Card, Chip } from './ui';
 
 // Seam-to-zero view (FR-2.7, milestone M-2). Fetches GET /seam — the non-synced
@@ -36,7 +36,7 @@ export default function SeamView(): JSX.Element {
 
   useEffect(() => {
     let cancelled = false;
-    fetch(`${apiBaseUrl}/seam`)
+    apiFetch(`/seam`)
       .then((res) => {
         if (!res.ok) throw new Error(`seam request failed: ${res.status}`);
         return res.json() as Promise<SeamRow[]>;
@@ -56,7 +56,7 @@ export default function SeamView(): JSX.Element {
   }, []);
 
   function reconcile(familyId: string): void {
-    fetch(`${apiBaseUrl}/seam/${familyId}/reconcile`, {
+    apiFetch(`/seam/${familyId}/reconcile`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
     })

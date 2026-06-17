@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Lightbulb, ShieldAlert } from 'lucide-react';
-import { apiBaseUrl } from '../config';
+import { apiFetch } from '../config';
 import { Button } from '../ui';
 
 // Eval-gated "how to close" tips (S9 Wave 5; FR-4.3 / INV-2/3/4).
@@ -74,7 +74,7 @@ export default function CloseTipsPanel({
   // enabled (the per-proposal gate is the hard guard).
   useEffect(() => {
     let cancelled = false;
-    fetch(`${apiBaseUrl}/evals`)
+    apiFetch(`/evals`)
       .then((res) => {
         if (!res.ok) throw new Error(`evals request failed: ${res.status}`);
         return res.json() as Promise<EvalScoreboard>;
@@ -92,7 +92,7 @@ export default function CloseTipsPanel({
 
   function requestTips(): void {
     setState({ status: 'loading' });
-    fetch(`${apiBaseUrl}/ai/enrollment/close-tips`, {
+    apiFetch(`/ai/enrollment/close-tips`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ family_id: familyId }),

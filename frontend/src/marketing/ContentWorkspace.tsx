@@ -13,7 +13,7 @@ import {
   Sparkles,
   Trash2,
 } from 'lucide-react';
-import { apiBaseUrl } from '../config';
+import { apiFetch } from '../config';
 import { Button, Card, Chip, PlaceholderBadge } from '../ui';
 import PostedGallery from './PostedGallery';
 
@@ -167,7 +167,7 @@ export default function ContentWorkspace(): JSX.Element {
   // a failure leaves it gracefully empty (the rest of the creator still works).
   useEffect(() => {
     let cancelled = false;
-    fetch(`${apiBaseUrl}/geo`)
+    apiFetch(`/geo`)
       .then((res) => {
         if (!res.ok) throw new Error(`geo request failed: ${res.status}`);
         return res.json() as Promise<{ prompt_set?: string[] }>;
@@ -188,7 +188,7 @@ export default function ContentWorkspace(): JSX.Element {
   useEffect(() => {
     let cancelled = false;
     setLibrary({ status: 'loading' });
-    fetch(`${apiBaseUrl}/content/library?q=${encodeURIComponent(libraryQuery)}`)
+    apiFetch(`/content/library?q=${encodeURIComponent(libraryQuery)}`)
       .then((res) => {
         if (!res.ok) throw new Error(`library request failed: ${res.status}`);
         return res.json() as Promise<LibraryAsset[]>;
@@ -210,7 +210,7 @@ export default function ContentWorkspace(): JSX.Element {
   function generate(): void {
     setDecisions({});
     setBatch({ status: 'loading' });
-    fetch(`${apiBaseUrl}/ai/content/generate`, {
+    apiFetch(`/ai/content/generate`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ prompt }),
@@ -239,7 +239,7 @@ export default function ContentWorkspace(): JSX.Element {
       target_geo_prompt: campaignGeoPrompt || null,
       count: campaignCount,
     };
-    fetch(`${apiBaseUrl}/ai/content/campaign`, {
+    apiFetch(`/ai/content/campaign`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
@@ -259,7 +259,7 @@ export default function ContentWorkspace(): JSX.Element {
   }
 
   function decide(proposalId: string, kind: DecisionKind): void {
-    fetch(`${apiBaseUrl}/content/${proposalId}/decision`, {
+    apiFetch(`/content/${proposalId}/decision`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ action: kind }),

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { AlertTriangle, GitMerge, RefreshCw, Flag } from 'lucide-react';
-import { apiBaseUrl } from './config';
+import { apiFetch } from './config';
 import { Button, Card, Chip } from './ui';
 import type { Tone } from './ui';
 
@@ -104,15 +104,15 @@ export default function HouseholdReconcileBoard({
   useEffect(() => {
     let cancelled = false;
     Promise.all([
-      fetch(`${apiBaseUrl}/households`).then((res) => {
+      apiFetch(`/households`).then((res) => {
         if (!res.ok) throw new Error(`households request failed: ${res.status}`);
         return res.json() as Promise<HouseholdsResponse>;
       }),
-      fetch(`${apiBaseUrl}/seam`).then((res) => {
+      apiFetch(`/seam`).then((res) => {
         if (!res.ok) throw new Error(`seam request failed: ${res.status}`);
         return res.json() as Promise<SeamRow[]>;
       }),
-      fetch(`${apiBaseUrl}/crm/status`).then((res) => {
+      apiFetch(`/crm/status`).then((res) => {
         if (!res.ok) throw new Error(`crm status request failed: ${res.status}`);
         return res.json() as Promise<CrmStatus>;
       }),
@@ -142,7 +142,7 @@ export default function HouseholdReconcileBoard({
   // fails closed (applied=false, still conflict; INV-4), so we always adopt the
   // returned status rather than optimistically assuming success.
   const reconcile = useCallback((familyId: string): void => {
-    fetch(`${apiBaseUrl}/seam/${familyId}/reconcile`, {
+    apiFetch(`/seam/${familyId}/reconcile`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
     })

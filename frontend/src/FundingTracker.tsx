@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { AlertTriangle, Clock, Lock, LockOpen } from 'lucide-react';
-import { apiBaseUrl } from './config';
+import { apiFetch } from './config';
 import { Card } from './ui';
 import { fmtDay, fundingLabel } from './enrollment/format';
 
@@ -52,7 +52,7 @@ export default function FundingTracker({
   useEffect(() => {
     let cancelled = false;
     setState({ status: 'loading' });
-    fetch(`${apiBaseUrl}/families/${familyId}/funding`)
+    apiFetch(`/families/${familyId}/funding`)
       .then((res) => {
         if (!res.ok) throw new Error(`funding request failed: ${res.status}`);
         return res.json() as Promise<FundingView>;

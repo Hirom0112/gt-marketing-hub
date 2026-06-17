@@ -15,7 +15,7 @@ import {
   Video,
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
-import { apiBaseUrl } from '../config';
+import { apiBaseUrl, apiFetch } from '../config';
 import { Card, Chip } from '../ui';
 
 // Posted-content gallery (FR-3.4) — "see every picture we ever posted and WHERE,
@@ -105,7 +105,7 @@ export default function PostedGallery(): JSX.Element {
       qs.set('platform', platform);
       qs.set('sort', sort);
     }
-    fetch(`${apiBaseUrl}/content/gallery?${qs.toString()}`)
+    apiFetch(`/content/gallery?${qs.toString()}`)
       .then((res) => {
         if (!res.ok) throw new Error(`gallery request failed: ${res.status}`);
         return res.json() as Promise<Partial<GalleryView>>;

@@ -8,7 +8,7 @@ import {
   Send,
   Video,
 } from 'lucide-react';
-import { apiBaseUrl, hubspotPortalId } from '../config';
+import { hubspotPortalId, apiFetch } from '../config';
 import { Button, Card, Chip } from '../ui';
 
 // Publish & Monitor panel (publish-monitor W4/W5; FR-3.6 / INV-2/3/4/8/9).
@@ -270,7 +270,7 @@ export default function PublishMonitor(): JSX.Element {
   const [evalName, setEvalName] = useState<string>('message_safety_grounding');
 
   const loadFeed = useCallback((): void => {
-    fetch(`${apiBaseUrl}/publish/monitor`)
+    apiFetch(`/publish/monitor`)
       .then((res) => {
         if (!res.ok) throw new Error(`monitor request failed: ${res.status}`);
         return res.json() as Promise<PublishMonitorRow[]>;
@@ -282,7 +282,7 @@ export default function PublishMonitor(): JSX.Element {
   }, []);
 
   const loadStatus = useCallback((): void => {
-    fetch(`${apiBaseUrl}/publish/status`)
+    apiFetch(`/publish/status`)
       .then((res) => {
         if (!res.ok) throw new Error(`status request failed: ${res.status}`);
         return res.json() as Promise<PublishStatus>;
@@ -317,7 +317,7 @@ export default function PublishMonitor(): JSX.Element {
     if (!canPublish) return;
     setPublishing(true);
     setError(null);
-    fetch(`${apiBaseUrl}/content/publish`, {
+    apiFetch(`/content/publish`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({

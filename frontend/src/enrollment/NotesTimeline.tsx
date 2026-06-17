@@ -6,7 +6,7 @@ import {
   forwardRef,
 } from 'react';
 import { NotebookPen, Plus } from 'lucide-react';
-import { apiBaseUrl } from '../config';
+import { apiFetch } from '../config';
 import { Button, Card, Chip } from '../ui';
 
 // Notes timeline (FR-2.3; S9 Wave 4). Consumes GET /families/{id}/notes — the
@@ -62,7 +62,7 @@ const NotesTimeline = forwardRef<NotesTimelineHandle, NotesTimelineProps>(
     const load = useCallback((): (() => void) => {
       let cancelled = false;
       setState({ status: 'loading' });
-      fetch(`${apiBaseUrl}/families/${familyId}/notes`)
+      apiFetch(`/families/${familyId}/notes`)
         .then((res) => {
           if (!res.ok) throw new Error(`notes request failed: ${res.status}`);
           return res.json() as Promise<Note[]>;
@@ -102,7 +102,7 @@ const NotesTimeline = forwardRef<NotesTimelineHandle, NotesTimelineProps>(
       const body = draft.trim();
       if (body === '' || submitting) return;
       setSubmitting(true);
-      fetch(`${apiBaseUrl}/families/${familyId}/notes`, {
+      apiFetch(`/families/${familyId}/notes`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ body }),

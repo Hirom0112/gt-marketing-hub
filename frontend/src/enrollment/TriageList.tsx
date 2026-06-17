@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { apiBaseUrl } from '../config';
+import { apiFetch } from '../config';
 import { Card, Button } from '../ui';
 import DrillRow, { DrillRowHead } from './DrillRow';
 import BulkBar from './BulkBar';
@@ -183,7 +183,7 @@ export default function TriageList({
   useEffect(() => {
     let cancelled = false;
     setState({ status: 'loading' });
-    fetch(`${apiBaseUrl}/work-queue?scope=active`)
+    apiFetch(`/work-queue?scope=active`)
       .then((res) => {
         if (!res.ok) throw new Error(`work-queue request failed: ${res.status}`);
         return res.json() as Promise<WorkQueueItem[]>;

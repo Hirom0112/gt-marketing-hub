@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Ban, Globe, Lock, RefreshCw, Sparkles } from 'lucide-react';
-import { apiBaseUrl } from '../config';
+import { apiFetch } from '../config';
 import { Button, Card, Chip, Stat } from '../ui';
 
 // GEO board (FR-3.7 / INV-3 fail-closed).
@@ -134,7 +134,7 @@ export default function GeoBoard(): JSX.Element {
   useEffect(() => {
     let cancelled = false;
     setState({ status: 'loading' });
-    fetch(`${apiBaseUrl}/geo`)
+    apiFetch(`/geo`)
       .then((res) => {
         if (!res.ok) throw new Error(`geo request failed: ${res.status}`);
         return res.json() as Promise<GeoTrackingView>;
@@ -155,7 +155,7 @@ export default function GeoBoard(): JSX.Element {
 
   function runSampling(): void {
     setSampling(true);
-    fetch(`${apiBaseUrl}/geo/sample`, {
+    apiFetch(`/geo/sample`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
     })
@@ -180,7 +180,7 @@ export default function GeoBoard(): JSX.Element {
     if (!target) return;
     setGenerating(true);
     setGenResult(null);
-    fetch(`${apiBaseUrl}/geo/generate`, {
+    apiFetch(`/geo/generate`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ target_prompt: target }),
