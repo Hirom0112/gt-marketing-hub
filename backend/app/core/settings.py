@@ -31,6 +31,12 @@ SocialPostMode = Literal["simulate", "live"]
 # without unlocking the simulated send/social/media modes. v1 default stays
 # `simulate`; `live` selects the production HubSpot adapter (S10 W2).
 CrmMode = Literal["simulate", "live"]
+# COCKPIT_REPO is the explicit data-source override (TECH_STACK §5.1). It chooses
+# the FamilyRepository the cockpit reads — it does NOT change either repo's
+# behavior (doctrine-neutral). `auto` keeps the A-24 M5 default (SUPABASE_URL set
+# ⇒ live, else synthetic); `synthetic` forces the in-memory cohort even with
+# SUPABASE_URL set; `supabase` REQUIRES the live repo (fail loud on misconfig).
+CockpitRepo = Literal["auto", "synthetic", "supabase"]
 
 
 def _env_bool(name: str, default: bool) -> bool:
@@ -96,6 +102,14 @@ class Settings(BaseModel):
     # guards (S10; ANALYSIS/hubspot-complement-plan.md §3). Default `simulate`.
     crm_mode: CrmMode = "simulate"
 
+    # Data-source override (§5.1). Selects the FamilyRepository the cockpit reads,
+    # overriding the A-24 M5 "SUPABASE_URL ⇒ supabase" single-source default so the
+    # operator can source the full `.env` (HubSpot token / Anthropic key / gallery
+    # path) yet still force the rich synthetic cohort. `auto` = unchanged default;
+    # `synthetic` = force the in-memory cohort even with SUPABASE_URL set;
+    # `supabase` = require the live repo (fail loud when unbound). Doctrine-neutral.
+    cockpit_repo: CockpitRepo = "auto"
+
     # HubSpot live-adapter config (§5.4). The token defaults to ``None`` —
     # absence is a first-class state: with no token the CRM edge can only run
     # `simulate` (the adapter agent's registry fails loud on `live` w/o a token).
@@ -148,6 +162,13 @@ class Settings(BaseModel):
         social_mode = os.environ.get("SOCIAL_POST_MODE", "simulate").strip() or "simulate"
         crm_mode = os.environ.get("CRM_MODE", "simulate").strip() or "simulate"
 
+        # COCKPIT_REPO: lower-cased; empty / unset / a `<…>` sentinel ⇒ `auto` (the
+        # current behavior). Any other value flows through to pydantic, which
+        # validates it against the CockpitRepo literal (a typo fails loud at boot).
+        cockpit_repo = (os.environ.get("COCKPIT_REPO", "") or "").strip().lower()
+        if not cockpit_repo or cockpit_repo.startswith("<"):
+            cockpit_repo = "auto"
+
         # A placeholder/sentinel token (the .env.example angle-bracket form or an
         # empty string) counts as "unset" — same posture as ANTHROPIC_API_KEY.
         hs_token = os.environ.get("HUBSPOT_PRIVATE_APP_TOKEN")
@@ -180,6 +201,7 @@ class Settings(BaseModel):
             media_gen_mode=media_mode,  # type: ignore[arg-type]
             social_post_mode=social_mode,  # type: ignore[arg-type]
             crm_mode=crm_mode,  # type: ignore[arg-type]
+            cockpit_repo=cockpit_repo,  # type: ignore[arg-type]
             hubspot_private_app_token=hs_token,
             hubspot_calls_per_run_cap=_env_int("HUBSPOT_CALLS_PER_RUN_CAP", 200),
             hubspot_kill_switch=_env_bool("HUBSPOT_KILL_SWITCH", False),

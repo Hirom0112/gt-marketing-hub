@@ -29,19 +29,65 @@ from app.core.params import Params, load_params
 from app.core.settings import Settings
 from app.data.notes_repository import InMemoryNotesRepository, NotesRepository
 from app.data.repository import FamilyRepository, InMemoryFamilyRepository
+from app.data.supabase_repository import build_supabase_repository
 from app.evals.suite import EvalSuiteResult
 from app.marketing.library import ContentLibrary, SqliteContentLibrary
 from app.observability.log_store import InMemoryObservabilityLog, ObservabilityLog
 
 
 def _build_repository(params: Params) -> FamilyRepository:
-    """Bind the live Supabase store when configured, else seed the in-memory one.
+    """Bind the data source the cockpit reads, honoring the COCKPIT_REPO override.
 
-    Single source of truth (A-24 M5): when ``SUPABASE_URL`` (+ service_role key)
-    is set, the LIVE :class:`SupabaseFamilyRepository` is bound — query-per-request
-    against the cloud project, server-only service_role, stage DERIVED on read —
-    and we do NOT also seed/bind an in-memory cohort. With no Supabase credential
-    the in-memory impl stays the v1 fallback (A-3), honoring ``COCKPIT_SCENARIO``:
+    ``COCKPIT_REPO`` (TECH_STACK §5.1) is the explicit data-source selector — it
+    chooses WHICH :class:`FamilyRepository` is bound, never changing either repo's
+    behavior (doctrine-neutral). It is read through :class:`Settings` and applied
+    BEFORE the A-24 M5 default so sourcing the full ``.env`` (HubSpot token /
+    Anthropic key / gallery path) can no longer silently bind the empty cloud
+    Supabase:
+
+    - ``synthetic`` ⇒ FORCE the in-memory cohort (``_build_in_memory_repository``),
+      NEVER Supabase even when ``SUPABASE_URL`` is set.
+    - ``supabase`` ⇒ REQUIRE the live repo. ``build_supabase_repository`` returning
+      ``None`` (no/blank ``SUPABASE_URL``) is a misconfig ⇒ raise ``RuntimeError``
+      (fail loud — the CRM-adapter posture), NOT a silent in-memory fallback.
+    - ``auto`` (the default) ⇒ the UNCHANGED A-24 M5 single source of truth: a
+      configured ``SUPABASE_URL`` (+ service_role key) binds the LIVE
+      :class:`SupabaseFamilyRepository` (query-per-request, server-only
+      service_role, stage DERIVED on read) and skips in-memory seeding; with no
+      Supabase credential the in-memory impl stays the v1 fallback (A-3).
+
+    The in-memory cohort honors ``COCKPIT_SCENARIO`` exactly as before (the June
+    demo default / ``back_to_school`` / ``realistic`` cohorts) — see
+    :func:`_build_in_memory_repository`. One composition-root read; no change to the
+    repository seam, the router layer, or the synthetic cohorts themselves.
+    """
+    repo_mode = Settings.from_env().cockpit_repo
+
+    if repo_mode == "synthetic":
+        return _build_in_memory_repository(params)
+
+    if repo_mode == "supabase":
+        # Fail loud on misconfig — the operator asked for the live repo explicitly,
+        # so a missing/blank SUPABASE_URL is an error, NOT a silent synthetic boot.
+        supabase = build_supabase_repository(params)
+        if supabase is None:
+            raise RuntimeError(
+                "COCKPIT_REPO=supabase requires SUPABASE_URL (+ "
+                "SUPABASE_SERVICE_ROLE_KEY); none was configured. Set them, or use "
+                "COCKPIT_REPO=synthetic (force in-memory) / COCKPIT_REPO=auto (default)."
+            )
+        return supabase
+
+    # auto (default): A-24 M5 single source of truth — Supabase when configured,
+    # else the in-memory v1 fallback.
+    supabase = build_supabase_repository(params)
+    if supabase is not None:
+        return supabase
+    return _build_in_memory_repository(params)
+
+
+def _build_in_memory_repository(params: Params) -> FamilyRepository:
+    """Seed the in-memory synthetic cohort, honoring ``COCKPIT_SCENARIO`` (A-3/A-21).
 
     Default (no/blank/``june`` env) ⇒ the unchanged 24-family June demo cohort —
     so the June-anchored count/recency fixtures and the 404 tests are untouched.
@@ -50,20 +96,11 @@ def _build_repository(params: Params) -> FamilyRepository:
     cadence-calibrated cohort (``generate_realistic``): its dismiss-target ids are
     recorded in ``_realistic_dismissed_family_ids`` so the observability log can
     seed the matching dismiss events (the dismissed slice). Every cohort is sized
-    entirely from params (INV-11), so the running app can serve any scenario with
-    no fixture churn. One composition-root env read; no change to the repository
-    seam, Settings registry, or any router.
+    entirely from params (INV-11).
     """
     import os
 
-    from app.data.supabase_repository import build_supabase_repository
     from app.data.synthetic import generate_back_to_school, generate_realistic
-
-    # A-24 M5: a configured Supabase URL is the single source of truth — bind the
-    # live repo and skip in-memory seeding entirely.
-    supabase = build_supabase_repository(params)
-    if supabase is not None:
-        return supabase
 
     scenario = (os.environ.get("COCKPIT_SCENARIO", "") or "").strip().lower()
     if scenario == "back_to_school":
