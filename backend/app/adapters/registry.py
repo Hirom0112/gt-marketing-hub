@@ -33,6 +33,7 @@ from app.adapters.media.base import MediaGenAdapter
 from app.adapters.media.placeholder import PlaceholderMediaGenAdapter
 from app.adapters.sentiment.base import SentimentAdapter
 from app.adapters.sentiment.placeholder import PlaceholderSentimentAdapter
+from app.adapters.sis.base import EnrollmentSystemAdapter
 from app.adapters.social.base import SocialAdapter
 from app.adapters.social.simulated import SimulatedSocialAdapter
 from app.core.params import AwardAmounts, Crm, Params, load_params
@@ -288,6 +289,41 @@ def get_sentiment_adapter() -> SentimentAdapter:
         "No production SentimentAdapter in v1: SEND_MODE='live' is reserved for a "
         "supplied production sentiment-feed impl (ARCHITECTURE.md §7.5; "
         "INV-9 fail-loud, INV-6 aggregate-only). v1 is locked to SEND_MODE='simulate'."
+    )
+
+
+def get_enrollment_system_adapter() -> EnrollmentSystemAdapter:
+    """Return the SIS/enrollment-system adapter for the current ``SIS_MODE`` (INV-9).
+
+    The agnostic SIS boundary (MULTI_AGENT_COCKPIT §4): the M5 reconcile core
+    consumes :class:`~app.adapters.sis.base.RosterRecord` only and never knows
+    which SIS is behind it. It keys on its own dedicated mode seam ``SIS_MODE``
+    (read only through :func:`app.core.settings.get_settings`):
+
+    - ``simulate`` (v1 default) ⇒ a ``SimulatedSISAdapter`` reading the synthetic
+      roster — **M5, not built yet**. M0 ships only this seam, so this currently
+      fails **loud** rather than silently returning nothing (INV-9).
+    - ``live`` ⇒ ``NotImplementedError`` — no ``LiveSISAdapter`` per a real SIS in
+      v1; fail loud rather than silently read an external roster (INV-9).
+
+    Mirrors the :func:`get_funding_signal_adapter` / :func:`get_geo_sampling_adapter`
+    fail-loud pattern.
+
+    Raises:
+        NotImplementedError: always in M0 — no concrete impl exists yet (M5).
+    """
+    mode = get_settings().sis_mode
+    if mode == "simulate":
+        raise NotImplementedError(
+            "No SimulatedSISAdapter yet — M5. M0 ships only the EnrollmentSystemAdapter "
+            "interface + RosterRecord shape + this SIS_MODE seam (MULTI_AGENT_COCKPIT §4, "
+            "INV-9). The synthetic-roster-backed SimulatedSISAdapter is built in M5 "
+            "(TODO.md M5); until then SIS_MODE='simulate' fails loud."
+        )
+    raise NotImplementedError(
+        "No LiveSISAdapter in v1: SIS_MODE='live' is reserved for a supplied "
+        "production SIS impl per a real Student Information System "
+        "(MULTI_AGENT_COCKPIT §4; INV-9 fail-loud). v1 default is SIS_MODE='simulate'."
     )
 
 

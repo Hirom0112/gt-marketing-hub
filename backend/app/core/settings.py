@@ -31,6 +31,12 @@ SocialPostMode = Literal["simulate", "live"]
 # without unlocking the simulated send/social/media modes. v1 default stays
 # `simulate`; `live` selects the production HubSpot adapter (S10 W2).
 CrmMode = Literal["simulate", "live"]
+# SIS_MODE is the agnostic enrollment-system (SIS) boundary seam (MULTI_AGENT_COCKPIT
+# §4, INV-9): it selects the EnrollmentSystemAdapter impl the M5 reconcile core reads.
+# v1 default `simulate` (reads the synthetic roster); `live` is reserved for a real
+# SIS. Both impls are M5 — M0 ships only the seam, so the registry selector currently
+# fails loud on either value (no impl yet). Separate from the `send_mode` lock.
+SisMode = Literal["simulate", "live"]
 # COCKPIT_REPO is the explicit data-source override (TECH_STACK §5.1). It chooses
 # the FamilyRepository the cockpit reads — it does NOT change either repo's
 # behavior (doctrine-neutral). `auto` keeps the A-24 M5 default (SUPABASE_URL set
@@ -102,6 +108,12 @@ class Settings(BaseModel):
     # guards (S10; ANALYSIS/hubspot-complement-plan.md §3). Default `simulate`.
     crm_mode: CrmMode = "simulate"
 
+    # SIS/enrollment-system seam (§5; MULTI_AGENT_COCKPIT §4, INV-9). Selects the
+    # EnrollmentSystemAdapter impl the M5 reconcile core reads. Default `simulate`
+    # (synthetic roster); `live` is reserved for a real SIS. Both impls are M5 —
+    # M0 wires only the seam, so the registry selector fails loud on either value.
+    sis_mode: SisMode = "simulate"
+
     # Data-source override (§5.1). Selects the FamilyRepository the cockpit reads,
     # overriding the A-24 M5 "SUPABASE_URL ⇒ supabase" single-source default so the
     # operator can source the full `.env` (HubSpot token / Anthropic key / gallery
@@ -161,6 +173,7 @@ class Settings(BaseModel):
         media_mode = os.environ.get("MEDIA_GEN_MODE", "placeholder").strip() or "placeholder"
         social_mode = os.environ.get("SOCIAL_POST_MODE", "simulate").strip() or "simulate"
         crm_mode = os.environ.get("CRM_MODE", "simulate").strip() or "simulate"
+        sis_mode = os.environ.get("SIS_MODE", "simulate").strip() or "simulate"
 
         # COCKPIT_REPO: lower-cased; empty / unset / a `<…>` sentinel ⇒ `auto` (the
         # current behavior). Any other value flows through to pydantic, which
@@ -201,6 +214,7 @@ class Settings(BaseModel):
             media_gen_mode=media_mode,  # type: ignore[arg-type]
             social_post_mode=social_mode,  # type: ignore[arg-type]
             crm_mode=crm_mode,  # type: ignore[arg-type]
+            sis_mode=sis_mode,  # type: ignore[arg-type]
             cockpit_repo=cockpit_repo,  # type: ignore[arg-type]
             hubspot_private_app_token=hs_token,
             hubspot_calls_per_run_cap=_env_int("HUBSPOT_CALLS_PER_RUN_CAP", 200),
