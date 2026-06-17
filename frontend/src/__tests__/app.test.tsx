@@ -40,10 +40,12 @@ describe('App shell', () => {
     enterCockpit();
     const sidebar = screen.getByTestId('sidebar');
     expect(sidebar).toBeInTheDocument();
+    // Entered as Admin ⇒ the admin-only Security tab (M7) is present too.
     for (const key of [
       'enrollment',
       'marketing',
       'leadership',
+      'security',
       'settings',
       'help',
       'switch-seat',

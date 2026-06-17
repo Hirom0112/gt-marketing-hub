@@ -6,6 +6,7 @@ import {
   LogOut,
   Megaphone,
   Settings,
+  ShieldCheck,
 } from 'lucide-react';
 import './theme.css';
 import Sidebar, { type SidebarItem } from './Sidebar';
@@ -17,6 +18,7 @@ import MarketingWorkspace from './workspaces/MarketingWorkspace';
 import LeadershipWorkspace from './workspaces/LeadershipWorkspace';
 import SettingsWorkspace from './workspaces/SettingsWorkspace';
 import HelpWorkspace from './workspaces/HelpWorkspace';
+import SecurityWorkspace from './workspaces/SecurityWorkspace';
 
 // GT Pulse app shell — a full-height blue LEFT nav rail beside the fluid main
 // column. There is NO top bar and NO page-header: the sidebar (GT Pulse logo +
@@ -28,6 +30,7 @@ type Workspace =
   | 'enrollment'
   | 'marketing'
   | 'leadership'
+  | 'security'
   | 'settings'
   | 'help';
 
@@ -40,6 +43,15 @@ const PRIMARY_NAV: ReadonlyArray<SidebarItem<NavKey>> = [
   { key: 'marketing', label: 'Marketing', icon: Megaphone, badge: 'In progress' },
   { key: 'leadership', label: 'Leadership', icon: BarChart3, badge: 'In progress' },
 ];
+
+// The Security / observability tab (M7) is an ADMIN-ONLY capability
+// (MULTI_AGENT_COCKPIT §5 role model: ✅ admin, ❌ rep). It is injected into the
+// secondary nav only for an admin seat — a rep must NEVER see it.
+const SECURITY_NAV: SidebarItem<NavKey> = {
+  key: 'security',
+  label: 'Security',
+  icon: ShieldCheck,
+};
 
 const SECONDARY_NAV: ReadonlyArray<SidebarItem<NavKey>> = [
   { key: 'settings', label: 'Settings', icon: Settings },
@@ -80,11 +92,18 @@ function AppShell(): JSX.Element {
     setWorkspace(key);
   }
 
+  // Admin-only: the Security tab is injected at the top of the secondary group
+  // for an admin seat ONLY. A rep (agent) never sees the nav item OR the tab.
+  const isAdmin = session.role === 'admin';
+  const secondaryNav = isAdmin
+    ? [SECURITY_NAV, ...SECONDARY_NAV]
+    : SECONDARY_NAV;
+
   return (
     <div className="app-shell">
       <Sidebar
         primary={PRIMARY_NAV}
-        secondary={SECONDARY_NAV}
+        secondary={secondaryNav}
         active={workspace}
         onSelect={onSelect}
       />
@@ -101,6 +120,9 @@ function AppShell(): JSX.Element {
             ))}
           {workspace === 'marketing' && <MarketingWorkspace />}
           {workspace === 'leadership' && <LeadershipWorkspace />}
+          {/* Admin-only (M7): guard the render too, so a rep can never reach the
+              Security surface even if the workspace state were forced. */}
+          {workspace === 'security' && isAdmin && <SecurityWorkspace />}
           {workspace === 'settings' && <SettingsWorkspace />}
           {workspace === 'help' && <HelpWorkspace />}
         </div>
