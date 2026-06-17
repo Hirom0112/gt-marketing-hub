@@ -135,6 +135,63 @@ class Enrollment(_StrictModel):
     contact: ContactWindows
 
 
+class Assignment(_StrictModel):
+    """Owner-authority assignment split + routing/alarm tunables (MULTI_AGENT_COCKPIT §2.2, §4).
+
+    'Closer' is an agent **tier**, not a third role; the split is the single
+    ``closer_rank_max`` tunable (demo = 1 ⇒ agents at rank <= 1 are the closer
+    tier). The other values drive the assignment/triage layer (M2):
+
+    * ``high_value_threshold`` — annual-tuition $ at/above which a family is
+      routed as HIGH VALUE (a dollar figure, NOT a [0,1] score).
+    * ``high_likelihood_threshold`` — recoverability/likelihood in [0,1] at/above
+      which a family is routed as HIGH LIKELIHOOD.
+    * ``deadline_alarm_days`` — a family within this many days of a voucher
+      deadline raises the deadline alarm.
+    * ``unowned_alarm_days`` — an UNOWNED family older than this many days raises
+      the unowned alarm (nobody has picked it up).
+    * ``per_tier_load_cap`` — the max open families a single agent tier may hold
+      before the queue stops auto-assigning to it (load governance).
+
+    Every value is a tunable home (INV-11); the assignment layer reads them here,
+    never a code literal.
+    """
+
+    closer_rank_max: int
+    high_value_threshold: float
+    high_likelihood_threshold: float
+    deadline_alarm_days: int
+    unowned_alarm_days: int
+    per_tier_load_cap: int
+
+
+class Sis(_StrictModel):
+    """SIS reconcile bucket rules (MULTI_AGENT_COCKPIT §6; INV-11).
+
+    The seam reconcile matches GT-side records against the SIS export on a
+    normalized email/phone match score, then sorts each match into one of three
+    buckets — ``confirmed`` / ``paid_not_in_sis`` / ``records_lag`` — while the
+    ambiguous tail routes to the merge queue. The bucket boundaries are tunables,
+    not hardcoded thresholds (M5 consumes these):
+
+    * ``match_confidence_cutoff`` — below this normalized match score the pair is
+      ambiguous and routes to the merge queue rather than auto-bucketing.
+    * ``confirmed_min_confidence`` — at/above this score a GT↔SIS pair is a
+      CONFIRMED match (present and reconciled on both sides).
+    * ``paid_not_in_sis_max_confidence`` — a GT-side paid family whose best SIS
+      match scores at/below this is treated as PAID-NOT-IN-SIS (paid on GT's side
+      but missing from the SIS export).
+    * ``records_lag_days`` — a confirmed-paid family absent from the SIS export
+      this many days past payment is flagged RECORDS-LAG (expected to appear once
+      the SIS catches up) rather than as a hard discrepancy.
+    """
+
+    match_confidence_cutoff: float
+    confirmed_min_confidence: float
+    paid_not_in_sis_max_confidence: float
+    records_lag_days: int
+
+
 class Bulk(_StrictModel):
     """S12 W2 bulk-action governance (A-20; INV-8 — the per-run cap + kill).
 
@@ -784,6 +841,8 @@ class Params(_StrictModel):
 
     work_queue: WorkQueue
     enrollment: Enrollment
+    assignment: Assignment
+    sis: Sis
     bulk: Bulk
     back_to_school: BackToSchool
     realistic: Realistic

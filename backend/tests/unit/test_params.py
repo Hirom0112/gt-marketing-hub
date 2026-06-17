@@ -253,6 +253,58 @@ def test_enrollment_contact_wrong_type_raises() -> None:
     assert "grey_window_days" in str(excinfo.value)
 
 
+def test_assignment_and_sis_blocks_load() -> None:
+    """M0 `assignment:` + `sis:` blocks parse from the committed example (INV-11).
+
+    The owner-authority assignment split (`closer_rank_max`, value/likelihood
+    routing thresholds, deadline/unowned alarms, per-tier load cap) and the SIS
+    reconcile bucket rules (`match_confidence_cutoff` + the three bucket-rule
+    thresholds) are the single home for those tunables (MULTI_AGENT_COCKPIT.md §4,
+    §2.2, §6); M2 (assignment) and M5 (SIS reconcile) read them from here, never a
+    code literal. This asserts both blocks load with the committed typed values.
+    """
+    params = load_params(EXAMPLE_PARAMS)
+
+    # assignment — closer tier = rank <= 1 (§2.2 demo), routing + alarm + load cap
+    assert params.assignment.closer_rank_max == 1
+    assert params.assignment.high_value_threshold == 12000.0
+    assert params.assignment.high_likelihood_threshold == 0.6
+    assert params.assignment.deadline_alarm_days == 14
+    assert params.assignment.unowned_alarm_days == 3
+    assert params.assignment.per_tier_load_cap == 40
+
+    # sis — reconcile match cutoff + the three bucket-rule thresholds (§6)
+    assert params.sis.match_confidence_cutoff == 0.9
+    assert params.sis.confirmed_min_confidence == 0.9
+    assert params.sis.paid_not_in_sis_max_confidence == 0.5
+    assert params.sis.records_lag_days == 7
+
+
+def test_assignment_block_missing_key_raises(tmp_path: Path) -> None:
+    """A params doc missing the `assignment:` block fails loudly — drift fails the build.
+
+    The loader is `extra=forbid` and the block is REQUIRED on the root `Params`
+    model, so a YAML that omits `assignment:` must raise a clear, typed
+    `ValidationError` naming the field, never silently default it
+    (CLAUDE.md §4.1, INV-11). Mirrors `test_enrollment_contact_missing_key_raises`.
+    """
+    broken = textwrap.dedent(
+        """\
+        sis:
+          match_confidence_cutoff: 0.9
+          confirmed_min_confidence: 0.9
+          paid_not_in_sis_max_confidence: 0.5
+          records_lag_days: 7
+        """
+    )
+    broken_path = tmp_path / "params.yaml"
+    broken_path.write_text(broken, encoding="utf-8")
+
+    with pytest.raises(ValidationError) as excinfo:
+        load_params(broken_path)
+    assert "assignment" in str(excinfo.value)
+
+
 def test_message_safety_grounding_requires_min_brand_score() -> None:
     """`min_brand_score` is REQUIRED — dropping it fails to load (INV-11, §4.1).
 

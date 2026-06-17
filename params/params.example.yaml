@@ -22,6 +22,20 @@ enrollment:                 # S9 — enrollment-depth deterministic core
     grey_window_days: 3       # uncontacted & age <= this  => fresh (grey)
     overdue_days: 4           # uncontacted & age >= this  => overdue (red)
 
+assignment:                 # M2 — owner-authority assignment split + routing/alarm tunables (MULTI_AGENT_COCKPIT §2.2, §4)
+  closer_rank_max: 1          # §2.2 — 'closer' is a TIER not a role; agents at rank <= this are the closer tier (demo = 1)
+  high_value_threshold: 12000.0   # annual-tuition $ at/above which a family routes as HIGH VALUE (a $ figure, not a [0,1] score)
+  high_likelihood_threshold: 0.6  # recoverability/likelihood in [0,1] at/above which a family routes as HIGH LIKELIHOOD
+  deadline_alarm_days: 14     # within this many days of a voucher deadline ⇒ deadline alarm
+  unowned_alarm_days: 3       # an UNOWNED family older than this many days ⇒ unowned alarm
+  per_tier_load_cap: 40       # max open families one agent tier may hold before auto-assign stops (load governance)
+
+sis:                        # M5 — seam reconcile bucket rules (MULTI_AGENT_COCKPIT §6); thresholds are tunables, not hardcoded
+  match_confidence_cutoff: 0.9        # below this normalized GT↔SIS match score ⇒ ambiguous → merge queue
+  confirmed_min_confidence: 0.9       # at/above this ⇒ CONFIRMED (reconciled on both sides)
+  paid_not_in_sis_max_confidence: 0.5 # a GT-paid family whose best SIS match is at/below this ⇒ PAID-NOT-IN-SIS
+  records_lag_days: 7                 # confirmed-paid but absent from SIS export this many days past payment ⇒ RECORDS-LAG
+
 bulk:                       # S12 W2 — bulk action governance (A-20; INV-8 per-run cap)
   nudge_per_run_cap: 50       # max families that may SEND per bulk-nudge run; beyond ⇒ capped/deferred
 
