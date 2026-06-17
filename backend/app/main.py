@@ -19,6 +19,7 @@ from app.api.families import router as families_router
 from app.api.funding import router as funding_router
 from app.api.geo import router as geo_router
 from app.api.marketing import router as marketing_router
+from app.api.merge import router as merge_router
 from app.api.notes import router as notes_router
 from app.api.publish import router as publish_router
 from app.api.scoreboard import router as scoreboard_router
@@ -75,6 +76,13 @@ app.include_router(ai_actions_router)
 # Per-family notes timeline (FR-2.3; A-8) — /families/{id}/notes GET + POST.
 # Manual notes + deterministic state-change auto-notes; no LLM, no proposals.
 app.include_router(notes_router)
+
+# Identity merge queue (ENROLLMENT_REFACTOR §5.2/§6; INV-2/INV-4/INV-9) —
+# /merge-queue GET. The dedup human-review pile: the deterministic propose_merge
+# core flags ambiguous duplicate households (fail-closed, never auto-merged) and
+# logs each as a proposal on the §10 spine (NFR-6); the existing
+# /proposals/{id}/decision route resolves it (approve = a SIMULATED fold).
+app.include_router(merge_router)
 
 # "Seed to HubSpot" deterministic write-action (S10 W3; ARCH §7.1; INV-2/9) —
 # /enrollment/families/{id}/seed POST. Pushes a synthetic family across the

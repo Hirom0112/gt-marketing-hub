@@ -54,6 +54,7 @@ from app.api.deps import (
     get_repository,
     get_settings_dep,
 )
+from app.api.merge import MERGE_FLOW
 from app.api.schemas import (
     AuditResponse,
     BulkNudgeBlocked,
@@ -76,7 +77,7 @@ from app.core.settings import Settings
 from app.data.notes_repository import NotesRepository
 from app.data.repository import FamilyRepository
 from app.evals.suite import EvalSuiteResult
-from app.observability.log_store import DecisionAction, ObservabilityLog
+from app.observability.log_store import AuditView, DecisionAction, ObservabilityLog
 
 router = APIRouter(tags=["ai-actions"])
 
@@ -444,6 +445,59 @@ def close_tips(
     )
 
 
+def _apply_merge(
+    proposal_id: UUID,
+    audit: AuditView,
+    notes: NotesRepository,
+) -> DecisionResponse:
+    """Apply an approved identity-merge fold — DETERMINISTIC + SIMULATED (INV-2/INV-9).
+
+    The deterministic core owns this write (INV-2): only after the logged human
+    ``approve`` (recorded by the caller) does the duplicate fold into the primary.
+    In v1 the fold is SIMULATED (INV-9) — NO live HubSpot/Supabase mutation and NO
+    ``service_role`` cross-family delete: it records a system-authored fold note on
+    the SURVIVING primary family (the audit-visible "what happened") and returns
+    the recorded decision. The merge surface is not an outbound, so the CRM nudge
+    send/seam path is deliberately NOT exercised here.
+
+    The proposal payload carries the fold targets (the pure
+    :class:`app.core.identity.MergeProposal` the merge-queue logged); reads default
+    safely so a malformed payload never raises.
+    """
+    payload = audit.proposal.payload
+    primary_raw = payload.get("primary_family_id")
+    duplicate_raw = payload.get("duplicate_family_id")
+    primary_id = audit.proposal.family_id
+    if primary_id is None and isinstance(primary_raw, str):
+        primary_id = UUID(primary_raw)
+
+    # Record the SIMULATED fold as a deterministic system note on the survivor so
+    # the audit shows the merge resolution (INV-2 — a core-authored state_change,
+    # not an LLM call). No live cross-family write happens in v1 (INV-9).
+    if primary_id is not None:
+        duplicate_label = str(duplicate_raw) if duplicate_raw is not None else "duplicate"
+        notes.add_note(
+            Note(
+                family_id=primary_id,
+                author=NoteAuthor.SYSTEM,
+                kind=NoteKind.STATE_CHANGE,
+                body=(
+                    f"Merge approved: folded duplicate household {duplicate_label} into "
+                    f"primary {primary_id} (simulated — no live CRM/DB write in v1)."
+                ),
+                created_at=datetime.now(UTC),
+            )
+        )
+
+    # No send, no seam recompute: a fold is not an outbound. ``send_simulated``
+    # stays True (this WAS a simulated apply) so the response reads as applied.
+    return DecisionResponse(
+        proposal_id=proposal_id,
+        action=DecisionAction.APPROVE,
+        send_simulated=True,
+    )
+
+
 @router.post("/proposals/{proposal_id}/decision", response_model=DecisionResponse)
 def decide_proposal(
     proposal_id: UUID,
@@ -455,11 +509,21 @@ def decide_proposal(
 ) -> DecisionResponse:
     """Apply a human verdict — the SOLE state-applying path (ARCH §6; NFR-6).
 
-    404 if the proposal was never logged (§10 causality). Logs the decision. On
-    ``approve``: simulate a send (INV-9), append a DETERMINISTIC follow-up
-    auto-note (A-8; INV-2 — not an LLM call), and recompute the §4.7 seam; on
-    edit/discard: log only, no send, no note. The family's ``last_contact_at``
-    then derives from the logged approve decision (A-14) — no stored field.
+    404 if the proposal was never logged (§10 causality). Logs the decision, then
+    branches on the proposal KIND via its ``flow`` discriminator (the audit head):
+
+    - an ``identity_merge`` proposal (:data:`app.api.merge.MERGE_FLOW`) ⇒ approve
+      applies the dedup FOLD deterministically + SIMULATED (INV-2/INV-9): a
+      system-authored fold note on the surviving primary family + the proposal is
+      marked applied, with NO CRM nudge send (the merge surface is not an outbound)
+      and no live cross-family Supabase mutation in v1;
+    - any other flow (a ``enrollment_draft`` nudge) ⇒ approve keeps its UNCHANGED
+      behavior: simulate a send (INV-9), append a DETERMINISTIC follow-up auto-note
+      (A-8; INV-2 — not an LLM call), and recompute the §4.7 seam.
+
+    On edit/discard: log only, no send, no fold, no note (fail-closed, INV-4 — a
+    discard NEVER merges and keeps the households separate). The family's
+    ``last_contact_at`` derives from the logged approve decision (A-14).
     """
     if log.get_audit(proposal_id) is None:
         raise HTTPException(status_code=404, detail="proposal not found")
@@ -472,12 +536,18 @@ def decide_proposal(
     )
 
     if request.action is not DecisionAction.APPROVE:
-        # Edit / discard: decision recorded, nothing sent, no state derived.
+        # Edit / discard: decision recorded, nothing sent/folded, no state derived.
+        # For a merge proposal this is the fail-closed "keep them separate" path.
         return DecisionResponse(proposal_id=proposal_id, action=request.action)
 
-    # APPROVE: the only branch that applies an AI output to (simulated) state.
+    # APPROVE: the only branch that applies a proposal to (simulated) state.
     audit = log.get_audit(proposal_id)
     assert audit is not None  # re-checked above; narrows for the type checker.
+
+    # Merge proposals fold rather than send — branch on the flow discriminator.
+    if audit.proposal.flow == MERGE_FLOW:
+        return _apply_merge(proposal_id, audit, notes)
+
     family_id = audit.proposal.family_id
 
     # Send through the CRM adapter — mode-agnostic (INV-9): the simulated recorder
