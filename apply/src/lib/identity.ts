@@ -44,6 +44,8 @@ export interface SyntheticIdentity {
   email: string;
   /** Fake phone — synthetic, never collected. */
   phone: string;
+  /** Synthetic ZIP — never a real postal code; shown read-only in the candidacy modal. */
+  zip: string;
 }
 
 function pick<T>(arr: readonly T[]): T {
@@ -69,6 +71,10 @@ export function generateSyntheticIdentity(): SyntheticIdentity {
     email: `${localPart}@example.invalid`,
     // Reserved 555-0100..555-0199 fake range; never a collected number.
     phone: `+1-555-01${String(Math.floor(Math.random() * 100)).padStart(2, '0')}`,
+    // Synthetic ZIP in the reserved 00000-range pattern; never a real postal code
+    // and never collected — it exists only to populate the candidacy modal's
+    // read-only Zip field with structural-looking text.
+    zip: `0000${Math.floor(Math.random() * 10)}`,
   };
 }
 

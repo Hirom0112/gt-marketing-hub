@@ -1,30 +1,36 @@
-// The mock apply SPA — a single-page 4-node stepper (no react-router), mirroring
-// apply.gt.school's flow with faithful STRUCTURE / trimmed depth (A-24).
+// The mock apply SPA — mirrors apply.gt.school's flow with faithful STRUCTURE /
+// trimmed depth (A-24 / S18).
 //
-// Top stepper:  Interest → Apply → Enroll → Tuition  (checkmarks on completed).
+// Surfaces (S18 added the marketing landing, the candidacy modal, and the
+// "My Applications" dashboard around the existing 4-step flow):
 //
-// Flow & row-writing order (UNCHANGED — so the cockpit join/stage-derivation is
-// untouched; only the UX structure + telemetry depth changed):
-//   sign-in (anon) → create family_record
-//   Interest  → INSERT leads_new          (family visible in cockpit here)
-//   Apply     → INSERT app_form           (derives stage `apply`)
-//   Enroll    → INSERT enrollment_forms   (derives stage `enroll`)
-//   Tuition   → $1,000 deposit → forms_signed=6 + tuition_unlocked (stage `tuition`)
+//   landing    → marketing hero ("The MIT of K-8") + Begin Application CTA
+//   candidacy  → "Secure Your Candidacy for Fall 2026" modal (prefilled-synthetic
+//                identity read-only, household-income dropdown, SMS-consent) →
+//                writes leads_new (family visible in cockpit here)
+//   apply      → long multi-section app form → app_form (stage `apply`)
+//   enroll     → 7-form left-rail sub-stepper → enrollment_forms (stage `enroll`)
+//   tuition    → $1,000 deposit → forms_signed=6 + unlock (stage `tuition`)
+//   dashboard  → "My Applications" hub: one card per family_record the session
+//                created, X/4 progress, delete, "+ Add Another Child"
 //
-// Telemetry is now step → form → field deep with a monotonic nav_seq. Everything
-// is dropdown/checkbox/radio/read-only-synthetic — no free-typed PII anywhere
+// Telemetry is step → form → field deep with a monotonic nav_seq. Everything is
+// dropdown/checkbox/radio/read-only-synthetic — no free-typed PII anywhere
 // (INV-1/INV-6). New dropdown selections are NOT persisted to DB columns.
 
-import { useEffect, useState, type ReactElement } from 'react';
+import { useCallback, useEffect, useState, type ReactElement } from 'react';
 import {
   createFamily,
+  deleteApplication,
+  deriveInterestAnswers,
   ensureAnonSession,
+  fetchApplications,
   submitApply,
   submitEnroll,
   submitInterest,
   submitTuition,
+  type ApplicationSummary,
   type ApplySession,
-  type InterestAnswers,
   type MinimalSupabase,
 } from './lib/apply';
 import {
@@ -42,6 +48,8 @@ import {
   GRADE_INTEREST,
   GT_USAGE,
   GT_USAGE_LABEL,
+  HOUSEHOLD_INCOME,
+  HOUSEHOLD_INCOME_LABEL,
   NUM_CHILDREN,
   PRODUCT_INTEREST,
   PRODUCT_INTEREST_LABEL,
@@ -61,6 +69,7 @@ import {
   type FundingType,
   type GradeInterest,
   type GtUsage,
+  type HouseholdIncome,
   type NumChildren,
   type ProductInterest,
   type Region,
@@ -79,30 +88,65 @@ import { RadioGroup } from './steps/RadioGroup';
 import { Section } from './steps/Section';
 import { SignatureBlock } from './steps/SignatureBlock';
 
-type StepName = 'interest' | 'apply' | 'enroll' | 'tuition' | 'done';
-const ORDER: StepName[] = ['interest', 'apply', 'enroll', 'tuition', 'done'];
+type StepName =
+  | 'landing'
+  | 'candidacy'
+  | 'apply'
+  | 'enroll'
+  | 'tuition'
+  | 'dashboard';
+const FLOW_ORDER: StepName[] = ['candidacy', 'apply', 'enroll', 'tuition'];
 const STEP_LABELS: { name: StepName; label: string }[] = [
-  { name: 'interest', label: 'Interest' },
+  { name: 'candidacy', label: 'Interest' },
   { name: 'apply', label: 'Apply' },
   { name: 'enroll', label: 'Enroll' },
   { name: 'tuition', label: 'Tuition' },
 ];
 
+function BrandHeader() {
+  return (
+    <div className="brand">
+      <div className="mark">GT</div>
+      <div className="wordmark">
+        <span className="gt">GT</span>
+        <span className="suffix"> anywhere</span>
+      </div>
+    </div>
+  );
+}
+
+function SiteFooter() {
+  return (
+    <footer className="site-footer">
+      <div className="footer-brand">
+        <span className="gt">GT</span>
+        <span className="suffix"> anywhere</span>
+      </div>
+      <div className="footer-contact">
+        © 2026 GT Anywhere · Part of the 2 Hour Learning Network ·{' '}
+        <a href="mailto:admissions@gt.school">admissions@gt.school</a>
+      </div>
+    </footer>
+  );
+}
+
 export function App({ supabase }: { supabase: MinimalSupabase }) {
+  const [uid, setUid] = useState<string | null>(null);
   const [session, setSession] = useState<ApplySession | null>(null);
-  const [step, setStep] = useState<StepName>('interest');
+  const [step, setStep] = useState<StepName>('landing');
   const [fatal, setFatal] = useState<string | null>(null);
 
-  // Sign in anonymously + create the owning family_record on load. This mirrors
-  // gtschool's OTP gate (yields an auth.uid()); the SPA uses the anon key only.
+  // Sign in anonymously on load (mirrors gtschool's OTP gate → an auth.uid()).
+  // The owning family_record is created when the applicant actually starts an
+  // application (Begin Application → candidacy), so an empty session shows the
+  // dashboard with no cards rather than a phantom record.
   useEffect(() => {
-    resetNavSeq(); // fresh session → nav_seq starts at 0.
+    resetNavSeq();
     let cancelled = false;
     (async () => {
       try {
-        const uid = await ensureAnonSession(supabase);
-        const sess = await createFamily(supabase, uid, 'direct');
-        if (!cancelled) setSession(sess);
+        const id = await ensureAnonSession(supabase);
+        if (!cancelled) setUid(id);
       } catch (e) {
         if (!cancelled) setFatal((e as Error).message);
       }
@@ -112,83 +156,160 @@ export function App({ supabase }: { supabase: MinimalSupabase }) {
     };
   }, [supabase]);
 
-  const stepIndex = ORDER.indexOf(step);
+  // Begin / Add Another Child: create a fresh family_record under the SAME uid
+  // and enter the candidacy modal.
+  const startApplication = useCallback(async () => {
+    if (!uid) return;
+    try {
+      const sess = await createFamily(supabase, uid, 'direct');
+      setSession(sess);
+      setStep('candidacy');
+    } catch (e) {
+      setFatal((e as Error).message);
+    }
+  }, [supabase, uid]);
+
+  const inFlow = FLOW_ORDER.includes(step);
+  const stepIndex = FLOW_ORDER.indexOf(step);
 
   return (
     <div className="shell">
-      <div className="brand">
-        <div className="mark">GT</div>
-        <div className="wordmark">
-          <span className="gt">GT</span>
-          <span className="suffix"> anywhere</span>
-        </div>
-      </div>
+      <BrandHeader />
       <div className="synthetic-banner">
         Synthetic demo — no real personal information is collected or stored. Every
         identity is generated; selections are structural only.
       </div>
 
-      {/* Top stepper: labelled, with checkmarks on completed steps. */}
-      <ol className="stepper" aria-label="progress">
-        {STEP_LABELS.map(({ name, label }, i) => {
-          const idx = ORDER.indexOf(name);
-          const state = idx < stepIndex ? 'done' : idx === stepIndex ? 'active' : '';
-          return (
-            <li key={name} className={'stepper-node ' + state}>
-              <span className="stepper-dot" aria-hidden="true">
-                {idx < stepIndex ? '✓' : i + 1}
-              </span>
-              <span className="stepper-label">{label}</span>
-            </li>
-          );
-        })}
-      </ol>
+      {/* The labelled stepper is only shown while inside the 4-step flow. */}
+      {inFlow && (
+        <ol className="stepper" aria-label="progress">
+          {STEP_LABELS.map(({ name, label }, i) => {
+            const idx = FLOW_ORDER.indexOf(name);
+            const state =
+              idx < stepIndex ? 'done' : idx === stepIndex ? 'active' : '';
+            return (
+              <li key={name} className={'stepper-node ' + state}>
+                <span className="stepper-dot" aria-hidden="true">
+                  {idx < stepIndex ? '✓' : i + 1}
+                </span>
+                <span className="stepper-label">{label}</span>
+              </li>
+            );
+          })}
+        </ol>
+      )}
 
       {fatal && <div className="card err">Could not start application: {fatal}</div>}
 
-      {!fatal && !session && (
-        <div className="card">
-          <p>Starting your application…</p>
-        </div>
+      {!fatal && step === 'landing' && (
+        <LandingStep
+          supabase={supabase}
+          uid={uid}
+          onBegin={startApplication}
+          onDashboard={() => setStep('dashboard')}
+        />
       )}
 
-      {session && step === 'interest' && (
-        <InterestStep
+      {!fatal && step === 'candidacy' && session && (
+        <CandidacyStep
           supabase={supabase}
           session={session}
           onNext={() => setStep('apply')}
         />
       )}
-      {session && step === 'apply' && (
+      {!fatal && step === 'apply' && session && (
         <ApplyStep
           supabase={supabase}
           session={session}
           onNext={() => setStep('enroll')}
         />
       )}
-      {session && step === 'enroll' && (
+      {!fatal && step === 'enroll' && session && (
         <EnrollStep
           supabase={supabase}
           session={session}
           onNext={() => setStep('tuition')}
         />
       )}
-      {session && step === 'tuition' && (
+      {!fatal && step === 'tuition' && session && (
         <TuitionStep
           supabase={supabase}
           session={session}
-          onNext={() => setStep('done')}
+          onNext={() => {
+            setSession(null);
+            setStep('dashboard');
+          }}
         />
       )}
-      {session && step === 'done' && <DoneStep session={session} />}
+      {!fatal && step === 'dashboard' && (
+        <DashboardStep
+          supabase={supabase}
+          onAddChild={startApplication}
+        />
+      )}
+
+      {(step === 'landing' || step === 'dashboard') && <SiteFooter />}
     </div>
   );
 }
 
 // ---------------------------------------------------------------------------
-// Step 1 — Interest. Writes leads_new (family becomes cockpit-visible here).
+// Marketing landing page — "The MIT of K-8" hero + Begin Application CTA.
+// Presentational; no data write. A step_viewed telemetry is fired (no family yet
+// → keyed only when a family exists; here it's a presentational view).
 // ---------------------------------------------------------------------------
-function InterestStep({
+function LandingStep({
+  supabase,
+  uid,
+  onBegin,
+  onDashboard,
+}: {
+  supabase: MinimalSupabase;
+  uid: string | null;
+  onBegin: () => void;
+  onDashboard: () => void;
+}) {
+  // Presentational telemetry: a landing step_viewed (no family_id yet, so the
+  // hook no-ops the write — the view is still rendered). Kept for parity with the
+  // brief's "a step_viewed for landing is fine".
+  useStepTelemetry(supabase, null, 'landing');
+  void uid;
+
+  return (
+    <div className="card landing">
+      <div className="landing-badges">
+        <span className="badge-pill">TEA Approved School</span>
+        <span className="badge-pill">Fall 2026 · Now Enrolling</span>
+      </div>
+      <h1 className="landing-hero">
+        The MIT of K–8.
+        <span className="landing-hero-accent">
+          For students who ask for more academics.
+        </span>
+      </h1>
+      <p className="sub">
+        GT Anywhere — the Gifted Academy of Alpha School. A fully online program
+        for students who want more.
+      </p>
+      <div className="actions">
+        <button onClick={onDashboard}>My Applications</button>
+        <button className="primary" onClick={onBegin} disabled={!uid}>
+          {uid ? 'Begin Application' : 'Starting…'}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Candidacy modal — "Secure Your Candidacy for Fall 2026". Mirrors the real
+// candidacy form's fields, but with NO typed PII: identity fields are prefilled-
+// synthetic + read-only; Household Income is a dropdown; SMS-consent is a
+// checkbox. Start Application writes the leads_new row (deriving the columns the
+// modal doesn't collect, so the row stays valid + the cockpit derives stage).
+// household_income is UI + telemetry only (leads_new has no column for it).
+// ---------------------------------------------------------------------------
+function CandidacyStep({
   supabase,
   session,
   onNext,
@@ -197,36 +318,28 @@ function InterestStep({
   session: ApplySession;
   onNext: () => void;
 }) {
-  const t = useStepTelemetry(supabase, session.familyId, 'interest');
-  const [product, setProduct] = useState<ProductInterest | ''>('');
-  const [attribution, setAttribution] = useState<AttributionSource | ''>('');
-  const [region, setRegion] = useState<Region | ''>('');
-  const [grade, setGrade] = useState<GradeInterest | ''>('');
-  const [numChildren, setNumChildren] = useState<NumChildren | ''>('');
+  const t = useStepTelemetry(supabase, session.familyId, 'candidacy');
+  const id = session.identity;
+  const [income, setIncome] = useState<HouseholdIncome | ''>('');
+  const [smsConsent, setSmsConsent] = useState(false);
   const [errors, setErrors] = useState<Record<string, boolean>>({});
   const [busy, setBusy] = useState(false);
 
-  async function next() {
+  async function start() {
     const errs: Record<string, boolean> = {};
-    if (!product) errs.product_interest = true;
-    if (!attribution) errs.attribution_source = true;
-    if (!region) errs.region = true;
-    if (!grade) errs.grade_interest = true;
-    if (!numChildren) errs.num_children = true;
+    if (!income) errs.household_income = true;
     if (Object.keys(errs).length) {
       setErrors(errs);
       Object.keys(errs).forEach((k) => t.validationError(k));
       return;
     }
     setBusy(true);
-    const answers: InterestAnswers = {
-      product_interest: product as ProductInterest,
-      attribution_source: attribution as AttributionSource,
-      region: region as Region,
-      grade_interest: grade as GradeInterest,
-      num_children: numChildren as NumChildren,
-    };
     try {
+      // DERIVE the leads_new columns the candidacy modal doesn't collect
+      // (product/region/grade/num_children) deterministically, so the row stays
+      // valid + the cockpit derives stage. household_income is NOT persisted
+      // (no column) — it's UI + telemetry only.
+      const answers = deriveInterestAnswers(session.familyId, 'direct');
       await submitInterest(supabase, session, answers);
       t.stepCompleted();
       onNext();
@@ -238,66 +351,78 @@ function InterestStep({
   }
 
   return (
-    <div className="card">
-      <h2>Tell us about your interest</h2>
-      <p className="sub">A few quick questions to get started.</p>
+    <div className="card candidacy">
+      <h2>Secure Your Candidacy for Fall 2026</h2>
+      <p className="sub">
+        Your details are pre-filled with a synthetic identity — nothing is typed.
+      </p>
+
+      <div className="candidacy-grid">
+        <PrefilledField label="First Name" value={id.firstName} />
+        <PrefilledField label="Last Name" value={id.lastName} />
+      </div>
+      <PrefilledField label="Email" value={id.email} fieldKey="email_synthetic" />
+      <div className="candidacy-grid">
+        <PrefilledField label="Phone" value={id.phone} fieldKey="phone_synthetic" />
+        <PrefilledField label="Zip Code" value={id.zip} fieldKey="zip_synthetic" />
+      </div>
+
       <Dropdown
-        label="Which program interests you?"
-        fieldKey="product_interest"
-        value={product}
-        options={PRODUCT_INTEREST}
-        labelFor={(o) => PRODUCT_INTEREST_LABEL[o]}
-        onChange={setProduct}
+        label="Household Income"
+        fieldKey="household_income"
+        value={income}
+        options={HOUSEHOLD_INCOME}
+        labelFor={(o) => HOUSEHOLD_INCOME_LABEL[o]}
+        onChange={setIncome}
         telemetry={t}
-        error={errors.product_interest}
+        error={errors.household_income}
       />
-      <Dropdown
-        label="How many children are you applying for?"
-        fieldKey="num_children"
-        value={numChildren === '' ? '' : (String(numChildren) as `${NumChildren}`)}
-        options={NUM_CHILDREN.map((n) => String(n)) as `${NumChildren}`[]}
-        onChange={(v) => setNumChildren(Number(v) as NumChildren)}
-        telemetry={t}
-        error={errors.num_children}
-      />
-      <Dropdown
-        label="What grade are they entering?"
-        fieldKey="grade_interest"
-        value={grade}
-        options={GRADE_INTEREST}
-        labelFor={(o) => (o === 'K' ? 'Kindergarten' : `Grade ${o}`)}
-        onChange={setGrade}
-        telemetry={t}
-        error={errors.grade_interest}
-      />
-      <Dropdown
-        label="Which region are you in?"
-        fieldKey="region"
-        value={region}
-        options={REGION}
-        onChange={setRegion}
-        telemetry={t}
-        error={errors.region}
-      />
-      <Dropdown
-        label="How did you hear about us?"
-        fieldKey="attribution_source"
-        value={attribution}
-        options={ATTRIBUTION_SOURCE}
-        labelFor={(o) => ATTRIBUTION_SOURCE_LABEL[o]}
-        onChange={setAttribution}
-        telemetry={t}
-        error={errors.attribution_source}
-      />
+
+      <label className="check-row">
+        <input
+          type="checkbox"
+          aria-label="sms_consent"
+          checked={smsConsent}
+          onFocus={() => t.fieldFocused('sms_consent')}
+          onChange={(e) => {
+            t.fieldChanged('sms_consent');
+            setSmsConsent(e.target.checked);
+          }}
+        />
+        I agree to receive SMS messages from 2 Hour Learning regarding inquiry
+        follow-up, invitations to events, and personalized updates. Message &amp;
+        data rates may apply. Reply STOP to opt out.
+      </label>
+
       {errors.submit && (
         <div className="err">Something went wrong saving — please try again.</div>
       )}
       <div className="actions">
         <span />
-        <button className="primary" onClick={next} disabled={busy}>
-          {busy ? 'Saving…' : 'Continue to application'}
+        <button className="primary" onClick={start} disabled={busy}>
+          {busy ? 'Saving…' : 'Start Application'}
         </button>
       </div>
+    </div>
+  );
+}
+
+// A read-only prefilled identity row for the candidacy modal. NO input element is
+// rendered — the value is presentational text — so no PII can be typed (INV-1 by
+// shape). Focusing the row fires nothing; it's not an input.
+function PrefilledField({
+  label,
+  value,
+  fieldKey,
+}: {
+  label: string;
+  value: string;
+  fieldKey?: string;
+}) {
+  return (
+    <div className="prefilled" aria-label={fieldKey ?? label.toLowerCase().replace(/\s+/g, '_')}>
+      <span className="prefilled-cap">{label}</span>
+      <span className="prefilled-val">{value}</span>
     </div>
   );
 }
@@ -320,6 +445,8 @@ function ApplyStep({
   const t = useStepTelemetry(supabase, session.familyId, 'apply');
   const id = session.identity;
 
+  // Program / interest (collected HERE now — the candidacy modal no longer does).
+  const [product, setProduct] = useState<ProductInterest | ''>('');
   // Parent/Guardian
   const [relationship1, setRelationship1] = useState<Relationship | ''>('');
   const [hasGuardian2, setHasGuardian2] = useState(false);
@@ -349,6 +476,7 @@ function ApplyStep({
 
   async function next() {
     const errs: Record<string, boolean> = {};
+    if (!product) errs.product_interest = true;
     if (!relationship1) errs.relationship = true;
     if (hasGuardian2 && !relationship2) errs.relationship_2 = true;
     if (!state) errs.state = true;
@@ -389,6 +517,19 @@ function ApplyStep({
         Applying as <strong>{id.displayName}</strong> (synthetic). Every field is a
         structural choice — nothing is typed.
       </p>
+
+      <Section title="Program">
+        <Dropdown
+          label="Which program interests you?"
+          fieldKey="product_interest"
+          value={product}
+          options={PRODUCT_INTEREST}
+          labelFor={(o) => PRODUCT_INTEREST_LABEL[o]}
+          onChange={setProduct}
+          telemetry={t}
+          error={errors.product_interest}
+        />
+      </Section>
 
       <Section title="Parent / Guardian #1">
         <div className="prefilled" aria-label="guardian_1_name">
@@ -1020,18 +1161,93 @@ function TuitionStep({
 }
 
 // ---------------------------------------------------------------------------
-// Done.
+// "My Applications" dashboard — the returning-user hub. One card per
+// family_record the session created (RLS auto-scopes the query to auth.uid()),
+// X/4 stage progress, a delete (trash) control, and "+ Add Another Child".
 // ---------------------------------------------------------------------------
-function DoneStep({ session }: { session: ApplySession }) {
+const STAGE_LABEL: Record<string, string> = {
+  interest: 'Interest',
+  apply: 'Application',
+  enroll: 'Enrollment',
+  tuition: 'Pay Deposit',
+};
+
+function DashboardStep({
+  supabase,
+  onAddChild,
+}: {
+  supabase: MinimalSupabase;
+  onAddChild: () => void;
+}) {
+  const [apps, setApps] = useState<ApplicationSummary[] | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+
+  const refresh = useCallback(async () => {
+    try {
+      const rows = await fetchApplications(supabase);
+      setApps(rows);
+    } catch (e) {
+      setErr((e as Error).message);
+    }
+  }, [supabase]);
+
+  useEffect(() => {
+    void refresh();
+  }, [refresh]);
+
+  async function remove(familyId: string) {
+    try {
+      await deleteApplication(supabase, familyId);
+      await refresh();
+    } catch (e) {
+      setErr((e as Error).message);
+    }
+  }
+
   return (
-    <div className="card done-screen">
-      <div className="check">✓</div>
-      <h2>You&apos;re enrolled</h2>
-      <p className="sub">
-        {session.identity.displayName} is all set. Your application now flows into
-        the GT growth cockpit.
-      </p>
-      <div className="synthetic-id">synthetic family · {session.identity.email}</div>
+    <div className="card dashboard">
+      <h2>My Applications</h2>
+      <p className="sub">Welcome back! Manage your applications below.</p>
+
+      {err && <div className="err">Could not load applications: {err}</div>}
+
+      {apps && apps.length === 0 && (
+        <p className="dashboard-empty">
+          You have no applications yet. Start one below.
+        </p>
+      )}
+
+      <div className="app-list">
+        {(apps ?? []).map((app) => (
+          <div className="app-card" key={app.familyId} aria-label="application_card">
+            <div className="app-card-main">
+              <div className="app-card-name">{app.displayName}</div>
+              <div className="app-card-year">{app.schoolYear} School Year</div>
+              <div className="app-card-progress">
+                <span className="progress-count">
+                  {app.stagesComplete}/{app.stagesTotal}
+                </span>{' '}
+                {STAGE_LABEL[app.currentStage]}
+              </div>
+            </div>
+            <button
+              className="trash"
+              aria-label={`delete_${app.familyId}`}
+              title="Delete application"
+              onClick={() => remove(app.familyId)}
+            >
+              🗑
+            </button>
+          </div>
+        ))}
+      </div>
+
+      <div className="actions">
+        <span />
+        <button className="primary add-child" onClick={onAddChild}>
+          + Add Another Child
+        </button>
+      </div>
     </div>
   );
 }

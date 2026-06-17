@@ -586,6 +586,158 @@ button:disabled {
   color: var(--navy);
 }
 
+/* ---- S18: marketing landing ---- */
+.landing-badges {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 18px;
+}
+
+.badge-pill {
+  font-family: 'Inconsolata', monospace;
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  padding: 5px 12px;
+  border-radius: 999px;
+  background: rgba(227, 132, 84, 0.12);
+  color: var(--terracotta);
+  border: 1px solid var(--terracotta-2);
+}
+
+.landing-hero {
+  font-family: 'Literata', Georgia, serif;
+  font-size: 40px;
+  font-weight: 700;
+  line-height: 1.06;
+  letter-spacing: -1px;
+  margin: 0 0 16px;
+  color: var(--ink);
+}
+
+.landing-hero-accent {
+  display: block;
+  color: var(--terracotta);
+  font-style: italic;
+}
+
+/* ---- S18: candidacy modal ---- */
+.candidacy-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+
+@media (max-width: 480px) {
+  .candidacy-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* ---- S18: My Applications dashboard ---- */
+.app-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin: 6px 0 8px;
+}
+
+.app-card {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  padding: 18px 18px 16px;
+  border: 1px solid var(--line-2);
+  border-radius: var(--radius);
+  background: var(--paper);
+}
+
+.app-card-name {
+  font-family: 'Literata', Georgia, serif;
+  font-size: 18px;
+  font-weight: 700;
+  color: var(--ink);
+}
+
+.app-card-year {
+  font-size: 13px;
+  color: var(--teal);
+  margin: 2px 0 8px;
+}
+
+.app-card-progress {
+  font-size: 13px;
+  color: var(--teal);
+}
+
+.app-card-progress .progress-count {
+  font-family: 'Inconsolata', monospace;
+  font-weight: 700;
+  color: var(--terracotta);
+}
+
+.trash {
+  border: none;
+  background: transparent;
+  font-size: 18px;
+  padding: 4px 8px;
+  letter-spacing: 0;
+  text-transform: none;
+}
+
+.trash:hover:not(:disabled) {
+  box-shadow: none;
+  opacity: 0.7;
+}
+
+.dashboard-empty {
+  color: var(--teal);
+  font-size: 14px;
+  padding: 8px 0 18px;
+}
+
+.add-child {
+  width: 100%;
+}
+
+.dashboard .actions {
+  margin-top: 22px;
+}
+
+/* ---- S18: site footer (landing + dashboard) ---- */
+.site-footer {
+  margin-top: 36px;
+  padding-top: 22px;
+  border-top: 1px solid var(--line);
+  text-align: center;
+}
+
+.footer-brand {
+  font-family: 'Literata', Georgia, serif;
+  font-size: 18px;
+  font-weight: 700;
+}
+
+.footer-brand .gt {
+  color: var(--ink);
+}
+
+.footer-brand .suffix {
+  color: var(--terracotta);
+}
+
+.footer-contact {
+  margin-top: 8px;
+  font-size: 12px;
+  color: var(--teal);
+}
+
+.footer-contact a {
+  color: var(--teal);
+}
+
 /* ---- done ---- */
 .done-screen {
   text-align: center;

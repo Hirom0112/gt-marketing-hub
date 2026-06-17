@@ -92,6 +92,30 @@ export const FUNDING_TYPE_LABEL: Record<FundingType, string> = {
 // free-typed, so INV-1 (no PII) / INV-6 (no child keys) hold by FORM SHAPE.
 // ---------------------------------------------------------------------------
 
+// Household income BAND — the candidacy modal's "select income range" dropdown
+// (S18, mirrors the real apply.gt.school candidacy form). A coarse band only; it
+// is collected via a closed dropdown (no free text) and is surfaced via UI +
+// per-field telemetry ONLY — leads_new has no household_income column, so it is
+// NEVER persisted to the DB (keeps the row-write contract intact). Aggregate
+// band, never a precise figure (INV-1 / INV-6 spirit: structural, not personal).
+export const HOUSEHOLD_INCOME = [
+  'under_50k',
+  '50k_100k',
+  '100k_150k',
+  '150k_250k',
+  'over_250k',
+  'prefer_not',
+] as const;
+export type HouseholdIncome = (typeof HOUSEHOLD_INCOME)[number];
+export const HOUSEHOLD_INCOME_LABEL: Record<HouseholdIncome, string> = {
+  under_50k: 'Under $50,000',
+  '50k_100k': '$50,000 – $100,000',
+  '100k_150k': '$100,000 – $150,000',
+  '150k_250k': '$150,000 – $250,000',
+  over_250k: 'Over $250,000',
+  prefer_not: 'Prefer not to say',
+};
+
 // A generic yes/no for the eligibility / consent radios + toggles.
 export const YES_NO = ['yes', 'no'] as const;
 export type YesNo = (typeof YES_NO)[number];

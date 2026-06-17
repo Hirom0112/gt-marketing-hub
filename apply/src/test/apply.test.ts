@@ -3,8 +3,11 @@
 import { describe, expect, it } from 'vitest';
 import {
   createFamily,
+  deleteApplication,
+  deriveInterestAnswers,
   emitEvent,
   ensureAnonSession,
+  fetchApplications,
   submitApply,
   submitEnroll,
   submitInterest,
@@ -12,6 +15,13 @@ import {
   type ApplySession,
   type ApplyEvent,
 } from '../lib/apply';
+import {
+  ATTRIBUTION_SOURCE,
+  GRADE_INTEREST,
+  NUM_CHILDREN,
+  PRODUCT_INTEREST,
+  REGION,
+} from '../lib/options';
 import {
   generateSyntheticIdentity,
   SYNTHETIC_EMAIL_DOMAIN,
@@ -181,6 +191,102 @@ describe('apply_events are metadata-only (INV-1/INV-6/COPPA)', () => {
         'step',
         'time_on_step_ms',
       ].sort(),
+    );
+  });
+});
+
+describe('deriveInterestAnswers (S18 candidacy — derive uncollected columns)', () => {
+  it('derives every leads_new column the candidacy modal does not collect, from the closed option sets', () => {
+    const a = deriveInterestAnswers('11111111-1111-4111-8111-111111111111', 'direct');
+    expect(PRODUCT_INTEREST).toContain(a.product_interest);
+    expect(REGION).toContain(a.region);
+    expect(GRADE_INTEREST).toContain(a.grade_interest);
+    expect(NUM_CHILDREN).toContain(a.num_children);
+    expect(ATTRIBUTION_SOURCE).toContain(a.attribution_source);
+    expect(a.attribution_source).toBe('direct');
+  });
+
+  it('is deterministic for a given family id', () => {
+    const id = '22222222-2222-4222-8222-222222222222';
+    expect(deriveInterestAnswers(id, 'direct')).toEqual(
+      deriveInterestAnswers(id, 'direct'),
+    );
+  });
+});
+
+describe('fetchApplications (S18 dashboard — owner-scoped read + X/4 derivation)', () => {
+  it('derives stage progress from which source rows exist', async () => {
+    const sb = makeMockSupabase();
+    const uid = await ensureAnonSession(sb);
+    const session = await createFamily(sb, uid, 'direct');
+
+    // Only family_record + leads_new ⇒ Interest done (1/4).
+    await submitInterest(sb, session, deriveInterestAnswers(session.familyId, 'direct'));
+    let apps = await fetchApplications(sb);
+    expect(apps).toHaveLength(1);
+    expect(apps[0]!.stagesComplete).toBe(1);
+    expect(apps[0]!.stagesTotal).toBe(4);
+    expect(apps[0]!.displayName).toBe(session.identity.displayName);
+
+    // + app_form ⇒ Apply done (2/4).
+    await submitApply(sb, session);
+    apps = await fetchApplications(sb);
+    expect(apps[0]!.stagesComplete).toBe(2);
+
+    // + enrollment_forms ⇒ Enroll done (3/4).
+    await submitEnroll(sb, session, 6);
+    apps = await fetchApplications(sb);
+    expect(apps[0]!.stagesComplete).toBe(3);
+
+    // + tuition (unlocked) ⇒ Tuition done (4/4).
+    await submitTuition(sb, session, 'self_pay');
+    apps = await fetchApplications(sb);
+    expect(apps[0]!.stagesComplete).toBe(4);
+  });
+
+  it('returns one card per family_record (Add Another Child = a new family)', async () => {
+    const sb = makeMockSupabase();
+    const uid = await ensureAnonSession(sb);
+    const s1 = await createFamily(sb, uid, 'direct');
+    const s2 = await createFamily(sb, uid, 'direct');
+    await submitInterest(sb, s1, deriveInterestAnswers(s1.familyId, 'direct'));
+    await submitInterest(sb, s2, deriveInterestAnswers(s2.familyId, 'direct'));
+    const apps = await fetchApplications(sb);
+    expect(apps).toHaveLength(2);
+    expect(new Set(apps.map((a) => a.familyId))).toEqual(
+      new Set([s1.familyId, s2.familyId]),
+    );
+  });
+});
+
+describe('deleteApplication (S18 dashboard — owner-scoped delete)', () => {
+  it('issues a family_id-filtered delete on every owned table and removes the row', async () => {
+    const sb = makeMockSupabase();
+    const uid = await ensureAnonSession(sb);
+    const session = await createFamily(sb, uid, 'direct');
+    await submitInterest(sb, session, deriveInterestAnswers(session.familyId, 'direct'));
+    await submitApply(sb, session);
+
+    await deleteApplication(sb, session.familyId);
+
+    const tables = new Set(sb.deletes.map((d) => d.table));
+    expect(tables.has('family_record')).toBe(true);
+    expect(tables.has('leads_new')).toBe(true);
+    expect(tables.has('app_form')).toBe(true);
+    for (const d of sb.deletes) {
+      expect(d.filter.family_id).toBe(session.familyId);
+    }
+    // The application is gone after the delete.
+    expect(await fetchApplications(sb)).toHaveLength(0);
+  });
+
+  it('surfaces a delete failure to the caller', async () => {
+    const sb = makeMockSupabase({ failDeleteOn: 'leads_new' });
+    const uid = await ensureAnonSession(sb);
+    const session = await createFamily(sb, uid, 'direct');
+    await submitInterest(sb, session, deriveInterestAnswers(session.familyId, 'direct'));
+    await expect(deleteApplication(sb, session.familyId)).rejects.toThrow(
+      /leads_new/,
     );
   });
 });
