@@ -41,11 +41,15 @@ def _family_record(
     current_stage: Stage = Stage.APPLY,
     funding_state: FundingState = FundingState.NONE,
     user_id: UUID | None = None,
+    assigned_rep_id: UUID | None = None,
+    assigned_at: datetime | None = None,
 ) -> FamilyRecord:
     """A FamilyRecord seeded with just the §4.1 seam-relevant columns."""
     return FamilyRecord(
         family_id=uuid4(),
         user_id=user_id,
+        assigned_rep_id=assigned_rep_id,
+        assigned_at=assigned_at,
         display_name="The Rivera Family",
         primary_contact_synthetic_email="rivera.synthetic@example.invalid",
         current_stage=current_stage,
@@ -100,12 +104,15 @@ def test_derive_conflict() -> None:
 
 
 # ---------------------------------------------------------------------------
-# R1 — multi-field reconcile with per-field authority (TODO.md R1; §4.7).
+# R1 + M4 — multi-field reconcile with per-field authority (TODO.md R1/M4; §4.7).
 # `funding_state` is DB-authoritative (DB always wins → drift is a pending push,
-# never a conflict). `owner` is CRM-authoritative (human-edited in HubSpot →
-# any divergence is a genuine conflict, never silently overwritten). Row status
-# aggregates per-field results: any conflict ⇒ conflict; else any unsynced ⇒
-# unsynced; else synced.
+# never a conflict). `owner` was CRM-authoritative; the M4 owner-authority flip
+# (USER-RATIFIED 2026-06-17, A-30) makes `owner` DB-AUTHORITATIVE, driven by
+# `assigned_rep_id` (the DB owns assignment now) — UNLESS the mirror's owner
+# changed AFTER our last `assigned_at` (someone edited HubSpot post-assignment),
+# in which case the seam FLAGS a conflict instead of stomping the human edit
+# (INV-4-style fail-closed guard). Row status aggregates per-field results: any
+# conflict ⇒ conflict; else any unsynced ⇒ unsynced; else synced.
 # ---------------------------------------------------------------------------
 
 
@@ -136,48 +143,79 @@ def test_funding_state_drift_is_db_authoritative_unsynced() -> None:
     assert proposal.direction is ReconcileDirection.PUSH_LOCAL
 
 
-def test_owner_divergence_is_crm_authoritative_conflict() -> None:
-    """`owner` diverges ⇒ conflict (CRM-authoritative, never overwritten).
+def test_owner_db_authority_with_guard() -> None:
+    """`owner` is DB-authoritative (M4 flip) with a post-`assigned_at` guard (A-30).
 
-    Even with timestamps that would otherwise read `synced` (crm_synced_at after
-    updated_at) and stage/funding agreeing, a diverging CRM-authoritative `owner`
-    is a genuine conflict the gate must flag, not silently push over.
+    Two pinned cases:
+
+    (a) DB authority + PUSH: the DB owns the assignment (``assigned_rep_id``); a
+        diverging mirror owner that did NOT change after our ``assigned_at`` is a
+        plain pending push (DB wins → ``unsynced``), and ``propose_reconcile``
+        yields ``push_local`` — the DB owner is pushed to the mirror, no conflict.
+    (b) GUARD → CONFLICT: if the mirror's owner changed AFTER our ``assigned_at``
+        (someone edited the HubSpot deal owner post-assignment), the seam FLAGS a
+        conflict instead of stomping that human edit (INV-4-style fail-closed).
     """
-    local_owner = uuid4()
-    record = _family_record(
+    rep = uuid4()
+
+    # (a) DB-authoritative push: mirror diverges on owner, but its last change
+    # (mirror_updated_at) is NOT after our assigned_at — DB wins, plain push.
+    pushable = _family_record(
         updated_at=_T0,
-        crm_synced_at=_AFTER,
+        crm_synced_at=_BEFORE,  # local touched after last push ⇒ unsynced baseline.
         current_stage=Stage.APPLY,
         funding_state=FundingState.NONE,
-        user_id=local_owner,
+        assigned_rep_id=rep,
+        assigned_at=_T0,
     )
-    mirror = MirrorState(
+    mirror_stale_owner = MirrorState(
         stage=Stage.APPLY,
         funding_state=FundingState.NONE,
-        owner="someone-else-in-hubspot",
-        mirror_updated_at=_AFTER,
+        owner="stale-owner-in-hubspot",
+        mirror_updated_at=_BEFORE,  # mirror changed BEFORE assigned_at ⇒ no guard.
     )
-    assert derive_seam_status(record, mirror) is SeamStatus.CONFLICT
+    assert derive_seam_status(pushable, mirror_stale_owner) is SeamStatus.UNSYNCED
+    proposal = propose_reconcile(pushable, mirror_stale_owner)
+    assert proposal is not None
+    assert proposal.direction is ReconcileDirection.PUSH_LOCAL
 
-    proposal = propose_reconcile(record, mirror)
+    # (b) Guard fires: the mirror owner changed AFTER assigned_at ⇒ conflict, not
+    # a blind overwrite (don't stomp a post-assignment HubSpot edit).
+    guarded = _family_record(
+        updated_at=_T0,
+        crm_synced_at=_AFTER,  # timestamps alone would read synced…
+        current_stage=Stage.APPLY,
+        funding_state=FundingState.NONE,
+        assigned_rep_id=rep,
+        assigned_at=_T0,
+    )
+    mirror_changed_after = MirrorState(
+        stage=Stage.APPLY,
+        funding_state=FundingState.NONE,
+        owner="someone-changed-it-in-hubspot",
+        mirror_updated_at=_AFTER,  # …but the mirror owner changed AFTER assigned_at.
+    )
+    assert derive_seam_status(guarded, mirror_changed_after) is SeamStatus.CONFLICT
+    proposal = propose_reconcile(guarded, mirror_changed_after)
     assert proposal is not None
     assert proposal.direction is ReconcileDirection.FLAG_CONFLICT
 
 
 def test_all_tracked_fields_match_is_synced() -> None:
     """Every tracked field agrees and CRM is fresh ⇒ `synced` (§4.7)."""
-    local_owner = uuid4()
+    rep = uuid4()
     record = _family_record(
         updated_at=_T0,
         crm_synced_at=_AFTER,
         current_stage=Stage.APPLY,
         funding_state=FundingState.GT_CONFIRMED,
-        user_id=local_owner,
+        assigned_rep_id=rep,
+        assigned_at=_T0,
     )
     mirror = MirrorState(
         stage=Stage.APPLY,
         funding_state=FundingState.GT_CONFIRMED,
-        owner=str(local_owner),
+        owner=str(rep),
         mirror_updated_at=_AFTER,
     )
     assert derive_seam_status(record, mirror) is SeamStatus.SYNCED

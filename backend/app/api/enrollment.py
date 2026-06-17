@@ -25,14 +25,18 @@ stays pure. No LLM call is ever made here — seeding is fully deterministic.
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from typing import Annotated
-from uuid import NAMESPACE_URL, UUID, uuid5
+from uuid import NAMESPACE_URL, UUID, uuid4, uuid5
 
 from fastapi import APIRouter, Depends, HTTPException
 
 from app.adapters.hubspot.crm_adapter import CRMAdapter
 from app.api.deps import get_crm_adapter_dep, get_observability_log, get_repository
 from app.api.schemas import (
+    BulkAssignCounts,
+    BulkAssignRequest,
+    BulkAssignResponse,
     BulkDismissCounts,
     BulkDismissRequest,
     BulkDismissResponse,
@@ -42,9 +46,16 @@ from app.api.schemas import (
     BulkSeedResponse,
     SeedResponse,
 )
+from app.core import sales_agents
 from app.core.seam import MirrorState, derive_seam_status
 from app.data.repository import FamilyRepository
-from app.observability.log_store import ObservabilityLog
+from app.observability.log_store import DecisionAction, ObservabilityLog
+
+# The deterministic-assignment audit flow tag (NFR-6) — distinguishes these
+# operator decisions from AI proposal flows on the shared spine. A constant, not
+# a magic string (INV-11 spirit).
+_ASSIGN_FLOW = "assignment"
+_ASSIGN_SCHEMA_VERSION = "1"
 
 router = APIRouter(tags=["enrollment"])
 
@@ -180,4 +191,60 @@ def bulk_dismiss_families(
         batch_id=batch_id,
         counts=BulkDismissCounts(dismissed=len(dismissed)),
         dismissed=dismissed,
+    )
+
+
+@router.post("/enrollment/families/bulk-assign", response_model=BulkAssignResponse)
+def bulk_assign_families(
+    request: BulkAssignRequest,
+    repository: RepositoryDep,
+    log: LogDep,
+) -> BulkAssignResponse:
+    """Assign a selection of families to one sales agent — the M4 write (A-30).
+
+    A DETERMINISTIC core write, NOT an LLM call (INV-2): the deterministic core
+    (``repository.assign_families``) stamps ``assigned_rep_id`` + ``assigned_at``
+    on each KNOWN family (the owner-authority flip — the DB now owns deal
+    ownership, A-30; ``app/core/seam.py``). A 1-element ``family_ids`` list is the
+    single-assign case. ``agent_id`` is validated against the static
+    ``sales_agents`` registry FIRST — an unknown agent is rejected 400 before any
+    write (fail-closed). Unknown family ids are skipped (resilient bulk, like
+    ``bulk-seed``).
+
+    Each assignment is logged to the §10 audit spine (NFR-6 who/what/when): one
+    ``proposal`` per family carrying the chosen ``agent_id`` (WHAT) plus a
+    ``decision`` (WHO=operator, WHEN=now, action=approve). No eval is attached —
+    this is a deterministic operator write, not an AI proposal-eval path. One
+    ``batch_id`` tags the audit group.
+    """
+    if sales_agents.lookup(request.agent_id) is None:
+        # Fail-closed: only a registered agent may own a deal (no write, no log).
+        raise HTTPException(status_code=400, detail="unknown agent_id")
+
+    assigned_at = datetime.now(UTC)
+    assigned = repository.assign_families(request.family_ids, request.agent_id, assigned_at)
+
+    # Log each assignment to the audit spine (NFR-6). Deterministic ⇒ no eval.
+    for family_id in assigned:
+        proposal_id = uuid4()
+        log.log_proposal(
+            proposal_id=proposal_id,
+            flow=_ASSIGN_FLOW,
+            schema_version=_ASSIGN_SCHEMA_VERSION,
+            payload={"agent_id": str(request.agent_id)},
+            family_id=family_id,
+            created_at=assigned_at,
+        )
+        log.log_decision(
+            proposal_id=proposal_id,
+            human=DEFAULT_HUMAN,
+            action=DecisionAction.APPROVE,
+            created_at=assigned_at,
+        )
+
+    return BulkAssignResponse(
+        batch_id=_batch_id("bulk-assign", request.family_ids),
+        agent_id=request.agent_id,
+        counts=BulkAssignCounts(assigned=len(assigned)),
+        assigned=assigned,
     )

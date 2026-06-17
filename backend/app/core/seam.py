@@ -65,18 +65,25 @@ class MirrorState:
 
 
 class _FieldAuthority(StrEnum):
-    """Which side owns a tracked field when it diverges (R1; §4.7).
+    """Which side owns a tracked field when it diverges (R1; M4; §4.7).
 
     - ``db`` — the local DB is the source of truth (derived fields like ``stage``
       / ``funding_state``): a divergence is a pending push (``push_local``), and
       is only a *conflict* when neither side is clearly newer (the §4.7 rule).
-    - ``crm`` — HubSpot is the source of truth (human-edited fields like
-      ``owner``): ANY divergence is a genuine conflict, regardless of
-      timestamps — never silently overwritten (INV-4-style fail-closed).
+    - ``crm`` — HubSpot is the source of truth (human-edited fields): ANY
+      divergence is a genuine conflict, regardless of timestamps — never silently
+      overwritten (INV-4-style fail-closed). No field uses this after the M4 flip;
+      retained as the authority vocabulary for a future human-edited field.
+    - ``db_guarded`` — DB-authoritative WITH a post-``assigned_at`` guard (the M4
+      ``owner`` flip, A-30): the DB owns assignment, so a diverging mirror owner
+      is normally a plain pending push (DB wins) — UNLESS the mirror's owner
+      changed AFTER our last ``assigned_at`` (a post-assignment HubSpot edit), in
+      which case the seam flags a CONFLICT rather than stomping the human edit.
     """
 
     DB = "db"
     CRM = "crm"
+    DB_GUARDED = "db_guarded"
 
 
 class _TrackedField(NamedTuple):
@@ -88,11 +95,13 @@ class _TrackedField(NamedTuple):
     mirror_value: Callable[[MirrorState], object]
 
 
-# The set of tracked fields and their per-field authority (R1; §4.7). This is a
-# structural policy — like the SeamStatus enum it defines *what* the seam
+# The set of tracked fields and their per-field authority (R1; M4; §4.7). This is
+# a structural policy — like the SeamStatus enum it defines *what* the seam
 # reconciles — so it lives in code: INV-11 governs numeric tunables, not
-# structural field definitions. Local ``owner`` is the ownership root
-# ``user_id`` (THREAT_MODEL §6 D-RLS-2), compared as a string against the
+# structural field definitions. The M4 owner-authority flip (A-30, USER-RATIFIED
+# 2026-06-17) makes ``owner`` DB-authoritative driven by ``assigned_rep_id`` (the
+# DB owns assignment now), with a post-``assigned_at`` guard (``db_guarded``):
+# local ``owner`` is the assigned rep id, compared as a string against the
 # mirror's HubSpot owner id.
 _TRACKED_FIELDS: tuple[_TrackedField, ...] = (
     _TrackedField(
@@ -109,8 +118,8 @@ _TRACKED_FIELDS: tuple[_TrackedField, ...] = (
     ),
     _TrackedField(
         name="owner",
-        authority=_FieldAuthority.CRM,
-        local_value=lambda r: None if r.user_id is None else str(r.user_id),
+        authority=_FieldAuthority.DB_GUARDED,
+        local_value=lambda r: None if r.assigned_rep_id is None else str(r.assigned_rep_id),
         mirror_value=lambda m: m.owner,
     ),
 )
@@ -132,23 +141,61 @@ def _diverging_fields(record: FamilyRecord, mirror: MirrorState) -> list[_Tracke
 
 
 def _is_conflict(record: FamilyRecord, mirror: MirrorState) -> bool:
-    """True iff any diverging tracked field is a genuine conflict (§4.7, R1).
+    """True iff any diverging tracked field is a genuine conflict (§4.7, R1, M4).
 
     Per-field authority decides:
 
-    - a CRM-authoritative field (e.g. ``owner``) that diverges is ALWAYS a
-      conflict — HubSpot owns it, so we never silently overwrite it;
-    - a DB-authoritative field (e.g. ``stage`` / ``funding_state``) that diverges
-      is a conflict only when neither side is clearly newer (the original §4.7
-      rule); otherwise it is a plain pending push.
+    - a CRM-authoritative field that diverges is ALWAYS a conflict — HubSpot owns
+      it, so we never silently overwrite it (no field uses this after the M4 flip);
+    - a ``db_guarded`` field (``owner``, M4) that diverges is a conflict only when
+      the mirror changed AFTER our last ``assigned_at`` (a post-assignment HubSpot
+      edit — don't stomp it); otherwise the DB wins and it is a plain pending push;
+    - a DB-authoritative field (``stage`` / ``funding_state``) that diverges is a
+      conflict only when neither side is clearly newer (the original §4.7 rule);
+      otherwise it is a plain pending push.
     """
     diverging = _diverging_fields(record, mirror)
     if not diverging:
         return False
     if any(field.authority is _FieldAuthority.CRM for field in diverging):
         return True
-    # Only DB-authoritative divergences remain: a conflict iff recency is unclear.
+    if any(
+        field.authority is _FieldAuthority.DB_GUARDED
+        and _mirror_changed_after_assignment(record, mirror)
+        for field in diverging
+    ):
+        return True
+    # Any remaining divergence is DB-authoritative (plain DB or a db_guarded field
+    # whose guard did NOT fire): a conflict only when recency is unclear (§4.7).
+    # A db_guarded divergence that passed the guard is DB-wins → never a conflict
+    # here, so restrict the recency rule to genuinely DB-authoritative fields.
+    db_authoritative = [f for f in diverging if f.authority is _FieldAuthority.DB]
+    if not db_authoritative:
+        return False
     return _neither_side_clearly_newer(record, mirror)
+
+
+def _mirror_changed_after_assignment(record: FamilyRecord, mirror: MirrorState) -> bool:
+    """True iff the mirror changed strictly AFTER our last assignment (M4 guard).
+
+    The M4 ``owner`` guard (A-30): the DB owns assignment (``assigned_rep_id`` /
+    ``assigned_at``), so a diverging mirror owner is normally a plain pending push
+    (DB wins). It becomes a CONFLICT only when the mirror's last change
+    (``mirror_updated_at``) is strictly later than our ``assigned_at`` — i.e.
+    someone edited the HubSpot owner AFTER we assigned, which we must not stomp.
+
+    Fail-closed on missing anchors: if we never recorded an ``assigned_at`` (the
+    DB has no assignment instant to defend) any mirror change is treated as
+    post-assignment ⇒ guard fires. A mirror with no ``mirror_updated_at`` cannot
+    be shown to post-date the assignment ⇒ guard does not fire (DB wins, push).
+    """
+    mirror_at = mirror.mirror_updated_at
+    if mirror_at is None:
+        return False
+    assigned_at = record.assigned_at
+    if assigned_at is None:
+        return True
+    return mirror_at > assigned_at
 
 
 def _mirror_diverges(record: FamilyRecord, mirror: MirrorState) -> bool:
@@ -257,9 +304,9 @@ class ReconcileProposal(BaseModel):
         mirror_stage: The mirror's tracked-field value, or ``None`` if unpushed.
         local_funding_state: The local ``funding_state`` (DB-authoritative).
         mirror_funding_state: The mirror's ``funding_state``, or ``None``.
-        local_owner: The local owner id (the ownership root ``user_id``), or
-            ``None``.
-        mirror_owner: The mirror's HubSpot owner (CRM-authoritative), or ``None``.
+        local_owner: The local owner id — the assigned rep (``assigned_rep_id``,
+            DB-authoritative after the M4 flip, A-30), or ``None``.
+        mirror_owner: The mirror's HubSpot owner, or ``None``.
         summary: A human-readable one-line description of the proposal.
     """
 
@@ -335,7 +382,7 @@ def propose_reconcile(record: FamilyRecord, mirror: MirrorState) -> ReconcilePro
         direction = ReconcileDirection.PUSH_LOCAL
         summary = f"Unsynced: push local stage '{record.current_stage}' to the CRM."
 
-    local_owner = None if record.user_id is None else str(record.user_id)
+    local_owner = None if record.assigned_rep_id is None else str(record.assigned_rep_id)
     return ReconcileProposal(
         family_id=record.family_id,
         direction=direction,
@@ -373,7 +420,7 @@ def apply_reconcile(record: FamilyRecord, proposal: ReconcileProposal) -> Reconc
         A :class:`ReconcileResult` carrying the post-reconcile state and the
         re-derived :class:`SeamStatus`.
     """
-    local_owner = None if record.user_id is None else str(record.user_id)
+    local_owner = None if record.assigned_rep_id is None else str(record.assigned_rep_id)
 
     if proposal.direction is ReconcileDirection.PUSH_LOCAL:
         new_record = record.model_copy(update={"crm_synced_at": record.updated_at})

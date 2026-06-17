@@ -590,6 +590,40 @@ class BulkDismissResponse(BaseModel):
     dismissed: list[UUID] = Field(default_factory=list)
 
 
+class BulkAssignRequest(BaseModel):
+    """`POST /enrollment/families/bulk-assign` body — families + the target agent (M4).
+
+    A 1-element ``family_ids`` list is the single-assign case (no separate route).
+    ``agent_id`` is validated against the static ``sales_agents`` registry at the
+    route (unknown agent → 4xx, fail-closed). The write sets both
+    ``assigned_rep_id`` + ``assigned_at`` (the owner-authority flip, A-30).
+    """
+
+    family_ids: list[UUID] = Field(min_length=1)
+    agent_id: UUID
+
+
+class BulkAssignCounts(BaseModel):
+    """The bulk-assign tally — how many families were assigned (known ids)."""
+
+    assigned: int
+
+
+class BulkAssignResponse(BaseModel):
+    """The `POST /enrollment/families/bulk-assign` result (M4; INV-2; NFR-6).
+
+    A DETERMINISTIC core write (never an LLM call): each known family gets
+    ``assigned_rep_id`` + ``assigned_at`` written and a decision logged to the
+    audit spine. Unknown ids are skipped (resilient bulk, like ``bulk-seed``).
+    One ``batch_id`` tags the audit group.
+    """
+
+    batch_id: str
+    agent_id: UUID
+    counts: BulkAssignCounts
+    assigned: list[UUID] = Field(default_factory=list)
+
+
 class AuditResponse(BaseModel):
     """The §10 audit view for one proposal — proposal + its evals + decisions (NFR-6)."""
 

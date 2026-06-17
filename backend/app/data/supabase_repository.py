@@ -541,6 +541,23 @@ class SupabaseFamilyRepository(FamilyRepository):
             {field: self._json_value(value)},
         )
 
+    def assign_families(
+        self, family_ids: list[UUID], agent_id: UUID, assigned_at: datetime
+    ) -> list[UUID]:
+        # M4 deterministic assignment write (A-30): PATCH assigned_rep_id +
+        # assigned_at on each named spine row via service_role (server-only —
+        # INV-5 / D-RLS-4). The deterministic core owns the write (INV-2), never
+        # an LLM call. One PATCH per id (row-scoped filter); the columns are the
+        # 0013_sales_agents.sql `assigned_rep_id` FK + `assigned_at`. PostgREST
+        # silently no-ops an id with no matching row, mirroring the in-memory skip.
+        for family_id in family_ids:
+            self._patch(
+                f"{_REST}/family_record",
+                {"family_id": f"eq.{family_id}"},
+                {"assigned_rep_id": str(agent_id), "assigned_at": assigned_at.isoformat()},
+            )
+        return list(family_ids)
+
     def append_voucher_event(
         self,
         *,

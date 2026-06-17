@@ -123,6 +123,14 @@ class FamilyRecord(BaseModel):
     # must never be conflated (the IDOR-class confusion the threat model forbids).
     assigned_rep_id: UUID | None = None
 
+    # When the rep was assigned (M4; mirrors the `assigned_at timestamptz` column
+    # added alongside `assigned_rep_id` in 0013_sales_agents.sql). NULL ⇒ never
+    # assigned. The owner-authority flip (A-30) makes `owner` DB-authoritative
+    # driven by `assigned_rep_id`; this timestamp is the seam's conflict GUARD
+    # anchor — a mirror owner that changed AFTER `assigned_at` is a post-assignment
+    # HubSpot edit the seam flags rather than stomps (INV-4-style; app/core/seam.py).
+    assigned_at: datetime | None = None
+
     # Join keys, nullable until the related record exists (§4.1).
     lead_id: UUID | None = None
     app_form_id: UUID | None = None

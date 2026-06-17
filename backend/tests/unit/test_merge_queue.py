@@ -119,6 +119,11 @@ class _ReviewQueueRepo(FamilyRepository):
     def apply_field(self, family_id: UUID, field: str, value: object) -> None:  # pragma: no cover
         pass
 
+    def assign_families(  # pragma: no cover
+        self, family_ids: list[UUID], agent_id: UUID, assigned_at: datetime
+    ) -> list[UUID]:
+        return list(family_ids)
+
 
 @pytest.fixture(autouse=True)
 def _clean() -> Iterator[None]:

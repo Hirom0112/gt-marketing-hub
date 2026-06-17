@@ -322,6 +322,21 @@ class FamilyRepository(ABC):
         """
         raise NotImplementedError
 
+    @abstractmethod
+    def assign_families(
+        self, family_ids: list[UUID], agent_id: UUID, assigned_at: datetime
+    ) -> list[UUID]:
+        """Assign each family to ``agent_id`` — the M4 deterministic write (A-30).
+
+        Sets BOTH ``assigned_rep_id`` and ``assigned_at`` on each known family (the
+        owner-authority flip makes ``owner`` DB-authoritative, driven by these two
+        columns — ``app/core/seam.py``). The deterministic core owns this write
+        (INV-2); it is NEVER an LLM call. Returns the ids actually written (unknown
+        ids are skipped — a resilient bulk write, like ``bulk-seed``). Idempotent:
+        re-assigning the same agent re-stamps ``assigned_at``.
+        """
+        raise NotImplementedError
+
 
 class InMemoryFamilyRepository(FamilyRepository):
     """In-memory impl seeded once from ``synthetic.generate`` (A-3).
@@ -528,3 +543,16 @@ class InMemoryFamilyRepository(FamilyRepository):
     def apply_field(self, family_id: UUID, field: str, value: object) -> None:
         # Adopt one mirror field (ACCEPT_MIRROR) onto the in-mem record.
         self._replace(family_id, **{field: value})
+
+    def assign_families(
+        self, family_ids: list[UUID], agent_id: UUID, assigned_at: datetime
+    ) -> list[UUID]:
+        # M4 deterministic assignment write (A-30): stamp assigned_rep_id +
+        # assigned_at onto each KNOWN family; skip unknown ids (resilient bulk).
+        assigned: list[UUID] = []
+        for family_id in family_ids:
+            if self._family_index.get(family_id) is None:
+                continue
+            self._replace(family_id, assigned_rep_id=agent_id, assigned_at=assigned_at)
+            assigned.append(family_id)
+        return assigned

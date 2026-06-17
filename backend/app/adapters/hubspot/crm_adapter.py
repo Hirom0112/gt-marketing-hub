@@ -221,9 +221,11 @@ class SimulatedCRMAdapter(CRMAdapter):
         """Record a family push and update the simulated mirror (never sends).
 
         R1: the mirror adopts every tracked field the §4.7 deriver compares —
-        stage, ``funding_state``, and the owner id (the ownership root
-        ``user_id``, stringified) — so a freshly-pushed family reads ``synced``
-        across all fields, never a spurious divergence on the un-mirrored ones.
+        stage, ``funding_state``, and the owner id — so a freshly-pushed family
+        reads ``synced`` across all fields, never a spurious divergence on the
+        un-mirrored ones. M4 (A-30): the deal owner is now the assigned rep
+        (``assigned_rep_id``), the DB-authoritative ownership the seam compares,
+        not the RLS root ``user_id``.
         """
         result = SyncResult(
             simulated=True,
@@ -232,7 +234,9 @@ class SimulatedCRMAdapter(CRMAdapter):
             stage=family_record.current_stage,
         )
         self.pushed_log.append(result)
-        owner = None if family_record.user_id is None else str(family_record.user_id)
+        owner = (
+            None if family_record.assigned_rep_id is None else str(family_record.assigned_rep_id)
+        )
         self._mirror[family_record.family_id] = MirrorState(
             stage=family_record.current_stage,
             mirror_updated_at=family_record.updated_at,
