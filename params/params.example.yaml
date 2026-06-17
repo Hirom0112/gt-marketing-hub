@@ -1,8 +1,10 @@
 # params/params.yaml — every magic number lives here. Cited as ARCHITECTURE.md §8.
 
-work_queue:                 # FR-2.5 — score = w_recoverability·recoverability + w_value·value
+work_queue:                 # FR-2.5 — score = w_recoverability·recoverability + w_value·value + w_deadline·deadline_proximity
   w_recoverability: 0.6
   w_value: 0.4
+  w_deadline: 1.0           # R2 — weight on deadline-proximity (0 unless at-risk near a voucher deadline). TUNABLE: at 1.0 an at-risk family at the deadline (proximity→1) outranks ANY non-urgent family (whose base maxes at w_recoverability+w_value=1.0), so the award-about-to-lapse cases sort to the top in the demo. Lower it to make deadline pressure merely a strong tiebreaker rather than dominant.
+  deadline_horizon_days: 14 # R2 — proximity rises from 0 (≥ this many days out) to 1.0 (deadline today/past); the urgency window for an unreconfirmed award.
   recoverability:           # sub-factors, each normalized to [0,1]
     stall_recency_weight: 0.3
     stage_proximity_weight: 0.5     # funnel depth DOMINATES — the further they went, the more recoverable (A-23)

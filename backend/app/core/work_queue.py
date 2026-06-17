@@ -224,27 +224,88 @@ def value_max(params: Params) -> float:
     return value_cfg.tuition_annual_default * value_cfg.max_children
 
 
-def score_family(family: WorkQueueFamily, params: Params, *, now: datetime | None = None) -> float:
-    """Score one family for the work queue (FR-2.5; §5.1, A-1).
+def deadline_proximity(
+    days_remaining: int | None,
+    *,
+    at_risk: bool,
+    params: Params,
+) -> float:
+    """Deadline-proximity sub-factor ∈ [0,1] — voucher-deadline urgency (R2).
 
-    ``score = w_recoverability · recoverability + w_value · (value / value_max)``,
-    with both terms in [0,1] and every weight read from §8 params (INV-11).
-    Conceptually this is the value written to ``family_record.work_queue_score``;
-    persistence/wiring lives in a later slice.
+    A family AWARDED/SELECTED but not yet RECONFIRMED near its voucher deadline is
+    about to LOSE the award, so it must float to the top of the work queue. This
+    maps that urgency into [0,1] from the ``voucher_standing`` signals:
+
+    * ``0.0`` when the family is **not at risk** or carries **no deadline**
+      (``days_remaining is None``) — so a family without a voucher deadline is
+      UNCHANGED by the R2 term (the base scoring stays byte-identical);
+    * otherwise it rises linearly as the deadline nears,
+      ``clamp01(1 - days_remaining / deadline_horizon_days)`` — ``0`` a full
+      horizon (or more) out, ``1.0`` on the deadline day, and clamped to ``1.0``
+      once past due (negative ``days_remaining``).
+
+    The horizon is params-homed (``work_queue.deadline_horizon_days``, INV-11);
+    nothing here is a code literal. Pure — it consumes the precomputed standing
+    signals (``days_remaining``/``at_risk`` from :func:`voucher_standing`) as
+    inputs and does no I/O (INV-2).
+
+    Args:
+        days_remaining: Days until the reconfirm/select deadline (``None`` when the
+            family has no reconfirm deadline); may be negative if past due.
+        at_risk: Whether the family is in the "$X lost on a deadline" gap
+            (selected/awarded but not yet reconfirmed, deadline at hand).
+        params: Loaded params (§8); supplies ``deadline_horizon_days``.
+
+    Returns:
+        The deadline-proximity factor in [0,1].
+    """
+    if not at_risk or days_remaining is None:
+        return 0.0
+    horizon = params.work_queue.deadline_horizon_days
+    return _clamp01(1.0 - days_remaining / horizon)
+
+
+def score_family(
+    family: WorkQueueFamily,
+    params: Params,
+    *,
+    now: datetime | None = None,
+    deadline_proximity: float = 0.0,
+) -> float:
+    """Score one family for the work queue (FR-2.5; §5.1, A-1, R2).
+
+    ``score = w_recoverability · recoverability + w_value · (value / value_max)
+    + w_deadline · deadline_proximity``, with each term in [0,1] and every weight
+    read from §8 params (INV-11). Conceptually this is the value written to
+    ``family_record.work_queue_score``; persistence/wiring lives in a later slice.
+
+    The ``deadline_proximity`` term (R2) defaults to ``0.0`` — so a family with no
+    voucher deadline / not at risk scores EXACTLY as before — and rises toward
+    ``w_deadline`` as an at-risk family's reconfirm deadline nears (compute it with
+    the module-level :func:`deadline_proximity` from the family's
+    ``voucher_standing``). The signal is an INPUT (no I/O here), keeping the scorer
+    pure (INV-2).
 
     Args:
         family: The queue-relevant family attributes.
         params: Loaded params (§8); supplies the headline weights, sub-weights,
-            value baseline/multiplier, and stall window.
+            value baseline/multiplier, stall window, and the deadline weight.
         now: Reference time for the stall-recency window; defaults to UTC now.
+        deadline_proximity: The [0,1] voucher-deadline-urgency factor for this
+            family (default ``0.0`` ⇒ no deadline pressure / unchanged score);
+            clamped defensively.
 
     Returns:
-        The work-queue score in [0,1].
+        The work-queue score in ``[0, w_recoverability + w_value + w_deadline]``.
     """
     work_queue = params.work_queue
     recover_term = recoverability(family, params, now=now)
     value_term = value(family, params) / value_max(params)
-    return work_queue.w_recoverability * recover_term + work_queue.w_value * value_term
+    return (
+        work_queue.w_recoverability * recover_term
+        + work_queue.w_value * value_term
+        + work_queue.w_deadline * _clamp01(deadline_proximity)
+    )
 
 
 def freshness(family: _Scorable, params: Params, *, now: datetime | None = None) -> float:

@@ -33,6 +33,7 @@ from app.core.params import Params, load_params
 from app.core.work_queue import (
     WorkQueueFamily,
     WorkQueueStudent,
+    deadline_proximity,
     freshness,
     rank_families,
     rank_students,
@@ -528,3 +529,117 @@ def test_recoverable_now_student_is_positive_and_value_scaled() -> None:
     )
     assert round(recoverable_now_student(s, params, now=NOW), 4) == round(expected, 4)
     assert recoverable_now_student(s, params, now=NOW) > 0.0
+
+
+# ---------------------------------------------------------------------------
+# R2 — deadline-proximity term: an at-risk family near a voucher deadline (e.g.
+# AWARDED/SELECTED but not yet RECONFIRMED) is about to LOSE its award, so it
+# ranks to the TOP of the queue. The term is 0 when there is no deadline / the
+# family is not at risk, so families without a voucher deadline are UNCHANGED
+# (the existing scoring tests stay green).
+# ---------------------------------------------------------------------------
+
+
+def _expected_deadline_proximity(
+    days_remaining: int | None, at_risk: bool, params: Params
+) -> float:
+    """Reference deadline-proximity ∈ [0,1], computed FROM params (not a literal).
+
+    Zero when not at risk or no deadline; otherwise rises linearly as the
+    deadline nears, ``clamp01(1 - days_remaining / horizon)`` over the params
+    ``deadline_horizon_days`` window (a past-due deadline ⇒ 1.0).
+    """
+    if not at_risk or days_remaining is None:
+        return 0.0
+    horizon = params.work_queue.deadline_horizon_days
+    return _clamp01(1.0 - days_remaining / horizon)
+
+
+def test_deadline_proximity_zero_without_deadline_or_risk() -> None:
+    """No deadline / not at risk ⇒ proximity is exactly 0.0 (families unchanged)."""
+    params = _params()
+    # No days_remaining (no reconfirm deadline) ⇒ 0, even if flagged at_risk.
+    assert deadline_proximity(None, at_risk=True, params=params) == 0.0
+    # Has a deadline but NOT at risk (already reconfirmed) ⇒ 0.
+    assert deadline_proximity(3, at_risk=False, params=params) == 0.0
+
+
+def test_deadline_proximity_rises_as_deadline_nears() -> None:
+    """For an at-risk family, proximity rises toward 1.0 as days_remaining → 0."""
+    params = _params()
+    horizon = params.work_queue.deadline_horizon_days
+
+    far = deadline_proximity(horizon, at_risk=True, params=params)
+    near = deadline_proximity(1, at_risk=True, params=params)
+    at = deadline_proximity(0, at_risk=True, params=params)
+    overdue = deadline_proximity(-5, at_risk=True, params=params)
+
+    # Matches the params-derived reference to 4 dp (pins the formula, INV-11).
+    for dr in (horizon, 1, 0):
+        assert round(deadline_proximity(dr, at_risk=True, params=params), 4) == round(
+            _expected_deadline_proximity(dr, True, params), 4
+        )
+
+    assert far == 0.0  # a full horizon out ⇒ no urgency yet
+    assert at == 1.0  # the deadline is today ⇒ maximal urgency
+    assert overdue == 1.0  # clamped — past due stays at 1.0, never above
+    assert far < near < at  # monotonic: closer ⇒ higher
+    for dr in (horizon, 5, 1, 0, -10):
+        assert 0.0 <= deadline_proximity(dr, at_risk=True, params=params) <= 1.0
+
+
+def test_score_family_unchanged_without_deadline() -> None:
+    """REGRESSION: with no deadline signal, score is EXACTLY the old formula (R2).
+
+    The deadline term defaults to 0 so a family without a voucher deadline scores
+    byte-identically to before the R2 change — the existing scoring tests stay
+    green. Asserted to full precision (==, not rounded) across all three fixtures.
+    """
+    params = _params()
+    for family in (_family_high(), _family_mid(), _family_low()):
+        # No deadline arg passed ⇒ identical to the pre-R2 expected formula.
+        assert score_family(family, params, now=NOW) == _expected_score(family, params)
+        # Explicit zero proximity is the same as omitting it.
+        assert score_family(family, params, now=NOW, deadline_proximity=0.0) == _expected_score(
+            family, params
+        )
+
+
+def test_score_family_adds_weighted_deadline_term() -> None:
+    """score gains ``w_deadline · deadline_proximity`` on top of the base (R2)."""
+    params = _params()
+    wq = params.work_queue
+    family = _family_mid()
+    base = _expected_score(family, params)
+
+    proximity = 1.0  # deadline today
+    scored = score_family(family, params, now=NOW, deadline_proximity=proximity)
+    assert round(scored, 4) == round(base + wq.w_deadline * proximity, 4)
+    # The term genuinely moves the score (w_deadline is non-trivial).
+    assert scored > base
+
+
+def test_at_risk_near_deadline_outranks_higher_value_non_urgent() -> None:
+    """An at-risk near-deadline family outranks a higher-value non-urgent one (R2).
+
+    The demo behavior: a family AWARDED/SELECTED but not yet RECONFIRMED with the
+    voucher deadline at hand jumps to the TOP of the queue over a richer, deeper-
+    funnel family that has no deadline pressure. All numbers read from params.
+    """
+    params = _params()
+
+    # The "richer / deeper" family: top score-bearing attributes, but NO deadline.
+    rich = _family_high()  # near Tuition, fresh, responsive, 4 children
+    rich_score = score_family(rich, params, now=NOW)  # no deadline term
+
+    # The at-risk family: a thinner base (top-of-funnel, fewer children) but its
+    # voucher deadline is today ⇒ proximity 1.0.
+    at_risk = _family_low()  # Interest, 1 child, unresponsive ⇒ low base
+    prox = deadline_proximity(0, at_risk=True, params=params)
+    assert prox == 1.0
+    at_risk_score = score_family(at_risk, params, now=NOW, deadline_proximity=prox)
+
+    # Sanity: without the deadline term the at-risk family would LOSE outright.
+    assert score_family(at_risk, params, now=NOW) < rich_score
+    # With the deadline term it leaps ahead — the at-risk award is about to lapse.
+    assert at_risk_score > rich_score

@@ -86,15 +86,33 @@ class WorkQueue(_StrictModel):
     ``recoverable_now`` freshness decay: freshness falls linearly from 1.0 at the
     stall anchor to ``freshness_floor`` once ``freshness_window_days`` have
     elapsed (never reaching 0, so a long-stalled family stays rankable).
+
+    ``w_deadline``/``deadline_horizon_days`` (R2) add the deadline-proximity term:
+    ``score += w_deadline · deadline_proximity``, where ``deadline_proximity``
+    rises from 0 (≥ ``deadline_horizon_days`` out, or no deadline / not at risk)
+    to 1.0 (deadline today or past). A family AWARDED/SELECTED but not yet
+    RECONFIRMED near a voucher deadline is about to LOSE its award, so the term
+    floats it to the top of the queue. ``w_deadline`` is a tunable (default set so
+    an at-risk near-deadline family outranks a higher-value non-urgent one).
     """
 
     w_recoverability: float
     w_value: float
+    w_deadline: float
     recoverability: Recoverability
     value: WorkQueueValue
     stall_window_days: int
     freshness_window_days: int
     freshness_floor: float
+    deadline_horizon_days: int
+
+    @model_validator(mode="after")
+    def _deadline_horizon_positive(self) -> WorkQueue:
+        if self.deadline_horizon_days < 1:
+            raise ValueError(
+                f"work_queue.deadline_horizon_days must be >= 1, got {self.deadline_horizon_days!r}"
+            )
+        return self
 
 
 class ContactWindows(_StrictModel):
