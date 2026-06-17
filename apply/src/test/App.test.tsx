@@ -499,12 +499,15 @@ describe('mock apply SPA — acceptance', () => {
     expect(within(card).getByLabelText('lane_voucher')).toBeInTheDocument();
     expect(within(card).getByLabelText('lane_next_step')).toBeInTheDocument();
 
-    // Application + Enrollment are complete after the full flow.
+    // Application is submitted after the full flow. The enrollment lane reflects
+    // the MD SIS truth-layer: a family who went all the way but has NO SIS verdict
+    // yet is "Closed — pending SIS confirmation" (not yet ✅-confirmed by the
+    // school's system) — see StatusLanes.test.tsx for the pending→confirmed flip.
     expect(within(card).getByLabelText('lane_application')).toHaveTextContent(
       'Submitted',
     );
     expect(within(card).getByLabelText('lane_enrollment')).toHaveTextContent(
-      'Complete',
+      'Closed — pending SIS confirmation',
     );
 
     // FAIL-CLOSED: the family submitted a deposit + chose a tier, but no voucher

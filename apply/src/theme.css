@@ -870,3 +870,96 @@ button:disabled {
   background: rgba(0, 40, 56, 0.05);
   border-radius: 999px;
 }
+
+/* ---- MD: demo family-switcher + pages dropbox (demo-only, synthetic-only) ---- */
+.demo-switcher {
+  margin: 20px 0 4px;
+  padding: 16px;
+  border: 1px dashed var(--teal);
+  border-radius: var(--radius);
+  background: color-mix(in srgb, var(--teal) 6%, var(--paper));
+}
+
+.demo-switcher-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.demo-pill {
+  font-family: 'Inconsolata', monospace;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--paper);
+  background: var(--teal);
+  padding: 2px 8px;
+  border-radius: 999px;
+}
+
+.demo-switcher-title {
+  margin: 0;
+  font-size: 15px;
+}
+
+.demo-switcher-note {
+  margin: 6px 0 12px;
+  font-size: 12px;
+  color: var(--teal);
+}
+
+.demo-switcher-row {
+  display: flex;
+  align-items: flex-end;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.demo-switcher-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  flex: 1 1 220px;
+}
+
+.demo-switcher-cap {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--ink);
+}
+
+.pages-dropbox {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px solid var(--line);
+}
+
+.pages-dropbox-cap {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--teal);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.pages-link {
+  font-size: 13px;
+  padding: 5px 12px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--paper);
+  color: var(--ink);
+  text-decoration: none;
+  cursor: pointer;
+  letter-spacing: 0;
+  text-transform: none;
+}
+
+.pages-link:hover {
+  border-color: var(--teal);
+}

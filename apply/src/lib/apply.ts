@@ -446,6 +446,20 @@ export interface ApplicationSummary {
    * before the first installment (INV-10).
    */
   voucherConfirmed: boolean;
+
+  // MD — the M5 SIS reconcile verdict for THIS family, read from its OWN
+  // sis_status row (anon+RLS owner-scoped, migration 0014). The reconcile job
+  // (server-side, service_role) writes the verdict; the family reads only its own
+  // row. The PII firewall means ONLY {present, confirmed_at, bucket} ever cross —
+  // never any child/roster PII (INV-1/INV-6).
+  /** The reconcile bucket, or null when the family has no verdict yet (not reconciled). */
+  sisBucket: string | null;
+  /**
+   * SIS-confirmed ⇔ the family's reconcile bucket is `confirmed`. A family that
+   * went all the way (enrollment done) but is NOT yet `confirmed` shows
+   * "Closed — pending SIS confirmation"; this flips true when the bucket says ✅.
+   */
+  sisConfirmed: boolean;
 }
 
 async function selectRows(
@@ -470,11 +484,15 @@ async function selectRows(
 export async function fetchApplications(
   sb: MinimalSupabase,
 ): Promise<ApplicationSummary[]> {
-  const [families, leads, apps, enrolls] = await Promise.all([
+  const [families, leads, apps, enrolls, sisStatuses] = await Promise.all([
     selectRows(sb, 'family_record'),
     selectRows(sb, 'leads_new'),
     selectRows(sb, 'app_form'),
     selectRows(sb, 'enrollment_forms'),
+    // MD — the family's OWN sis_status verdict (anon+RLS, migration 0014). Tolerate
+    // its absence (no verdict yet, or the migration not applied) — a missing row
+    // simply means "not reconciled" → the lane stays pending, fail-safe.
+    selectRows(sb, 'sis_status').catch(() => [] as Record<string, unknown>[]),
   ]);
 
   const has = (
@@ -530,6 +548,15 @@ export async function fetchApplications(
         : String(fr.funding_type);
     const fundingState = String(fr.funding_state ?? 'none');
 
+    // MD — the family's SIS reconcile verdict (its OWN sis_status row, RLS-scoped).
+    // `bucket === 'confirmed'` is the only ✅ state; any other bucket (or no row at
+    // all) means not-yet-confirmed → "Closed — pending SIS confirmation" once
+    // enrollment is done. Reads only the firewall fields (no roster PII).
+    const sisRow = sisStatuses.find((r) => r.family_id === familyId);
+    const sisBucket =
+      sisRow && sisRow.bucket != null ? String(sisRow.bucket) : null;
+    const sisConfirmed = sisBucket === 'confirmed';
+
     return {
       familyId,
       displayName: String(fr.display_name ?? 'New application'),
@@ -547,6 +574,8 @@ export async function fetchApplications(
       formsSigned,
       formsTotal,
       voucherConfirmed: CONFIRMED_FUNDING.has(fundingState),
+      sisBucket,
+      sisConfirmed,
     };
   });
 }

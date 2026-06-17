@@ -14,6 +14,7 @@ import type {
   SelectBuilder,
   UpdateBuilder,
 } from '../lib/apply';
+import type { DemoSupabase } from '../lib/demo';
 
 export interface RecordedInsert {
   table: string;
@@ -161,6 +162,124 @@ export function makeMockSupabase(
                 (r) =>
                   !Object.entries(filter).every(([k, v]) => r[k] === v),
               );
+              return Promise.resolve(onfulfilled({ error: null }));
+            },
+          };
+          return builder;
+        },
+      };
+    },
+  };
+  return mock;
+}
+
+// ---------------------------------------------------------------------------
+// A DEMO-capable mock (MD) — models the seeded multi-family cohort + the demo
+// session SWAP, and SIMULATES the RLS owner-scope so the no-cross-family-leak
+// invariant is testable: a `select('*')` returns ONLY the rows owned by the
+// ACTIVE uid (the family whose anon session is signed in). Ownership mirrors the
+// live policies — `family_record.user_id == uid`; child tables (and sis_status)
+// are owned via their family_id → the family_record owned by uid. There is NO
+// service_role path: `signInAsUid` is an anon session swap, INV-5 holds.
+// ---------------------------------------------------------------------------
+export interface DemoMockSupabase extends DemoSupabase {
+  /** The currently-signed-in uid (the active anon session's auth.uid()). */
+  activeUid: string;
+  /** Every recorded select, for assertions. */
+  selects: { table: string }[];
+}
+
+export function makeDemoMockSupabase(opts: {
+  /** Initial signed-in uid (defaults to the first family's uid, else a constant). */
+  initialUid?: string;
+  /** The full seeded store, keyed by table → rows (across ALL families). */
+  store: Record<string, Record<string, unknown>[]>;
+}): DemoMockSupabase {
+  const store: Record<string, Record<string, unknown>[]> = {};
+  for (const [table, rows] of Object.entries(opts.store)) {
+    store[table] = rows.map((r) => ({ ...r }));
+  }
+  let activeUid =
+    opts.initialUid ??
+    (store.family_record?.[0]?.user_id as string | undefined) ??
+    '00000000-0000-4000-8000-000000000abc';
+  const selects: { table: string }[] = [];
+
+  // The set of family_ids owned by the active uid — the RLS owner-scope spine.
+  function ownedFamilyIds(): Set<string> {
+    return new Set(
+      (store.family_record ?? [])
+        .filter((r) => r.user_id === activeUid)
+        .map((r) => String(r.family_id)),
+    );
+  }
+
+  // Owner-scope a table's rows to the active uid, mirroring the live RLS policies.
+  function visibleRows(table: string): Record<string, unknown>[] {
+    const rows = store[table] ?? [];
+    if (table === 'family_record') {
+      return rows.filter((r) => r.user_id === activeUid);
+    }
+    const owned = ownedFamilyIds();
+    return rows.filter((r) => owned.has(String(r.family_id)));
+  }
+
+  const mock: DemoMockSupabase = {
+    get activeUid() {
+      return activeUid;
+    },
+    selects,
+    async signInAsUid(uid: string) {
+      activeUid = uid;
+    },
+    auth: {
+      async getSession() {
+        return { data: { session: { user: { id: activeUid } } } };
+      },
+      async signInAnonymously() {
+        return { data: { user: { id: activeUid } }, error: null };
+      },
+    },
+    from(table: string) {
+      return {
+        async insert() {
+          return { error: null };
+        },
+        select(): SelectBuilder {
+          selects.push({ table });
+          const filters: Record<string, unknown> = {};
+          const builder: SelectBuilder = {
+            eq(column: string, value: unknown) {
+              filters[column] = value;
+              return builder;
+            },
+            then(onfulfilled) {
+              // RLS owner-scope FIRST, then any explicit .eq() filter.
+              const rows = visibleRows(table).filter((r) =>
+                Object.entries(filters).every(([k, v]) => r[k] === v),
+              );
+              return Promise.resolve(onfulfilled({ data: rows, error: null }));
+            },
+          };
+          return builder;
+        },
+        update(): UpdateBuilder {
+          const builder: UpdateBuilder = {
+            eq() {
+              return builder;
+            },
+            then(onfulfilled) {
+              return Promise.resolve(onfulfilled({ error: null }));
+            },
+          };
+          return builder;
+        },
+        delete(): DeleteBuilder {
+          const builder: DeleteBuilder = {
+            eq() {
+              return builder;
+            },
+            then(onfulfilled) {
               return Promise.resolve(onfulfilled({ error: null }));
             },
           };

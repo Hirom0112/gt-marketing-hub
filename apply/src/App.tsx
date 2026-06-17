@@ -86,6 +86,12 @@ import {
   type ApplyStage,
   type FundingState,
 } from './lib/deriveNextStep';
+import { DemoSwitcher } from './DemoSwitcher';
+import {
+  isDemoSupabase,
+  loadDemoFamilies,
+  type DemoFamily,
+} from './lib/demo';
 import { APPLY_PARAMS } from './lib/params';
 import {
   resetNavSeq,
@@ -147,6 +153,10 @@ export function App({ supabase }: { supabase: MinimalSupabase }) {
   // R3 anon-resume: how many applications the PERSISTED anon session already owns.
   // > 0 ⇒ a returning family can resume their status page. Synthetic-only, INV-1.
   const [resumableCount, setResumableCount] = useState<number | null>(null);
+  // MD demo family-switcher: the seeded synthetic cohort + an in-flight flag while
+  // a demo session swap is happening. Demo-only, synthetic-only (INV-1).
+  const [demoFamilies] = useState<DemoFamily[]>(() => loadDemoFamilies());
+  const [demoBusy, setDemoBusy] = useState(false);
 
   // Sign in anonymously on load — REUSING the persisted anon session if one
   // already exists (supabase.ts sets persistSession: true), so a returning family
@@ -196,6 +206,36 @@ export function App({ supabase }: { supabase: MinimalSupabase }) {
     }
   }, [supabase, uid]);
 
+  // MD — sign in AS a seeded synthetic demo family: swap the active anon session
+  // to THAT family's own uid (a demo-only session swap that EXTENDS anon-resume,
+  // NOT real auth), re-probe the now owner-scoped applications, and land on the
+  // four-lane status page. RLS still scopes every read to the family's own uid, so
+  // there is no cross-family leak — the family page shows ONLY that family.
+  const selectDemoFamily = useCallback(
+    async (family: DemoFamily) => {
+      if (!isDemoSupabase(supabase)) return;
+      setDemoBusy(true);
+      try {
+        await supabase.signInAsUid(family.uid);
+        const id = await ensureAnonSession(supabase);
+        setUid(id);
+        setSession(null);
+        try {
+          const apps = await fetchApplications(supabase);
+          setResumableCount(apps.length);
+        } catch {
+          setResumableCount(0);
+        }
+        setStep('dashboard');
+      } catch (e) {
+        setFatal((e as Error).message);
+      } finally {
+        setDemoBusy(false);
+      }
+    },
+    [supabase],
+  );
+
   const inFlow = FLOW_ORDER.includes(step);
   const stepIndex = FLOW_ORDER.indexOf(step);
 
@@ -235,6 +275,10 @@ export function App({ supabase }: { supabase: MinimalSupabase }) {
           resumableCount={resumableCount}
           onBegin={startApplication}
           onDashboard={() => setStep('dashboard')}
+          demoFamilies={demoFamilies}
+          demoBusy={demoBusy}
+          demoEnabled={isDemoSupabase(supabase)}
+          onSelectDemoFamily={selectDemoFamily}
         />
       )}
 
@@ -292,6 +336,10 @@ function LandingStep({
   resumableCount,
   onBegin,
   onDashboard,
+  demoFamilies,
+  demoBusy,
+  demoEnabled,
+  onSelectDemoFamily,
 }: {
   supabase: MinimalSupabase;
   uid: string | null;
@@ -299,6 +347,14 @@ function LandingStep({
   resumableCount: number | null;
   onBegin: () => void;
   onDashboard: () => void;
+  /** MD demo cohort — the seeded synthetic families the switcher lists. */
+  demoFamilies: DemoFamily[];
+  /** True while a demo session swap is in flight. */
+  demoBusy: boolean;
+  /** Whether the injected client supports the demo session swap (DemoSupabase). */
+  demoEnabled: boolean;
+  /** Sign in as the chosen demo family, then load its status page. */
+  onSelectDemoFamily: (family: DemoFamily) => void | Promise<void>;
 }) {
   // Presentational telemetry: a landing step_viewed (no family_id yet, so the
   // hook no-ops the write — the view is still rendered). Kept for parity with the
@@ -346,6 +402,20 @@ function LandingStep({
           {uid ? 'Begin Application' : 'Starting…'}
         </button>
       </div>
+
+      {/* MD demo control — the family-switcher + pages dropbox. Shown only when
+          the injected client supports the demo session swap (the seeded-demo
+          build); a plain anon client never renders it. Demo-only, synthetic-only
+          (INV-1); it EXTENDS the anon-resume above, NOT real auth. */}
+      {demoEnabled && (
+        <DemoSwitcher
+          families={demoFamilies}
+          onSelectFamily={onSelectDemoFamily}
+          onApplyFlow={onBegin}
+          onStatusPage={onDashboard}
+          busy={demoBusy}
+        />
+      )}
     </div>
   );
 }
@@ -1245,7 +1315,20 @@ function StatusLanes({ app }: { app: ApplicationSummary }) {
   );
 
   const application = lanePill(app.applicationDone, false);
-  const enrollment = lanePill(app.enrollmentDone, enrollPartial);
+  // MD — the enrollment lane reflects the M5 SIS reconcile truth-layer: a family
+  // who went all the way (enrollment done) is "Closed — pending SIS confirmation"
+  // until its OWN sis_status row reports the ✅ `confirmed` bucket, at which point
+  // the lane flips to "Confirmed". Forms-incomplete is still the in-progress
+  // partial state. (The SIS verdict is the only ✅ source — INV-2; the SPA never
+  // self-confirms it.)
+  const enrollmentDoneUnconfirmed = app.enrollmentDone && !app.sisConfirmed;
+  const enrollmentConfirmed = app.enrollmentDone && app.sisConfirmed;
+  // Pending-SIS is "all forms in, awaiting the school's system" — a partial (◐),
+  // not a done (✓): the enrollment is closed on GT's side but not yet confirmed.
+  const enrollment = lanePill(
+    enrollmentConfirmed,
+    enrollmentDoneUnconfirmed || enrollPartial,
+  );
   // FAIL-CLOSED: a voucher is "confirmed" only when money is in hand; an
   // awarded/self-reported/GT-confirmed-but-no-installment state shows as partial,
   // never done.
@@ -1266,9 +1349,11 @@ function StatusLanes({ app }: { app: ApplicationSummary }) {
         <span className="lane-mark" aria-hidden="true">{enrollment.mark}</span>
         <span className="lane-name">Enrollment</span>
         <span className="lane-state">
-          {app.enrollmentDone
-            ? 'Complete'
-            : `${app.formsSigned}/${app.formsTotal} forms`}
+          {enrollmentConfirmed
+            ? 'Confirmed'
+            : enrollmentDoneUnconfirmed
+              ? 'Closed — pending SIS confirmation'
+              : `${app.formsSigned}/${app.formsTotal} forms`}
         </span>
       </div>
       <div className={voucher.cls} aria-label="lane_voucher">
