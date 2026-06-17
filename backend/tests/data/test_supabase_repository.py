@@ -739,3 +739,107 @@ def test_patch_non_2xx_fails_loud() -> None:
     repo = _make_repo(handler)
     with pytest.raises(SupabaseError):
         repo.mark_synced(UUID(_FID_INTEREST), datetime(2030, 1, 1, tzinfo=UTC))
+
+
+# ---------------------------------------------------------------------------
+# Append-only voucher_event timeline (TODO.md R2) — append_voucher_event POSTs a
+# row per funding-state transition (time-in-state; feeds the work-queue deadline
+# ranking + §10 observability). service_role (BYPASSRLS, server-only — INV-5 /
+# D-RLS-4). Append-only: an INSERT (POST), never an UPDATE/DELETE.
+# ---------------------------------------------------------------------------
+
+
+def _capture_post_handler(captured: dict[str, Any]) -> Any:
+    """Serve a PostgREST POST on /voucher_event, recording method/path/body."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        parsed = urlparse(str(request.url))
+        assert parsed.path == "/rest/v1/voucher_event"
+        # service_role auth (server-only — INV-5 / D-RLS-4).
+        assert request.headers["apikey"] == "synthetic-service-role-key"
+        assert request.headers["Authorization"] == "Bearer synthetic-service-role-key"
+        captured["method"] = request.method
+        captured["body"] = json.loads(request.content.decode() or "{}")
+        captured["prefer"] = request.headers.get("Prefer")
+        return httpx.Response(201)
+
+    return handler
+
+
+def test_append_voucher_event_posts_transition_via_service_role() -> None:
+    """append_voucher_event POSTs a from→to transition row (service_role)."""
+    captured: dict[str, Any] = {}
+    repo = _make_repo(_capture_post_handler(captured))
+    fid = UUID(_FID_INTEREST)
+
+    repo.append_voucher_event(
+        family_id=fid,
+        from_state=FundingState.AWARDED_SELFREPORT,
+        to_state=FundingState.SELECTED_GT,
+        program="tx_tefa",
+        signal="family_selected",
+    )
+
+    assert captured["method"] == "POST"
+    body = captured["body"]
+    assert body["family_id"] == str(fid)
+    # Enums serialize to their DB column .value form.
+    assert body["from_state"] == "awarded_selfreport"
+    assert body["to_state"] == "selected_gt"
+    assert body["program"] == "tx_tefa"
+    assert body["signal"] == "family_selected"
+    # Household-level event: no per-child key.
+    assert body.get("student_id") is None
+
+
+def test_append_voucher_event_records_student_when_given() -> None:
+    """A per-child transition carries the optional student_id."""
+    captured: dict[str, Any] = {}
+    repo = _make_repo(_capture_post_handler(captured))
+    fid = UUID(_FID_APPLY)
+    sid = UUID("00000000-0000-0000-0000-0000000000f1")
+
+    repo.append_voucher_event(
+        family_id=fid,
+        from_state=FundingState.GT_CONFIRMED,
+        to_state=FundingState.FIRST_INSTALLMENT_RECEIVED,
+        program="tx_tefa",
+        signal="first_installment_received",
+        student_id=sid,
+    )
+
+    assert captured["body"]["student_id"] == str(sid)
+
+
+def test_append_voucher_event_allows_null_from_state() -> None:
+    """The first transition (no prior state) writes from_state null (append-only origin)."""
+    captured: dict[str, Any] = {}
+    repo = _make_repo(_capture_post_handler(captured))
+
+    repo.append_voucher_event(
+        family_id=UUID(_FID_INTEREST),
+        from_state=None,
+        to_state=FundingState.APPLIED,
+        program="tx_tefa",
+        signal="self_report",
+    )
+
+    assert captured["body"]["from_state"] is None
+    assert captured["body"]["to_state"] == "applied"
+
+
+def test_append_voucher_event_non_2xx_fails_loud() -> None:
+    """A non-2xx POST raises SupabaseError (fail loud, never a silent lost append)."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(500, content="boom")
+
+    repo = _make_repo(handler)
+    with pytest.raises(SupabaseError):
+        repo.append_voucher_event(
+            family_id=UUID(_FID_INTEREST),
+            from_state=FundingState.NONE,
+            to_state=FundingState.APPLIED,
+            program="tx_tefa",
+            signal="self_report",
+        )

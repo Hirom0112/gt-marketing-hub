@@ -153,6 +153,41 @@ def _program_for_family(funding_type: FundingType | None) -> str:
     return _DEFAULT_VOUCHER_PROGRAM
 
 
+def _append_voucher_event(
+    repository: FamilyRepository,
+    *,
+    family_id: UUID,
+    from_state: FundingState,
+    to_state: FundingState,
+    program: str,
+    signal: str,
+) -> None:
+    """Append the funding transition to the voucher_event timeline, if supported (R2).
+
+    Logs the from→to transition + the GT-controlled signal + program to the
+    append-only ``voucher_event`` timeline (time-in-state for the work-queue
+    deadline ranking + §10 observability). Called ONLY after a successful (legal)
+    advance — an illegal/FLAG transition raises before reaching here, so it writes
+    nothing (fail-closed, no re-write loop).
+
+    The append-only sink lives on the live store (``SupabaseFamilyRepository``);
+    the in-memory v1 store (A-3) has no timeline table, so we write only when the
+    bound repository exposes ``append_voucher_event``. This keeps ``core/`` and the
+    router depending on the :class:`FamilyRepository` interface (NFR-8) — the
+    timeline is a live-store concern, not part of the read interface.
+    """
+    append = getattr(repository, "append_voucher_event", None)
+    if append is None:
+        return
+    append(
+        family_id=family_id,
+        from_state=from_state,
+        to_state=to_state,
+        program=program,
+        signal=signal,
+    )
+
+
 def _today() -> date:
     """The injected reference date for the voucher windows (deterministic seam).
 
@@ -249,18 +284,37 @@ def post_funding_signal(
         raise HTTPException(status_code=404, detail="family not found")
     family = joined.family
 
-    event = next(
-        (state for field, state in _SIGNAL_TO_EVENT if getattr(request, field)),
+    asserted = next(
+        ((field, state) for field, state in _SIGNAL_TO_EVENT if getattr(request, field)),
         None,
     )
-    if event is None:
+    if asserted is None:
         raise HTTPException(status_code=422, detail="no funding signal asserted")
+    signal_name, event = asserted
 
     try:
         advanced = advance_funding_state(family.funding_state, event)
     except ValueError as exc:
         # Illegal §5.4 transition (skip / backwards / terminal): fail closed, no 500.
+        # An illegal/FLAG transition writes NO voucher_event (fail-closed, no re-write
+        # loop) — we raise BEFORE the append below.
         raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    # Log the transition to the append-only voucher_event timeline (TODO.md R2),
+    # AFTER a successful (legal) advance only: time-in-state for the work-queue
+    # deadline ranking + §10 observability. The deterministic core owns the
+    # transition (INV-2); this only records the fact. The writer lives on the
+    # live store seam; the in-memory v1 store has no timeline sink, so we append
+    # only when the repository exposes the capability (NFR-8 — core/routers depend
+    # on the interface, the append-only sink is a live-store concern).
+    _append_voucher_event(
+        repository,
+        family_id=family.family_id,
+        from_state=family.funding_state,
+        to_state=advanced,
+        program=_program_for_family(family.funding_type),
+        signal=signal_name,
+    )
 
     try:
         return _funding_view(

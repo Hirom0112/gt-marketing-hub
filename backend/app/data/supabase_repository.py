@@ -44,7 +44,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from enum import Enum
 from typing import Any
-from uuid import UUID
+from uuid import UUID, uuid4
 
 import httpx
 
@@ -251,6 +251,31 @@ class SupabaseFamilyRepository(FamilyRepository):
         if response.status_code >= 400:
             raise SupabaseError(
                 f"PostgREST PATCH {path} → {response.status_code}: {response.text[:300]}"
+            )
+
+    def _post(self, path: str, payload: dict[str, Any]) -> None:
+        """One PostgREST POST (the append-only insert seam — TODO.md R2; fail loud).
+
+        A row INSERT via the service_role key (BYPASSRLS, server-only — INV-5 /
+        D-RLS-4). Used for the append-only ``voucher_event`` timeline: a state
+        transition is a fact, never updated after insert (the table grants only
+        SELECT + INSERT). ``Prefer: return=minimal`` keeps the response body empty
+        (we do not re-read here). The key never leaves the backend.
+        """
+        url = f"{self._base_url}{path}"
+        headers = {
+            **self._headers(),
+            "Content-Type": "application/json",
+            "Prefer": "return=minimal",
+        }
+        if self._client is not None:
+            response = self._client.post(url, headers=headers, json=payload)
+        else:
+            with httpx.Client(timeout=self._timeout) as client:
+                response = client.post(url, headers=headers, json=payload)
+        if response.status_code >= 400:
+            raise SupabaseError(
+                f"PostgREST POST {path} → {response.status_code}: {response.text[:300]}"
             )
 
     # ---------------------------------------------------------------- mapping
@@ -562,6 +587,36 @@ class SupabaseFamilyRepository(FamilyRepository):
             f"{_REST}/family_record",
             {"family_id": f"eq.{family_id}"},
             {field: self._json_value(value)},
+        )
+
+    def append_voucher_event(
+        self,
+        *,
+        family_id: UUID,
+        from_state: FundingState | None,
+        to_state: FundingState,
+        program: str,
+        signal: str,
+        student_id: UUID | None = None,
+    ) -> None:
+        # Append one row to the immutable voucher_event timeline (TODO.md R2): a
+        # funding-state transition fact (from→to + the GT-controlled signal +
+        # program), feeding the work-queue deadline ranking + §10 observability.
+        # service_role POST (BYPASSRLS, server-only — INV-5 / D-RLS-4). The
+        # deterministic core owns the transition (INV-2); this only LOGS the fact
+        # after it happened. Append-only: a POST, never an UPDATE/DELETE. Enums
+        # serialize to their .value; `from_state` may be None (an origin event).
+        self._post(
+            f"{_REST}/voucher_event",
+            {
+                "voucher_event_id": str(uuid4()),
+                "family_id": str(family_id),
+                "student_id": str(student_id) if student_id is not None else None,
+                "from_state": self._json_value(from_state) if from_state is not None else None,
+                "to_state": self._json_value(to_state),
+                "program": program,
+                "signal": signal,
+            },
         )
 
     # ------------------------------------------------------- drop-off views

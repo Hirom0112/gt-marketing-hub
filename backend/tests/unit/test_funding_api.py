@@ -268,3 +268,90 @@ def test_funding_view_self_pay_still_has_voucher_standing_no_500() -> None:
     assert body["program"] == "tx_tefa"
     assert isinstance(body["next_action"], str) and body["next_action"]
     assert body["award_full_vs_prorated"] in {"full", "prorated"}
+
+
+# --- R2: a successful transition appends a voucher_event; an illegal one does not -
+
+
+class _RecordingRepo(InMemoryFamilyRepository):
+    """An in-memory repo that records every append_voucher_event call (TODO.md R2).
+
+    The base in-memory store has no voucher-event sink (the append-only timeline is
+    a Supabase-backed concern), so the funding API must call the writer through a
+    capability the repo MAY expose. This repo records the calls so the acceptance
+    test can prove a LEGAL transition appends exactly one event and an ILLEGAL one
+    appends nothing (fail-closed, no re-write loop).
+    """
+
+    def __init__(self, dataset: object) -> None:
+        super().__init__(dataset)  # type: ignore[arg-type]
+        self.voucher_events: list[dict[str, object]] = []
+
+    def append_voucher_event(
+        self,
+        *,
+        family_id: object,
+        from_state: object,
+        to_state: object,
+        program: str,
+        signal: str,
+        student_id: object | None = None,
+    ) -> None:
+        self.voucher_events.append(
+            {
+                "family_id": family_id,
+                "from_state": from_state,
+                "to_state": to_state,
+                "program": program,
+                "signal": signal,
+                "student_id": student_id,
+            }
+        )
+
+
+def _recording_repo_in_state(
+    funding_state: FundingState, funding_type: FundingType
+) -> _RecordingRepo:
+    from app.data.synthetic import SyntheticDataset
+
+    base = _family_of_type(funding_type)
+    family = base.model_copy(update={"funding_state": funding_state})
+    return _RecordingRepo(SyntheticDataset(families=[family]))
+
+
+def test_funding_signal_legal_transition_appends_voucher_event() -> None:
+    """A legal §5.4 advance appends exactly one voucher_event (from→to + signal + program)."""
+    repo = _recording_repo_in_state(FundingState.AWARDED_SELFREPORT, FundingType.TEFA_STANDARD)
+    app.dependency_overrides[deps.get_repository] = lambda: repo
+    family = repo.list_families()[0]
+
+    resp = client.post(
+        f"/families/{family.family_id}/funding/signal",
+        json={"family_selected": True},
+    )
+    assert resp.status_code == 200
+
+    assert len(repo.voucher_events) == 1
+    event = repo.voucher_events[0]
+    assert event["family_id"] == family.family_id
+    assert event["from_state"] == FundingState.AWARDED_SELFREPORT
+    assert event["to_state"] == FundingState.SELECTED_GT
+    assert event["signal"] == "family_selected"
+    assert event["program"] == "tx_tefa"
+
+
+def test_funding_signal_illegal_transition_appends_nothing() -> None:
+    """An illegal/FLAG advance writes NO voucher_event (fail-closed, no re-write loop)."""
+    repo = _recording_repo_in_state(
+        FundingState.FIRST_INSTALLMENT_RECEIVED, FundingType.TEFA_STANDARD
+    )
+    app.dependency_overrides[deps.get_repository] = lambda: repo
+    family = repo.list_families()[0]
+
+    # A first-installment signal from FIRST_INSTALLMENT_RECEIVED is a skip/no-op illegal advance.
+    resp = client.post(
+        f"/families/{family.family_id}/funding/signal",
+        json={"first_installment_received": True},
+    )
+    assert resp.status_code in (409, 422)
+    assert repo.voucher_events == []

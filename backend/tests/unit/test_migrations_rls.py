@@ -60,6 +60,11 @@ def _student_grain_sql() -> str:
     return _strip_comments((MIGRATIONS_DIR / "0009_student_grain.sql").read_text(encoding="utf-8"))
 
 
+def _voucher_events_sql() -> str:
+    """The 0010 append-only `voucher_event` timeline migration DDL (comments stripped)."""
+    return _strip_comments((MIGRATIONS_DIR / "0010_voucher_events.sql").read_text(encoding="utf-8"))
+
+
 def _all_sql() -> str:
     return "\n".join(p.read_text(encoding="utf-8") for p in _sql_files())
 
@@ -353,4 +358,127 @@ def test_0009_no_security_definer() -> None:
     """D-RLS-7: 0009 uses no security-definer helper (inline subqueries only)."""
     assert not _SECURITY_DEFINER.search(_student_grain_sql()), (
         "0009 must not use a SECURITY DEFINER helper (D-RLS-7)"
+    )
+
+
+# ---------------------------------------------------------------------------
+# 0010 append-only `voucher_event` timeline (TODO.md R2) — a per-(family/student)
+# voucher state-transition log feeding the work-queue deadline ranking + §10
+# observability. A new CREATE TABLE that MUST ENABLE *and* FORCE RLS (D-RLS-1) and
+# carry owner-scoped, null-guarded SELECT + INSERT policies (the INSERT carries a
+# null-guarded WITH CHECK), scoped through the owned `family_record.user_id`
+# subquery — the same pattern 0003/0009 use for the other family_id-owned tables.
+# CRITICAL: APPEND-ONLY — grants only SELECT + INSERT (NEVER UPDATE / DELETE to
+# anon/authenticated), so the timeline is immutable from the client. The
+# all-migrations enable/force/null-guard invariants above already cover the table
+# in aggregate; these tests pin the table's append-only shape + policy set.
+# ---------------------------------------------------------------------------
+
+_FOR_INSERT = re.compile(r"\bFOR\s+INSERT\b", re.IGNORECASE)
+
+
+def test_0010_creates_voucher_event_with_enable_and_force_rls() -> None:
+    """0010 adds the `voucher_event` table and both ENABLEs and FORCEs RLS (D-RLS-1)."""
+    sql = _voucher_events_sql()
+    assert re.search(r"CREATE\s+TABLE\s+voucher_event\b", sql, re.IGNORECASE), (
+        "0010 must CREATE TABLE voucher_event"
+    )
+    assert re.search(
+        r"ALTER\s+TABLE\s+voucher_event\s+ENABLE\s+ROW\s+LEVEL\s+SECURITY", sql, re.IGNORECASE
+    ), "0010 must ENABLE RLS on voucher_event"
+    assert re.search(
+        r"ALTER\s+TABLE\s+voucher_event\s+FORCE\s+ROW\s+LEVEL\s+SECURITY", sql, re.IGNORECASE
+    ), "0010 must FORCE RLS on voucher_event (owner-role escape hatch, D-RLS-1)"
+
+
+def test_0010_voucher_event_owned_via_family_record_user_id() -> None:
+    """0010 scopes `voucher_event` ownership through family_id → family_record.user_id.
+
+    Same ownership predicate as the other family_id-owned tables: the event FKs to
+    family_record, and the policies scope via the owned-family subquery on
+    `user_id` (the household identity key) — null-guarded.
+    """
+    sql = _voucher_events_sql()
+    assert re.search(
+        r"family_id\s+uuid\s+NOT\s+NULL\s+REFERENCES\s+family_record\s*\(\s*family_id\s*\)",
+        sql,
+        re.IGNORECASE,
+    ), "voucher_event.family_id must REFERENCE family_record(family_id)"
+    assert re.search(
+        r"FROM\s+family_record\s+fr\s+WHERE\s+fr\.user_id\s*=\s*\(\s*SELECT\s+auth\.uid\(\)\s*\)",
+        sql,
+        re.IGNORECASE,
+    ), "voucher_event policies must scope via family_record.user_id = auth.uid()"
+
+
+def test_0010_voucher_event_has_owner_select_and_insert_policies() -> None:
+    """0010 adds an owner-scoped SELECT and an owner-scoped INSERT policy (no UPDATE/DELETE).
+
+    Append-only: SELECT (read own timeline) + INSERT (append own event, null-guarded
+    WITH CHECK). No UPDATE/DELETE/ALL policy — the timeline is immutable once written.
+    """
+    sql = _voucher_events_sql()
+    assert re.search(
+        r"CREATE\s+POLICY\s+\w+\s+ON\s+voucher_event\b[^;]*FOR\s+SELECT", sql, re.IGNORECASE
+    ), "0010 must add an owner-scoped FOR SELECT policy on voucher_event"
+    assert re.search(
+        r"CREATE\s+POLICY\s+\w+\s+ON\s+voucher_event\b[^;]*FOR\s+INSERT", sql, re.IGNORECASE
+    ), "0010 must add an owner-scoped FOR INSERT policy on voucher_event"
+    # Exactly two policies, both null-guarded; no UPDATE/DELETE/ALL policy.
+    n_policies = len(_CREATE_POLICY.findall(sql))
+    n_guards = len(_NULL_GUARD.findall(sql))
+    assert n_policies == 2, (
+        f"0010 should add exactly 2 policies on voucher_event, found {n_policies}"
+    )
+    assert n_guards >= n_policies, (
+        f"unguarded voucher_event policy (D-RLS-2): {n_policies} policies but only "
+        f"{n_guards} `auth.uid() IS NOT NULL` guards"
+    )
+    assert not _FOR_ALL.search(sql), "0010 must not use FOR ALL on voucher_event"
+    assert not _FOR_DELETE.search(sql), (
+        "0010 must not add a DELETE policy (append-only — the timeline is immutable)"
+    )
+    assert not re.search(r"FOR\s+UPDATE", sql, re.IGNORECASE), (
+        "0010 must not add an UPDATE policy (append-only — the timeline is immutable)"
+    )
+
+
+def test_0010_voucher_event_insert_has_null_guarded_with_check() -> None:
+    """D-RLS-2: the INSERT policy carries a null-guarded WITH CHECK (owner-scoped)."""
+    sql = _voucher_events_sql()
+    # The INSERT policy must use WITH CHECK (not USING) and be null-guarded.
+    insert_policy = re.search(
+        r"CREATE\s+POLICY\s+\w+\s+ON\s+voucher_event\b[^;]*FOR\s+INSERT[^;]*WITH\s+CHECK[^;]*;",
+        sql,
+        re.IGNORECASE | re.DOTALL,
+    )
+    assert insert_policy, "0010 INSERT policy must carry a WITH CHECK clause"
+    assert _NULL_GUARD.search(insert_policy.group(0)), (
+        "0010 INSERT WITH CHECK must be null-guarded (auth.uid() IS NOT NULL)"
+    )
+
+
+def test_0010_grants_select_and_insert_not_update_or_delete() -> None:
+    """0010 grants SELECT + INSERT only — NEVER UPDATE / DELETE (append-only)."""
+    sql = _voucher_events_sql()
+    grant_select = re.search(r"GRANT\s+SELECT\s+ON\s+voucher_event\b[^;]*", sql, re.IGNORECASE)
+    assert grant_select, "0010 must GRANT SELECT ON voucher_event"
+    grant_insert = re.search(r"GRANT\s+INSERT\s+ON\s+voucher_event\b[^;]*", sql, re.IGNORECASE)
+    assert grant_insert, "0010 must GRANT INSERT ON voucher_event"
+    assert re.search(r"\bauthenticated\b", grant_insert.group(0), re.IGNORECASE), (
+        "0010 must grant INSERT to authenticated"
+    )
+    # APPEND-ONLY: no UPDATE / DELETE grant anywhere in the migration.
+    assert not re.search(r"GRANT\s+UPDATE\b", sql, re.IGNORECASE), (
+        "0010 must NOT grant UPDATE (append-only timeline)"
+    )
+    assert not re.search(r"GRANT\s+DELETE\b", sql, re.IGNORECASE), (
+        "0010 must NOT grant DELETE (append-only timeline)"
+    )
+
+
+def test_0010_no_security_definer() -> None:
+    """D-RLS-7: 0010 uses no security-definer helper (inline subqueries only)."""
+    assert not _SECURITY_DEFINER.search(_voucher_events_sql()), (
+        "0010 must not use a SECURITY DEFINER helper (D-RLS-7)"
     )
