@@ -825,3 +825,60 @@ def test_security_event_append_only() -> None:
     assert not _SECURITY_DEFINER.search(sql), (
         "0015 must not use a SECURITY DEFINER helper in the exposed schema (D-RLS-7)"
     )
+
+
+# ---------------------------------------------------------------------------
+# 0014 sis_status — the SIS reconcile verdict table + the PII firewall
+# (MULTI_AGENT_COCKPIT §6; TODO.md M5). The daily reconcile job (service_role)
+# writes one row per family; the family status page reads its OWN row (anon+RLS).
+# ---------------------------------------------------------------------------
+def _sis_status_sql() -> str:
+    """The 0014 sis_status verdict-table DDL (comments stripped)."""
+    return _strip_comments((MIGRATIONS_DIR / "0014_sis_status.sql").read_text(encoding="utf-8"))
+
+
+def test_sis_status_table_force_rls_and_pii_firewall() -> None:
+    """0014 adds the sis_status verdict table (ENABLE+FORCE+null-guarded RLS)
+    carrying ONLY the firewall fields — no child name/DOB/grade — plus the four
+    bucket vocab in a CHECK, keeping the global RLS count invariants green.
+    """
+    sql = _sis_status_sql()
+
+    # --- the verdict table + RLS + FORCE ---
+    assert re.search(r"CREATE\s+TABLE\s+sis_status\b", sql, re.IGNORECASE), (
+        "0014 must CREATE TABLE sis_status"
+    )
+    assert re.search(
+        r"ALTER\s+TABLE\s+sis_status\s+ENABLE\s+ROW\s+LEVEL\s+SECURITY", sql, re.IGNORECASE
+    ), "0014 must ENABLE RLS on sis_status (D-RLS-1)"
+    assert re.search(
+        r"ALTER\s+TABLE\s+sis_status\s+FORCE\s+ROW\s+LEVEL\s+SECURITY", sql, re.IGNORECASE
+    ), "0014 must FORCE RLS on sis_status (D-RLS-1)"
+
+    # --- exactly the firewall columns; NO child / roster PII columns (INV-1/INV-6) ---
+    for col in ("family_id", "present", "confirmed_at", "bucket"):
+        assert re.search(rf"\b{col}\b", sql), f"sis_status must carry {col}"
+    for forbidden in ("dob", "birth", "grade", "student", "child", "first_name", "last_name"):
+        assert not re.search(rf"\b{forbidden}\b", sql, re.IGNORECASE), (
+            f"sis_status must NOT carry roster/child PII ({forbidden}) — PII firewall (INV-1/INV-6)"
+        )
+
+    # --- the four reconcile buckets in a CHECK (vocab matches core SisBucket) ---
+    for bucket in ("confirmed", "records_lag", "paid_not_in_sis", "ambiguous"):
+        assert re.search(rf"'{bucket}'", sql), f"sis_status bucket CHECK must include '{bucket}'"
+
+    # --- owner-scoped, null-guarded, READ-ONLY policy; client writes deny-by-default ---
+    policy = re.search(
+        r"CREATE\s+POLICY\s+\w+\s+ON\s+sis_status\b[^;]*;", sql, re.IGNORECASE | re.DOTALL
+    )
+    assert policy, "0014 must add a CREATE POLICY on sis_status"
+    assert _NULL_GUARD.search(policy.group(0)), (
+        "0014 sis_status policy must carry the auth.uid() IS NOT NULL guard (D-RLS-2)"
+    )
+    assert re.search(r"\bFOR\s+SELECT\b", policy.group(0), re.IGNORECASE), (
+        "the sis_status policy is read-only (writes are server-side service_role, D-RLS-4)"
+    )
+    assert not re.search(r"FOR\s+(INSERT|UPDATE|DELETE|ALL)\b", sql, re.IGNORECASE), (
+        "sis_status must have no anon/authenticated write policy (writes via service_role)"
+    )
+    assert not _SECURITY_DEFINER.search(sql), "0014 must not use SECURITY DEFINER (D-RLS-7)"

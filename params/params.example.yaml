@@ -35,6 +35,7 @@ sis:                        # M5 — seam reconcile bucket rules (MULTI_AGENT_CO
   confirmed_min_confidence: 0.9       # at/above this ⇒ CONFIRMED (reconciled on both sides)
   paid_not_in_sis_max_confidence: 0.5 # a GT-paid family whose best SIS match is at/below this ⇒ PAID-NOT-IN-SIS
   records_lag_days: 7                 # confirmed-paid but absent from SIS export this many days past payment ⇒ RECORDS-LAG
+  phone_only_confidence: 0.6          # score a phone-only match earns (in the ambiguous band 0.5–0.9 ⇒ merge queue)
 
 bulk:                       # S12 W2 — bulk action governance (A-20; INV-8 per-run cap)
   nudge_per_run_cap: 50       # max families that may SEND per bulk-nudge run; beyond ⇒ capped/deferred

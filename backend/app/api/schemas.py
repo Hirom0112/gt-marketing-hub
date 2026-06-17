@@ -20,6 +20,7 @@ from app.core.contact_status import ContactStatus
 from app.core.eval_gate import ValidationResult
 from app.core.family_record import DealView
 from app.core.recovery_state import RecoveredOutcome, RecoveryState
+from app.core.sis_reconcile import SisBucket
 from app.data.models import (
     AppForm,
     CommunityProfile,
@@ -762,3 +763,37 @@ class ContentDecisionResponse(BaseModel):
     action: Decision
     published: bool = False
     library_asset: LibraryAsset | None = None
+
+
+class SisFamilyStatus(BaseModel):
+    """One family's SIS reconcile outcome — the PII-firewall fields ONLY (M5).
+
+    This is the entire surface that crosses from the SIS roster into the cockpit:
+    ``family_id``, ``present``, ``confirmed_at``, ``bucket`` — never a child
+    name/DOB/grade or any roster contact. The firewall is the shape itself
+    (INV-1/INV-6; enforced by ``test_buckets_leak_no_roster_pii``).
+    """
+
+    family_id: UUID
+    present: bool
+    confirmed_at: datetime | None
+    bucket: SisBucket
+
+
+class SisBucketGroup(BaseModel):
+    """One reconcile bucket: its label, count, and member families (M5)."""
+
+    bucket: SisBucket
+    count: int
+    families: list[SisFamilyStatus]
+
+
+class SisBucketsResponse(BaseModel):
+    """The admin SIS reconcile roll-up (`GET /enrollment/sis-buckets`, M5).
+
+    Read-only (INV-2): the daily reconcile job's verdicts grouped by bucket in a
+    fixed order. Strictly firewall fields — no roster/child PII (INV-1/INV-6).
+    """
+
+    buckets: list[SisBucketGroup]
+    total: int

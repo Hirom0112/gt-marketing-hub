@@ -15,6 +15,8 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from pydantic import BaseModel
 
 from app.adapters.hubspot.crm_adapter import CRMAdapter, StudentSyncResult
+from app.adapters.registry import get_enrollment_system_adapter
+from app.adapters.sis.base import EnrollmentSystemAdapter
 from app.api.deps import (
     DemoPrincipal,
     get_crm_adapter_dep,
@@ -35,6 +37,9 @@ from app.api.schemas import (
     FamilyDetailResponse,
     HouseholdGroup,
     PipelineResponse,
+    SisBucketGroup,
+    SisBucketsResponse,
+    SisFamilyStatus,
     StudentBoardResponse,
     StudentDismissRequest,
     StudentDismissResponse,
@@ -54,6 +59,7 @@ from app.core.recovery_state import (
     recovered_outcome,
 )
 from app.core.sales_agents import SALES_AGENTS
+from app.core.sis_reconcile import SisBucket, SisVerdict
 from app.core.work_queue import (
     WorkQueueFamily,
     WorkQueueStudent,
@@ -75,6 +81,7 @@ from app.data.repository import (
     JoinedStudent,
     OwnerScope,
 )
+from app.data.sis_reconcile_job import run_sis_reconcile
 from app.observability.log_store import DismissRecord, ObservabilityLog
 
 router = APIRouter(tags=["families"])
@@ -93,6 +100,8 @@ CRMAdapterDep = Annotated[CRMAdapter, Depends(get_crm_adapter_dep)]
 # The M1 demo principal — the app-layer auth.uid() stand-in (the IDOR atonement).
 # The role decides the effective owner scope; the clamp lives in resolve_owner_scope.
 PrincipalDep = Annotated[DemoPrincipal, Depends(get_demo_principal)]
+# The SIS boundary (INV-9) — the simulated synthetic roster by default (SIS_MODE).
+SisAdapterDep = Annotated[EnrollmentSystemAdapter, Depends(get_enrollment_system_adapter)]
 
 # The shared description for the ``owner`` query param on the owner-scoped reads.
 # An AGENT principal is ALWAYS clamped to its own book (this param is ignored for
@@ -1221,3 +1230,50 @@ def get_agent_rollup(
         load=round(uld, _ROLLUP_DP),
     )
     return AgentsResponse(agents=agents, unowned=unowned)
+
+
+# Fixed admin display order: the discrepancies that need action first (🔴 → 🟡 →
+# the merge-queue tail), then the all-clear ✅ confirmed.
+_SIS_BUCKET_ORDER: tuple[SisBucket, ...] = (
+    SisBucket.PAID_NOT_IN_SIS,
+    SisBucket.RECORDS_LAG,
+    SisBucket.AMBIGUOUS,
+    SisBucket.CONFIRMED,
+)
+
+
+def _roll_up_sis_buckets(verdicts: list[SisVerdict]) -> SisBucketsResponse:
+    """Group reconcile verdicts by bucket (firewall fields only), fixed order."""
+    by_bucket: dict[SisBucket, list[SisFamilyStatus]] = {b: [] for b in _SIS_BUCKET_ORDER}
+    for verdict in verdicts:
+        by_bucket[verdict.bucket].append(
+            SisFamilyStatus(
+                family_id=verdict.family_id,
+                present=verdict.present,
+                confirmed_at=verdict.confirmed_at,
+                bucket=verdict.bucket,
+            )
+        )
+    groups = [
+        SisBucketGroup(bucket=bucket, count=len(by_bucket[bucket]), families=by_bucket[bucket])
+        for bucket in _SIS_BUCKET_ORDER
+    ]
+    return SisBucketsResponse(buckets=groups, total=len(verdicts))
+
+
+@router.get("/enrollment/sis-buckets", response_model=SisBucketsResponse)
+def get_sis_buckets(
+    repository: RepositoryDep,
+    adapter: SisAdapterDep,
+    params: ParamsDep,
+) -> SisBucketsResponse:
+    """The admin SIS reconcile roll-up (M5; MULTI_AGENT_COCKPIT §6).
+
+    Runs the daily SIS reconcile job — match the cockpit's paid families against
+    the SIS roster (``SIS_MODE``) and bucket each — and groups the verdicts.
+    Read-only (INV-2) and PII-firewalled (INV-1/INV-6): the payload carries only
+    ``family_id`` / ``present`` / ``confirmed_at`` / ``bucket`` — never a child
+    name/DOB/grade or any roster contact.
+    """
+    verdicts = run_sis_reconcile(repository, adapter, params)
+    return _roll_up_sis_buckets(verdicts)

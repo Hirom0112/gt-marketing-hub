@@ -26,6 +26,7 @@ import DropOffPanel from '../enrollment/DropOffPanel';
 import HistoryList from '../enrollment/HistoryList';
 import IntakeDesk from '../enrollment/IntakeDesk';
 import AgentRoster from '../enrollment/AgentRoster';
+import SisBucketsPanel from '../enrollment/SisBucketsPanel';
 import NotesTimeline, {
   type NotesTimelineHandle,
 } from '../enrollment/NotesTimeline';
@@ -486,6 +487,11 @@ export default function EnrollmentWorkspace(): JSX.Element {
         onFilterAgent={filterToAgent}
         refreshKey={queueRefresh}
       />
+
+      {/* M5 — the admin SIS reconcile roll-up (🔴 Assign / 🟡 Propose / ⚪ merge
+          queue). Read-only GET; action firing routes through M4 / the decision
+          spine — the panel never writes directly (INV-2/INV-4). */}
+      <SisBucketsPanel refreshKey={queueRefresh} />
 
       <div className="operator-grid">
         <div className="operator-find">
