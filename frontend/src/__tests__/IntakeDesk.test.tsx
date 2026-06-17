@@ -1,4 +1,10 @@
-import { render, screen, waitFor, within } from '@testing-library/react';
+import {
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within,
+} from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import IntakeDesk from '../enrollment/IntakeDesk';
 
@@ -170,17 +176,129 @@ describe('IntakeDesk', () => {
     expect(screen.getAllByTestId('intake-row')).toHaveLength(3);
   });
 
-  it('intakeDeskAssignAffordanceIsDeferredToM4', async () => {
+  it('intakeDeskSurfacesOnePerRowAssignControl', async () => {
     installFetch(INTAKE_PAYLOAD);
     render(<IntakeDesk />);
 
     await screen.findByText('The Quinn Family');
 
-    // The per-row Assign control is PRESENT (the routing affordance) but its
-    // firing is deferred to M4 — there is exactly one per listed family.
+    // The per-row Assign control is PRESENT (the routing verb) — exactly one per
+    // listed family. M4 wires its handler (asserted below).
     const assigns = screen.getAllByTestId('intake-assign');
     expect(assigns).toHaveLength(3);
-    // The control surfaces the routing verb; M4 wires its handler.
     expect(assigns[0]).toHaveTextContent(/assign/i);
+  });
+
+  // ── M4: the Assign verb fires the SINGLE gated assignment write ──────────────
+  // A two-mode fetch: GET /families?owner=none returns the supplied desk payload;
+  // POST /enrollment/families/bulk-assign returns ok. Capture every POST body so
+  // the tests can assert the exact { family_ids, agent_id } payload, and prove
+  // the desk re-pulls owner=none AFTER a successful assign.
+  function installAssignFetch(
+    deskBodies: unknown[],
+  ): { posts: Array<{ url: string; body: unknown }> } {
+    const posts: Array<{ url: string; body: unknown }> = [];
+    let getCount = 0;
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        if (url.includes('/bulk-assign')) {
+          posts.push({
+            url,
+            body: init?.body ? JSON.parse(String(init.body)) : undefined,
+          });
+          return Promise.resolve({
+            ok: true,
+            status: 200,
+            json: () => Promise.resolve({ assigned: 1 }),
+          } as Response);
+        }
+        if (url.includes('/families')) {
+          // Each owner=none GET pulls the NEXT desk body (re-pull proof): the
+          // initial list, then the post-assign list (assigned families gone).
+          const body = deskBodies[Math.min(getCount, deskBodies.length - 1)];
+          getCount += 1;
+          return Promise.resolve({
+            ok: true,
+            status: 200,
+            json: () => Promise.resolve(body),
+          } as Response);
+        }
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          json: () => Promise.resolve([]),
+        } as Response);
+      }),
+    );
+    return { posts };
+  }
+
+  it('intakeDeskAssignFiresBulkAssignForThatFamilyAndRePulls', async () => {
+    // After the assign, the re-pull returns the desk WITHOUT the Sato family
+    // (now owned) — proving the assigned family drops out of the unowned pool.
+    const afterAssign = INTAKE_PAYLOAD.filter(
+      (f) => f.family_id !== FAM_ALARM_OLDER,
+    );
+    const { posts } = installAssignFetch([INTAKE_PAYLOAD, afterAssign]);
+    render(<IntakeDesk />);
+
+    await screen.findByText('The Sato Family');
+    expect(screen.getAllByTestId('intake-row')).toHaveLength(3);
+
+    // Click the Sato row's Assign. The Sato row is first (oldest alarmed) — find
+    // it by row, then its Assign control, to assert the precise family_id.
+    const satoRow = screen
+      .getAllByTestId('intake-row')
+      .find((r) => within(r).queryByText('The Sato Family') !== null);
+    expect(satoRow).toBeDefined();
+    fireEvent.click(within(satoRow as HTMLElement).getByTestId('intake-assign'));
+
+    // It fires POST /enrollment/families/bulk-assign with a 1-element family_ids
+    // for THAT family, targeting its displayed recommended agent (RILEY).
+    await waitFor(() => expect(posts).toHaveLength(1));
+    const post = posts[0];
+    expect(post).toBeDefined();
+    expect(post?.url).toContain('/enrollment/families/bulk-assign');
+    expect(post?.body).toEqual({
+      family_ids: [FAM_ALARM_OLDER],
+      agent_id: RILEY,
+    });
+
+    // RE-PULL proof: the desk re-reads owner=none and the assigned Sato family is
+    // gone — only two rows remain.
+    await waitFor(() => {
+      expect(screen.queryByText('The Sato Family')).not.toBeInTheDocument();
+    });
+    expect(screen.getAllByTestId('intake-row')).toHaveLength(2);
+  });
+
+  it('intakeDeskAutoRouteAllFiresAssignsForListedFamiliesAndRePulls', async () => {
+    // After auto-route, the re-pull returns an EMPTY desk (all routed).
+    const { posts } = installAssignFetch([INTAKE_PAYLOAD, []]);
+    render(<IntakeDesk />);
+
+    await screen.findByText('The Quinn Family');
+
+    fireEvent.click(screen.getByTestId('intake-auto-route'));
+
+    // All three listed families share one recommended agent (RILEY) → grouped
+    // into ONE bulk-assign call carrying all three family_ids.
+    await waitFor(() => expect(posts.length).toBeGreaterThanOrEqual(1));
+    const allAssigned = posts.flatMap(
+      (p) => (p.body as { family_ids: string[] }).family_ids,
+    );
+    expect(allAssigned).toEqual(
+      expect.arrayContaining([FAM_IN_WINDOW, FAM_ALARM_OLD, FAM_ALARM_OLDER]),
+    );
+    posts.forEach((p) => {
+      expect(p.url).toContain('/enrollment/families/bulk-assign');
+      expect((p.body as { agent_id: string }).agent_id).toBe(RILEY);
+    });
+
+    // RE-PULL proof: the desk is now clear (all families routed out of owner=none).
+    await screen.findByTestId('intake-empty');
+    expect(screen.queryByTestId('intake-row')).not.toBeInTheDocument();
   });
 });

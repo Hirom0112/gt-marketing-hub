@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useState } from 'react';
-import { AlarmClock, UserPlus } from 'lucide-react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import { AlarmClock, UserPlus, Wand2 } from 'lucide-react';
 import { apiFetch } from '../config';
 import { Button, Card, Chip } from '../ui';
 import { fmtDay, fmtUSD, fundingLabel } from './format';
@@ -16,10 +16,15 @@ import { fmtDay, fmtUSD, fundingLabel } from './format';
 // partition (families past the unowned-alarm window) sorts to the TOP.
 //
 // SCOPE: M3 surfaces the desk + the recommendation + a per-row Assign affordance.
-// The actual assign POST /enrollment/families/bulk-assign is M4 — the Assign
-// control's handler is deferred (TODO(M4)); this surface only LISTS + recommends.
+// M4 WIRES the assign verb: the per-row Assign (and an "Auto-route all" control)
+// fire POST /enrollment/families/bulk-assign — the SINGLE gated assignment write
+// (deterministic, INV-2; the backend's route_family owns the ROUTING math, the
+// desk only assigns to the DISPLAYED recommendation) — then RE-PULL the desk so
+// the now-assigned families drop out of the owner=none pool.
 //
-// Read-only GET (INV-2). Synthetic only (INV-1); reads through apiFetch (INV-5).
+// The GET is read-only (INV-2); the only write is the bulk-assign route, through
+// apiFetch (which carries the demo headers; never a service_role, INV-5).
+// Synthetic only (INV-1).
 
 // One unassigned family on the intake desk (the GET /families?owner=none shape).
 interface IntakeFamily {
@@ -72,11 +77,15 @@ function partitionByAlarm(families: readonly IntakeFamily[]): IntakeFamily[] {
 function IntakeRow({
   fam,
   selected,
+  busy,
   onSelectFamily,
+  onAssign,
 }: {
   fam: IntakeFamily;
   selected: boolean;
+  busy: boolean;
   onSelectFamily?: (familyId: string) => void;
+  onAssign: (fam: IntakeFamily) => void;
 }): JSX.Element {
   const rec = fam.recommended_agent_name;
   const tier = fam.recommended_tier;
@@ -128,16 +137,18 @@ function IntakeRow({
         )}
       </div>
 
-      {/* The Assign affordance — present but DEFERRED. M4 wires the
-          POST /enrollment/families/bulk-assign handler. */}
+      {/* The Assign verb (M4) — fires POST /enrollment/families/bulk-assign for
+          this one family, targeting its DISPLAYED recommended agent (the
+          backend's route_family owns the math; the desk assigns to what it
+          shows). Disabled with no recommendation, or while a write is in flight.
+          The row click is suppressed so Assign never re-selects the family. */}
       <Button
         data-testid="intake-assign"
         icon={UserPlus}
-        // TODO(M4): wire POST /enrollment/families/bulk-assign (the actual
-        // assign verb). M3 only surfaces the affordance + the recommendation.
+        disabled={busy || !fam.recommended_agent_id}
         onClick={(ev) => {
           ev.stopPropagation();
-          /* TODO(M4): fire bulk-assign */
+          onAssign(fam);
         }}
       >
         Assign
@@ -146,12 +157,37 @@ function IntakeRow({
   );
 }
 
+// Fire the SINGLE gated assignment write for a batch of families to one agent.
+// (A single-row Assign is just a 1-element family_ids.) Resolves to true on a
+// 2xx; the caller re-pulls the desk so the assigned families drop out of the
+// owner=none pool. The backend logs the decision server-side (INV-2).
+async function postBulkAssign(
+  familyIds: readonly string[],
+  agentId: string,
+): Promise<boolean> {
+  const res = await apiFetch('/enrollment/families/bulk-assign', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ family_ids: familyIds, agent_id: agentId }),
+  });
+  return res.ok;
+}
+
 export default function IntakeDesk({
   selectedFamilyId,
   onSelectFamily,
   refreshKey = 0,
 }: IntakeDeskProps): JSX.Element {
   const [state, setState] = useState<LoadState>({ status: 'loading' });
+  // An internal re-pull counter — bumped after a successful assign so the desk
+  // re-reads owner=none and the now-assigned families disappear. Combined with
+  // the prop refreshKey so the assign logic stays confined to this component
+  // (no workspace plumbing needed).
+  const [localRefresh, setLocalRefresh] = useState(0);
+  // The assign write in flight (disables the controls); and a transient failure
+  // banner (surfaced, never silent — matches the desk's role="alert" idiom).
+  const [assigning, setAssigning] = useState(false);
+  const [assignError, setAssignError] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -173,7 +209,7 @@ export default function IntakeDesk({
     return () => {
       cancelled = true;
     };
-  }, [refreshKey]);
+  }, [refreshKey, localRefresh]);
 
   // R2 guard: list ONLY owner=none families (assigned_rep_id IS NULL), even if an
   // owned family leaked into the array. The server is the source of truth; this
@@ -187,6 +223,61 @@ export default function IntakeDesk({
 
   const ordered = useMemo(() => partitionByAlarm(unassigned), [unassigned]);
   const alarmCount = ordered.filter((f) => f.unowned_alarm === true).length;
+
+  // Assign one family to its DISPLAYED recommended agent, then re-pull. The UI
+  // never recomputes routing (route_family is the backend's) — it assigns to the
+  // recommendation the desk already shows.
+  const assignOne = useCallback(
+    async (fam: IntakeFamily): Promise<void> => {
+      if (!fam.recommended_agent_id) return;
+      setAssigning(true);
+      setAssignError(null);
+      try {
+        const ok = await postBulkAssign(
+          [fam.family_id],
+          fam.recommended_agent_id,
+        );
+        if (!ok) throw new Error('assign request failed');
+        setLocalRefresh((n) => n + 1); // re-pull owner=none
+      } catch (err: unknown) {
+        setAssignError(err instanceof Error ? err.message : 'assign failed');
+      } finally {
+        setAssigning(false);
+      }
+    },
+    [],
+  );
+
+  // Auto-route all: assign every currently-listed unassigned family to its
+  // per-row recommended agent. Group by agent so it is ONE bulk-assign call per
+  // distinct target (the backend route is bulk-shaped); skip rows with no
+  // recommendation. One re-pull after the batch.
+  const autoRouteAll = useCallback(async (): Promise<void> => {
+    const groups = new Map<string, string[]>();
+    for (const fam of ordered) {
+      const agentId = fam.recommended_agent_id;
+      if (!agentId) continue;
+      const ids = groups.get(agentId) ?? [];
+      ids.push(fam.family_id);
+      groups.set(agentId, ids);
+    }
+    if (groups.size === 0) return;
+    setAssigning(true);
+    setAssignError(null);
+    try {
+      for (const [agentId, ids] of groups) {
+        const ok = await postBulkAssign(ids, agentId);
+        if (!ok) throw new Error('auto-route request failed');
+      }
+      setLocalRefresh((n) => n + 1); // re-pull owner=none once
+    } catch (err: unknown) {
+      setAssignError(err instanceof Error ? err.message : 'auto-route failed');
+    } finally {
+      setAssigning(false);
+    }
+  }, [ordered]);
+
+  const routableCount = ordered.filter((f) => f.recommended_agent_id).length;
 
   if (state.status === 'loading') {
     return (
@@ -226,7 +317,39 @@ export default function IntakeDesk({
             · <b data-testid="intake-total">{ordered.length}</b> unowned · route
             to an agent
           </span>
+          {/* Auto-route all — assigns every listed family to its displayed
+              recommended agent (the backend's route_family math), then re-pulls.
+              Disabled while a write is in flight or nothing is routable. */}
+          <Button
+            data-testid="intake-auto-route"
+            icon={Wand2}
+            variant="flow"
+            disabled={assigning || routableCount === 0}
+            onClick={() => {
+              void autoRouteAll();
+            }}
+            style={{ marginLeft: 'auto' }}
+          >
+            Auto-route all
+          </Button>
         </div>
+
+        {assignError !== null && (
+          <p
+            data-testid="intake-assign-error"
+            role="alert"
+            style={{
+              margin: 0,
+              padding: 'var(--s-2) var(--s-4)',
+              color: 'var(--signal-ink)',
+              background: 'var(--signal-wash)',
+              fontSize: 'var(--fs-sm)',
+              borderBottom: '1px solid var(--line-2)',
+            }}
+          >
+            Could not route: {assignError}
+          </p>
+        )}
 
         {ordered.length === 0 ? (
           <div className="worklist-empty rest" data-testid="intake-empty">
@@ -261,7 +384,11 @@ export default function IntakeDesk({
                 key={fam.family_id}
                 fam={fam}
                 selected={fam.family_id === selectedFamilyId}
+                busy={assigning}
                 onSelectFamily={onSelectFamily}
+                onAssign={(f) => {
+                  void assignOne(f);
+                }}
               />
             ))}
           </>
