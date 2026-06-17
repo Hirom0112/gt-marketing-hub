@@ -236,6 +236,12 @@ class LeadsNew(BaseModel):
     product_interest: ProductInterest
     grade_interest: str
     region: str
+    # An aggregate neighborhood / area LABEL (a city district name, same spirit as
+    # `region`) — NEVER precise geo of a minor (P-4 / INV-6); it is the coarse
+    # geo→affluence KEY the conversion-likelihood signal maps via a params table.
+    # Defaults to a safe placeholder so existing fixtures/rows that predate the
+    # field stay valid. Synthetic only (INV-1).
+    neighborhood: str = "Unspecified"
     # The Interest form's "How many children are you applying for? 1–5+" (funnel
     # map §4D). Drives the work-queue VALUE term (A-23): value scales with child
     # count since every targeted family pays the same per-child tuition. Defaults
@@ -263,6 +269,11 @@ class AppForm(BaseModel):
     # optional so pre-A-24 family-only fixtures/rows stay valid (non-breaking).
     student_id: UUID | None = None
     submitted_at: datetime | None = None  # null = started, not submitted (a stall).
+    # The household income the family SELF-REPORTS on the application, whole USD.
+    # `None` = not yet provided (a valid mid-funnel state). One input to the
+    # conversion-likelihood signal (alongside neighborhood affluence, child count,
+    # funding type, application depth). Synthetic only (INV-1).
+    self_reported_income: int | None = None
     completion_pct: float | None = None  # 0–100, deterministic.
     map_score: float | None = None  # academic signal surfaced in deal view (FR-2.2).
     academic_signals: dict[str, object] = Field(default_factory=dict)

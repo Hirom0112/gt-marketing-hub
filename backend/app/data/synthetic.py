@@ -972,21 +972,43 @@ class _DemoHousehold:
     assigned_rep_id: UUID | None
     stall_reason: StallReason | None
     note: str  # the demo intent (documentation only — never emitted)
+    # Conversion-signal raw inputs (DH-2). Both synthetic + per-spec so the cohort
+    # carries a deliberate HIGH/MED/LOW affluence + income spread for the downstream
+    # signal. `neighborhood` is a coarse AGGREGATE area label (no minor geo —
+    # P-4/INV-6); `self_reported_income` is whole USD (`None` = not yet provided).
+    neighborhood: str
+    self_reported_income: int | None
 
 
-# The curated cohort — 9 households, hand-shaped for legible on-camera state.
+# Synthetic AGGREGATE neighborhood / area labels (NOT minor geo — P-4/INV-6); a
+# small set assigned across the cohort to give the conversion signal a believable
+# affluence spread (HIGH→LOW). The downstream DH-1 signal maps these to affluence
+# via a PARAMS table (built there, not here — DH-2 carries only the raw label).
+_DEMO_NB_HIGH = "Highland Park"  # affluent district (HIGH affluence)
+_DEMO_NB_MID = "Riverside"  # middle district (MED affluence)
+_DEMO_NB_MODEST = "Eastgate"  # modest district (LOW affluence)
+_DEMO_NB_MIXED = "Lakeview"  # mixed district (MED affluence)
+
+# The curated cohort — exactly 6 households, hand-shaped for legible on-camera
+# state (DH-2 trimmed from 9 → the deliberate 6: dropped Johnson, Garcia, Ahmed).
 # Composition (verified by ``test_demo_scenario_shape`` + the SIS divergence test):
 #   * EXACTLY ONE two-child household (the Rivera household — closer, mid-funnel).
-#   * Stage spread: 2 mid-funnel (APPLY/ENROLL) + 3 "went all the way" (TUITION,
-#     funded ⇒ Closed — pending SIS confirmation) + the rest top-of-funnel/active.
+#   * Stage spread (the full funnel ladder): 1 APPLY (Kim — mid-funnel setter
+#     re-engagement) + 1 ENROLL (Rivera) + 3 "went all the way" (TUITION, funded
+#     ⇒ Closed — pending SIS confirmation) + 1 top-of-funnel (INTEREST — Silva,
+#     unassigned intake).
 #   * Funding/voucher spread: TEFA standard (voucher), self-pay, disability,
 #     homeschool — so the voucher clocks + SIS buckets each show something.
-#   * 4 PAID households (3 FUNDED + 1 FIRST_INSTALLMENT_RECEIVED) ⇒ the roster
-#     generator seeds 🔴 + 🟡 + ✅ deterministically.
-#   * Assignment: the closer (#1) holds the multi-child + high-value/deadline
-#     cases; the setter (#2) holds standard re-engagement; ≥1 is UNASSIGNED.
+#   * 3 PAID households (Okafor + Nguyen + Patel, all FUNDED) ⇒ the roster
+#     generator seeds 🔴 + 🟡 + ✅ deterministically (sis_roster needs ≥3 paid).
+#   * Assignment: the closer (#1) holds the multi-child + high-value cases; the
+#     setter (#2) holds standard re-engagement; ≥1 (Silva) is UNASSIGNED.
+#   * Conversion-signal spread (DH-2): a deliberate HIGH/MED/LOW mix of
+#     neighborhood affluence + self-reported income, with mid-funnel families
+#     carrying `None` income (not yet provided).
 _DEMO_HOUSEHOLDS: tuple[_DemoHousehold, ...] = (
     # The two-child household — closer, mid-funnel (the household→student demo).
+    # HIGH: affluent neighborhood + high self-reported income — the prime case.
     _DemoHousehold(
         surname="Rivera",
         stage=Stage.ENROLL,
@@ -996,8 +1018,11 @@ _DEMO_HOUSEHOLDS: tuple[_DemoHousehold, ...] = (
         assigned_rep_id=_DEMO_CLOSER_ID,
         stall_reason=StallReason.FORMS_PARTIAL,
         note="multi-child voucher household mid-enroll — the high-value closer case",
+        neighborhood=_DEMO_NB_HIGH,
+        self_reported_income=185_000,
     ),
     # "Went all the way" — funded TUITION ⇒ Closed — pending SIS confirmation.
+    # HIGH: top affluence + top income (the self-pay-grade voucher family).
     _DemoHousehold(
         surname="Okafor",
         stage=Stage.TUITION,
@@ -1007,7 +1032,10 @@ _DEMO_HOUSEHOLDS: tuple[_DemoHousehold, ...] = (
         assigned_rep_id=_DEMO_CLOSER_ID,
         stall_reason=None,
         note="closed voucher enrollment, awaiting SIS confirmation",
+        neighborhood=_DEMO_NB_HIGH,
+        self_reported_income=240_000,
     ),
+    # MED: mid district + mid income (a closed self-pay family).
     _DemoHousehold(
         surname="Nguyen",
         stage=Stage.TUITION,
@@ -1017,7 +1045,10 @@ _DEMO_HOUSEHOLDS: tuple[_DemoHousehold, ...] = (
         assigned_rep_id=_DEMO_SETTER_ID,
         stall_reason=None,
         note="closed self-pay enrollment, awaiting SIS confirmation",
+        neighborhood=_DEMO_NB_MID,
+        self_reported_income=95_000,
     ),
+    # LOW: modest district + lower income — the disability-IEP ($30k tier) family.
     _DemoHousehold(
         surname="Patel",
         stage=Stage.TUITION,
@@ -1027,41 +1058,26 @@ _DEMO_HOUSEHOLDS: tuple[_DemoHousehold, ...] = (
         assigned_rep_id=_DEMO_SETTER_ID,
         stall_reason=None,
         note="closed disability-IEP ($30k tier) enrollment, awaiting SIS",
+        neighborhood=_DEMO_NB_MODEST,
+        self_reported_income=52_000,
     ),
-    # First-installment paid (mid-enroll) — a fourth PAID family so the ✅ bucket
-    # is non-empty after the 🔴/🟡 seeds consume the first two paid families.
+    # Mid-funnel (APPLY) re-engagement — the setter's book (the mid-funnel rung
+    # Garcia used to hold). MED neighborhood + a provided mid-funnel income, so the
+    # conversion signal has a believable in-progress data point (not just None).
     _DemoHousehold(
-        surname="Johnson",
-        stage=Stage.ENROLL,
-        funding_type=FundingType.TEFA_STANDARD,
-        funding_state=FundingState.FIRST_INSTALLMENT_RECEIVED,
-        num_children=1,
-        assigned_rep_id=_DEMO_CLOSER_ID,
-        stall_reason=StallReason.FUNDING_PENDING,
-        note="first installment in, deadline-risk voucher — the closer's deadline case",
-    ),
-    # Mid-funnel (APPLY) standard re-engagement — the setter's book.
-    _DemoHousehold(
-        surname="Garcia",
+        surname="Kim",
         stage=Stage.APPLY,
-        funding_type=FundingType.TEFA_STANDARD,
+        funding_type=FundingType.SELF_PAY,
         funding_state=FundingState.APPLIED,
         num_children=1,
         assigned_rep_id=_DEMO_SETTER_ID,
         stall_reason=StallReason.APP_INCOMPLETE,
-        note="application incomplete — standard setter re-engagement",
+        note="application incomplete — standard mid-funnel setter re-engagement",
+        neighborhood=_DEMO_NB_MIXED,
+        self_reported_income=78_000,
     ),
-    _DemoHousehold(
-        surname="Kim",
-        stage=Stage.INTEREST,
-        funding_type=FundingType.SELF_PAY,
-        funding_state=FundingState.NONE,
-        num_children=1,
-        assigned_rep_id=_DEMO_SETTER_ID,
-        stall_reason=StallReason.NO_RESPONSE,
-        note="top-of-funnel no-response — standard setter re-engagement",
-    ),
-    # UNASSIGNED — the intake pool the admin routes LIVE on camera.
+    # UNASSIGNED — the intake pool the admin routes LIVE on camera. LOW: modest
+    # district; income not yet provided (None) — fresh top-of-funnel lead.
     _DemoHousehold(
         surname="Silva",
         stage=Stage.INTEREST,
@@ -1071,16 +1087,8 @@ _DEMO_HOUSEHOLDS: tuple[_DemoHousehold, ...] = (
         assigned_rep_id=None,
         stall_reason=StallReason.INFO_SESSION_NO_SHOW,
         note="fresh homeschool ($2k tier) lead — UNASSIGNED, the live-route case",
-    ),
-    _DemoHousehold(
-        surname="Ahmed",
-        stage=Stage.APPLY,
-        funding_type=FundingType.SELF_PAY,
-        funding_state=FundingState.APPLIED,
-        num_children=1,
-        assigned_rep_id=None,
-        stall_reason=None,
-        note="second unassigned intake lead — pool depth for the live route",
+        neighborhood=_DEMO_NB_MODEST,
+        self_reported_income=None,
     ),
 )
 
@@ -1089,9 +1097,9 @@ def generate_demo_cohort(*, params: Params) -> SyntheticDataset:
     """Generate the curated ``COCKPIT_SCENARIO=demo`` cohort (MULTI_AGENT §10.1).
 
     A SEPARATE deterministic fixture (its own ``random.Random(_DEMO_SEED)``, so the
-    other cohort streams stay byte-identical) of :data:`_DEMO_HOUSEHOLDS` — 9
+    other cohort streams stay byte-identical) of :data:`_DEMO_HOUSEHOLDS` — 6
     synthetic households with controlled, legible state for the on-camera demo:
-    exactly one two-child household, a stage + funding/voucher spread, four PAID
+    exactly one two-child household, a stage + funding/voucher spread, three PAID
     households (so the M5 roster generator seeds the 🔴/🟡/✅ SIS buckets), and an
     assignment split across the two demo agents with ≥1 household left UNASSIGNED
     (the intake pool the admin routes live). Same input ⇒ byte-identical output.
@@ -1197,11 +1205,18 @@ def _build_demo_household(
         product_interest=product,
         grade_interest=rng.choice(_GRADES),
         region=region,
+        # DH-2: the coarse aggregate area label the conversion signal keys on
+        # (per-spec, deterministic — no minor geo, P-4/INV-6).
+        neighborhood=spec.neighborhood,
         num_children=spec.num_children,
         created_at=created,
     )
 
-    app_form = _build_app_form(rng, app_form_id, family_id, spec.stage, created)
+    # DH-2: the family's self-reported household income (whole USD; `None` =
+    # not yet provided) — set per-spec on the application (conversion-signal input).
+    app_form = _build_app_form(rng, app_form_id, family_id, spec.stage, created).model_copy(
+        update={"self_reported_income": spec.self_reported_income}
+    )
     enrollment = _build_enrollment(rng, enrollment_form_id, family_id, spec.stage, created)
     profile = _build_profile(rng, community_profile_id, family_id, created)
     return family, lead, app_form, enrollment, profile

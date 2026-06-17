@@ -1,7 +1,7 @@
 """MD — the curated `COCKPIT_SCENARIO=demo` cohort has the on-camera demo shape.
 
 The demo cohort (``generate_demo_cohort``) is a SEPARATE deterministic fixture —
-8–10 synthetic households with controlled, legible state for the demo
+exactly 6 synthetic households with controlled, legible state for the demo
 (MULTI_AGENT_COCKPIT §10.1): exactly one two-child household, a stage spread
 (≥1 mid-funnel, ≥1 enrollment-done "went all the way"), a funding/voucher spread,
 seeded SIS divergence, and an assignment split across the two demo agents with
@@ -54,12 +54,16 @@ def test_demo_scenario_shape() -> None:
     params = load_params(EXAMPLE_PARAMS)
     ds = generate_demo_cohort(params=params)
 
-    # --- 8–10 households -----------------------------------------------------
-    assert 8 <= len(ds.families) <= 10
+    # --- EXACTLY 6 households, the deliberate on-camera cohort (DH-2) ---------
+    assert len(ds.families) == 6
     # parallel one-row-per-family source tables (the spine join holds).
     assert len(ds.leads) == len(ds.families)
     assert len(ds.app_forms) == len(ds.families)
     assert len(ds.enrollment_forms) == len(ds.families)
+
+    # the deliberate 6 surnames (Johnson, Garcia, Ahmed dropped in DH-2).
+    surnames = {lead.synthetic_last_name for lead in ds.leads}
+    assert surnames == {"Rivera", "Okafor", "Nguyen", "Patel", "Kim", "Silva"}
 
     # --- EXACTLY one two-child household, the rest single-child --------------
     child_counts = _children_by_family(ds)
@@ -90,6 +94,29 @@ def test_demo_scenario_shape() -> None:
     (two_child_id,) = [fid for fid, n in child_counts.items() if n == 2]
     multi = next(f for f in ds.families if f.family_id == two_child_id)
     assert multi.assigned_rep_id == _CLOSER_ID, "the closer holds the multi-child case"
+
+    # --- ≥3 paid (sis_roster needs len(paid) >= 3 to seed all three buckets) -
+    paid = [f for f in ds.families if f.funding_state in _PAID]
+    assert len(paid) >= 3, "≥3 paid families so the SIS roster seeds all three buckets"
+
+    # --- funding-type spread (the voucher clocks + tiers each show something) -
+    funding_types = {f.funding_type for f in ds.families}
+    assert len(funding_types) >= 3, "expected a funding-type spread"
+
+    # --- DH-2: conversion-signal raw inputs present + correctly typed --------
+    # every lead carries a synthetic aggregate neighborhood label (non-empty).
+    for lead in ds.leads:
+        assert isinstance(lead.neighborhood, str) and lead.neighborhood, (
+            "every household carries a synthetic neighborhood label"
+        )
+    # the cohort shows a spread of neighborhoods (not all identical).
+    assert len({lead.neighborhood for lead in ds.leads}) >= 2, "neighborhood spread"
+    # self_reported_income is int | None; ≥1 of each (a believable mid/closed mix).
+    incomes = [a.self_reported_income for a in ds.app_forms]
+    for inc in incomes:
+        assert inc is None or isinstance(inc, int), "self_reported_income is int | None"
+    assert any(i is not None for i in incomes), "≥1 family reports an income"
+    assert any(i is None for i in incomes), "≥1 mid-funnel family has no income yet"
 
     # --- INV-1: every household is synthetic ---------------------------------
     for family in ds.families:
