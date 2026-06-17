@@ -350,6 +350,20 @@ figure {
   color: inherit;
 }
 
+/* A tiny "In progress" status note pinned under a nav label. */
+.sidebar-item-badge {
+  font-family: var(--mono);
+  font-size: 8px;
+  letter-spacing: var(--tracking-lab);
+  text-transform: uppercase;
+  line-height: 1;
+  padding: 2px 4px;
+  border-radius: var(--r-sm);
+  background: var(--sidebar-hover);
+  color: var(--sidebar-fg-active);
+  opacity: 0.85;
+}
+
 /* ---- the fluid main column + page header ---------------------------------- */
 .app-main {
   width: 100%;

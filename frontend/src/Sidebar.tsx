@@ -11,6 +11,8 @@ export interface SidebarItem<K extends string> {
   key: K;
   label: string;
   icon: LucideIcon;
+  /** Optional tiny status note under the label (e.g. "In progress"). */
+  badge?: string;
 }
 
 export interface SidebarProps<K extends string> {
@@ -26,7 +28,12 @@ export default function Sidebar<K extends string>({
   active,
   onSelect,
 }: SidebarProps<K>): JSX.Element {
-  function renderItem({ key, label, icon: Icon }: SidebarItem<K>): JSX.Element {
+  function renderItem({
+    key,
+    label,
+    icon: Icon,
+    badge,
+  }: SidebarItem<K>): JSX.Element {
     const on = key === active;
     return (
       <button
@@ -34,13 +41,14 @@ export default function Sidebar<K extends string>({
         type="button"
         role="tab"
         aria-selected={on}
-        title={label}
+        title={badge ? `${label} — ${badge}` : label}
         data-testid={`sidebar-nav-${key}`}
         className={`sidebar-item${on ? ' is-active' : ''}`}
         onClick={() => onSelect(key)}
       >
         <Icon size={26} aria-hidden className="sidebar-item-icon" />
         <span className="sidebar-item-label">{label}</span>
+        {badge && <span className="sidebar-item-badge">{badge}</span>}
       </button>
     );
   }
