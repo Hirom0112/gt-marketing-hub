@@ -301,24 +301,27 @@ def get_enrollment_system_adapter() -> EnrollmentSystemAdapter:
     (read only through :func:`app.core.settings.get_settings`):
 
     - ``simulate`` (v1 default) ⇒ a ``SimulatedSISAdapter`` reading the synthetic
-      roster — **M5, not built yet**. M0 ships only this seam, so this currently
-      fails **loud** rather than silently returning nothing (INV-9).
+      roster (M5) — built over the same default cohort the cockpit serves.
     - ``live`` ⇒ ``NotImplementedError`` — no ``LiveSISAdapter`` per a real SIS in
       v1; fail loud rather than silently read an external roster (INV-9).
 
     Mirrors the :func:`get_funding_signal_adapter` / :func:`get_geo_sampling_adapter`
-    fail-loud pattern.
+    mode-seam pattern.
 
     Raises:
-        NotImplementedError: always in M0 — no concrete impl exists yet (M5).
+        NotImplementedError: when ``SIS_MODE=live`` — no real-SIS impl in v1.
     """
     mode = get_settings().sis_mode
     if mode == "simulate":
-        raise NotImplementedError(
-            "No SimulatedSISAdapter yet — M5. M0 ships only the EnrollmentSystemAdapter "
-            "interface + RosterRecord shape + this SIS_MODE seam (MULTI_AGENT_COCKPIT §4, "
-            "INV-9). The synthetic-roster-backed SimulatedSISAdapter is built in M5 "
-            "(TODO.md M5); until then SIS_MODE='simulate' fails loud."
+        # M5: the synthetic-roster-backed SimulatedSISAdapter, built over the SAME
+        # default June cohort the in-memory cockpit repository serves
+        # (``generate(DEFAULT_FAMILY_COUNT, DEFAULT_SEED)``) so the reconcile
+        # buckets line up with the families on screen. INV-1 synthetic.
+        from app.adapters.sis.simulated import SimulatedSISAdapter
+        from app.data.repository import DEFAULT_FAMILY_COUNT, DEFAULT_SEED
+
+        return SimulatedSISAdapter.from_seed(
+            n=DEFAULT_FAMILY_COUNT, seed=DEFAULT_SEED, params=_load_params()
         )
     raise NotImplementedError(
         "No LiveSISAdapter in v1: SIS_MODE='live' is reserved for a supplied "

@@ -58,11 +58,15 @@ def test_roster_record_contract(monkeypatch: pytest.MonkeyPatch) -> None:
         EnrollmentSystemAdapter()  # type: ignore[abstract]
 
     # --- The registry exposes the SIS selector, resolvable by SIS_MODE. ---
-    # M0: no impl exists yet, so both modes fail loud — proving the seam is WIRED.
-    # simulate (the v1 default): SimulatedSISAdapter is M5's job (TODO.md M5).
+    # simulate (the v1 default): now wired to the M5 SimulatedSISAdapter, which
+    # yields a non-empty synthetic roster (adapter behavior is covered in depth by
+    # tests/adapters/test_simulated_sis.py).
+    from app.adapters.sis.simulated import SimulatedSISAdapter
+
     monkeypatch.setenv("SIS_MODE", "simulate")
-    with pytest.raises(NotImplementedError, match="M5"):
-        get_enrollment_system_adapter()
+    sim = get_enrollment_system_adapter()
+    assert isinstance(sim, SimulatedSISAdapter)
+    assert list(sim.fetch_roster())
 
     # live: no LiveSISAdapter in v1.
     monkeypatch.setenv("SIS_MODE", "live")
