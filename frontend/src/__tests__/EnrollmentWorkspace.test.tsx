@@ -91,11 +91,13 @@ function familyResponse(): unknown {
 
 const CALENDAR_PAYLOAD = {
   month: '2026-06',
+  anchor: 'intake',
   entries: [
     {
       family_id: FAM_ONE,
       display_name: 'The Alvarez Family',
       stall_date: '2026-06-10T09:00:00Z',
+      intake_date: '2026-06-10T09:00:00Z',
       apply_date: '2026-05-02T09:00:00Z',
       current_stage: 'enroll',
       contact_status: 'overdue',
@@ -104,11 +106,14 @@ const CALENDAR_PAYLOAD = {
       recoverable_now: 9000,
       freshness: 0.9,
       recovery_state: 'stalled',
+      assigned_rep_id: 'a0000000-0000-4000-8000-000000000001',
+      agent_name: 'Riley Carter',
     },
     {
       family_id: FAM_TWO,
       display_name: 'The Bauer Family',
       stall_date: '2026-06-18T09:00:00Z',
+      intake_date: '2026-06-18T09:00:00Z',
       apply_date: '2026-05-09T09:00:00Z',
       current_stage: 'apply',
       contact_status: 'fresh',
@@ -117,6 +122,8 @@ const CALENDAR_PAYLOAD = {
       recoverable_now: 20000,
       freshness: 0.95,
       recovery_state: 'stalled',
+      assigned_rep_id: 'a0000000-0000-4000-8000-000000000002',
+      agent_name: 'Jordan Avery',
     },
   ],
 };
@@ -241,23 +248,26 @@ describe('EnrollmentWorkspace', () => {
     expect(urlsCalled().some((u) => u.includes('fam-a'))).toBe(false);
   });
 
-  it('switches the focused family when a calendar chip is clicked', async () => {
+  it('the admin calendar is the attribution flavor (anchor=intake)', async () => {
     vi.stubGlobal('fetch', routedFetchMock());
     render(<EnrollmentWorkspace />);
 
-    // The calendar is the default "find" surface — click the second family's
-    // chip to focus it in the work-panel.
-    const chip = await screen.findByTestId(`calendar-chip-${FAM_TWO}`);
-    fireEvent.click(chip);
-
-    // Selecting that chip triggers a fetch for that family's id.
+    // M3: the ADMIN's default calendar is the ATTRIBUTION calendar — it reads
+    // ?anchor=intake and lands families on their intake date with per-agent
+    // attribution (not the rep's stall-chip find surface).
+    await screen.findByTestId('enrollment-calendar');
     await waitFor(() => {
-      const urls = urlsCalled();
-      expect(urls.some((u) => u.includes(`/families/${FAM_TWO}`))).toBe(true);
+      expect(urlsCalled().some((u) => /anchor=intake/.test(u))).toBe(true);
     });
-
-    // Still never the placeholder.
-    expect(urlsCalled().some((u) => u.includes('fam-a'))).toBe(false);
+    // No stall chips on the attribution calendar.
+    expect(screen.queryByTestId(`calendar-chip-${FAM_TWO}`)).not.toBeInTheDocument();
+    // The attribution cell carries the day's intake count + a per-agent chip.
+    expect((await screen.findAllByTestId('intake-count')).length).toBeGreaterThan(0);
+    expect(
+      (await screen.findAllByTestId('intake-agent-chip')).some((c) =>
+        /Riley Carter/.test(c.textContent ?? ''),
+      ),
+    ).toBe(true);
   });
 
   it('switches the focused family from the triage list', async () => {
@@ -279,14 +289,15 @@ describe('EnrollmentWorkspace', () => {
     expect(urlsCalled().some((u) => u.includes('fam-a'))).toBe(false);
   });
 
-  it('the calendar opens the triage list at DAY scope for a clicked chip', async () => {
+  it('the attribution calendar opens the triage list at DAY scope for a clicked cell', async () => {
     vi.stubGlobal('fetch', routedFetchMock());
     render(<EnrollmentWorkspace />);
 
-    // Click FAM_ONE's chip (stalled Jun 10) — the calendar opens the triage list
-    // at Day scope for Jun 10, which contains only FAM_ONE (FAM_TWO is Jun 18).
-    const chip = await screen.findByTestId(`calendar-chip-${FAM_ONE}`);
-    fireEvent.click(chip);
+    // Click the Jun 10 attribution cell (FAM_ONE's intake day) — the calendar
+    // opens the triage list at Day scope for Jun 10, which contains only FAM_ONE
+    // (FAM_TWO is Jun 18).
+    const cell = await screen.findByTestId('calendar-day-10');
+    fireEvent.click(within(cell).getByTestId('intake-attribution'));
 
     // The triage list is now showing, scoped to the day → only FAM_ONE.
     expect(await screen.findByTestId('triage-list')).toBeInTheDocument();

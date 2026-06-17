@@ -49,12 +49,23 @@ export interface CalendarEntry {
   recoverable_now?: number;
   freshness?: number;
   recovery_state?: string;
+  // M3 admin attribution (anchor=intake): the intake date the family lands on +
+  // its owning agent (null ⇒ the unowned pool, feeding the cell's alarm line).
+  intake_date?: string;
+  assigned_rep_id?: string | null;
+  agent_name?: string | null;
 }
 
 interface CalendarResponse {
   month: string;
+  anchor?: CalendarAnchor;
   entries: CalendarEntry[];
 }
+
+// The calendar's anchoring: the rep/operator flavor lands families on their
+// STALL date (the recovery find surface); the admin ATTRIBUTION flavor lands
+// them on their INTAKE date with per-agent attribution (MULTI_AGENT_COCKPIT §5).
+export type CalendarAnchor = 'stall' | 'intake';
 
 // The bulk wiring the triage list shares with the workspace (one selection Set,
 // one set of bulk handlers). Kept here as the shared contract both the calendar's
@@ -78,6 +89,10 @@ interface EnrollmentCalendarProps {
   // Optional fixed opening month (YYYY-MM) — tests pin it. Omitted → the
   // server-resolved most-recent-stall month (A-16).
   initialMonth?: string;
+  // M3: the anchoring flavor. 'stall' (default) is the rep/operator recovery
+  // find surface; 'intake' is the admin ATTRIBUTION calendar (intake-by-day +
+  // per-agent chips + an unowned-alarm line per cell). Drives ?anchor=intake.
+  anchor?: CalendarAnchor;
   selectedFamilyId?: string;
   onSelectFamily?: (familyId: string) => void;
   // Open the triage list at a scope. A heat cell / chip → ('day', dayISO);
@@ -194,6 +209,7 @@ export function sortEntries<T extends CalendarEntry>(
 
 export default function EnrollmentCalendar({
   initialMonth,
+  anchor = 'stall',
   selectedFamilyId,
   onSelectFamily,
   onOpenScope,
@@ -206,10 +222,13 @@ export default function EnrollmentCalendar({
     if (month !== null && loadedMonth.current === month) return;
     let cancelled = false;
     setState({ status: 'loading' });
-    const path =
-      month === null
-        ? `/enrollment/calendar`
-        : `/enrollment/calendar?month=${month}`;
+    // The admin attribution flavor anchors on intake (?anchor=intake); the
+    // default rep/operator flavor omits it (server defaults to stall anchoring).
+    const params = new URLSearchParams();
+    if (month !== null) params.set('month', month);
+    if (anchor === 'intake') params.set('anchor', 'intake');
+    const qs = params.toString();
+    const path = qs ? `/enrollment/calendar?${qs}` : `/enrollment/calendar`;
     apiFetch(path)
       .then((res) => {
         if (!res.ok) throw new Error(`calendar request failed: ${res.status}`);
@@ -230,7 +249,7 @@ export default function EnrollmentCalendar({
     return () => {
       cancelled = true;
     };
-  }, [month]);
+  }, [month, anchor]);
 
   const shownMonth =
     month ?? (state.status === 'ready' ? state.data.month : null);
@@ -252,13 +271,19 @@ export default function EnrollmentCalendar({
     const map = new Map<number, CalendarEntry[]>();
     if (state.status !== 'ready') return map;
     for (const entry of state.data.entries) {
-      const d = dayOf(entry.stall_date);
+      // Attribution lands families on their INTAKE date; the recovery find
+      // surface lands them on their STALL date.
+      const dateIso =
+        anchor === 'intake'
+          ? (entry.intake_date ?? entry.stall_date)
+          : entry.stall_date;
+      const d = dayOf(dateIso);
       const bucket = map.get(d);
       if (bucket) bucket.push(entry);
       else map.set(d, [entry]);
     }
     return map;
-  }, [state]);
+  }, [state, anchor]);
 
   const cells = useMemo<Array<number | null>>(() => {
     if (shownMonth === null) return [];
@@ -344,7 +369,12 @@ export default function EnrollmentCalendar({
                   className={`calendar-cell${entries.length > 0 ? ' has-families' : ''}`}
                 >
                   <span className="lab calendar-daynum">{day}</span>
-                  {hasMany ? (
+                  {anchor === 'intake' ? (
+                    <AttributionCell
+                      entries={entries}
+                      onOpen={() => openDay(day)}
+                    />
+                  ) : hasMany ? (
                     <HeatCell
                       count={entries.length}
                       atRisk={shortDollars(
@@ -411,6 +441,102 @@ export default function EnrollmentCalendar({
         </Card>
       )}
     </section>
+  );
+}
+
+// The admin ATTRIBUTION cell (anchor=intake): the day's intake COUNT + per-agent
+// CHIPS (name + that agent's share of the day's intake) + an UNOWNED-ALARM line
+// (the day's unowned pool — families with no owning agent). One cell per day; the
+// chips are derived per cell so attribution is local to the day.
+// (MULTI_AGENT_COCKPIT.md §5 admin lens.)
+function AttributionCell({
+  entries,
+  onOpen,
+}: {
+  entries: readonly CalendarEntry[];
+  onOpen: () => void;
+}): JSX.Element | null {
+  if (entries.length === 0) return null;
+  const total = entries.length;
+
+  // Per-agent tallies (owned only); the unowned pool feeds the alarm line.
+  const byAgent = new Map<string, { name: string; count: number }>();
+  let unowned = 0;
+  for (const e of entries) {
+    if (e.assigned_rep_id) {
+      const name = e.agent_name ?? e.assigned_rep_id;
+      const prev = byAgent.get(e.assigned_rep_id);
+      if (prev) prev.count += 1;
+      else byAgent.set(e.assigned_rep_id, { name, count: 1 });
+    } else {
+      unowned += 1;
+    }
+  }
+  const agents = [...byAgent.values()].sort((a, b) => b.count - a.count);
+
+  return (
+    <button
+      type="button"
+      data-testid="intake-attribution"
+      onClick={onOpen}
+      style={{
+        display: 'flex',
+        flexDirection: 'column',
+        gap: '2px',
+        width: '100%',
+        textAlign: 'left',
+        background: 'transparent',
+        border: 'none',
+        padding: 0,
+        cursor: 'pointer',
+        fontFamily: 'inherit',
+      }}
+    >
+      <span
+        className="mono"
+        data-testid="intake-count"
+        title="Intakes this day"
+        style={{ fontWeight: 700, fontSize: 'var(--fs-sm)' }}
+      >
+        {total} in
+      </span>
+      <span style={{ display: 'flex', flexWrap: 'wrap', gap: '2px' }}>
+        {agents.map((a) => (
+          <span
+            key={a.name}
+            className="mono"
+            data-testid="intake-agent-chip"
+            title={`${a.name} · ${a.count} of ${total}`}
+            style={{
+              fontSize: 'var(--fs-chip)',
+              lineHeight: 1.5,
+              borderRadius: 'var(--r-xs)',
+              padding: '1px 5px',
+              color: 'var(--flow-ink)',
+              background: 'var(--flow-wash)',
+              border: '1px solid var(--flow)',
+              whiteSpace: 'nowrap',
+            }}
+          >
+            {a.name} {a.count}/{total}
+          </span>
+        ))}
+      </span>
+      {unowned > 0 && (
+        <span
+          className="mono"
+          data-testid="intake-unowned-alarm"
+          title="Unowned this day"
+          style={{
+            fontSize: 'var(--fs-chip)',
+            color: 'var(--signal-ink)',
+            fontWeight: 700,
+          }}
+        >
+          ⚠ {unowned} unowned
+        </span>
+      )}
+    </button>
   );
 }
 

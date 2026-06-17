@@ -42,7 +42,15 @@ interface WorkQueueItem {
 
 // The triage scope dial: the stall-date window over the one active set.
 export type TriageScope = 'day' | 'week' | 'all';
-type Recency = 'all' | 'overdue' | 'fresh' | 'followed_up';
+// The recency facet. The admin gains 'uncontacted' (never reached — no
+// last_contact_at) so they can slice the team's never-touched pool.
+type Recency = 'all' | 'overdue' | 'fresh' | 'followed_up' | 'uncontacted';
+
+// One agent the admin owner-filter chip can slice by (name + canonical id).
+export interface TriageAgent {
+  agent_id: string;
+  name: string;
+}
 
 // The list-only sorts. 'likely' (recoverability — the hero) is the default; the
 // money axis is 'value' (children × tuition). The old composite 'recoverable'
@@ -61,6 +69,14 @@ interface TriageListProps {
   sort: SortKey;
   onSort: (sort: SortKey) => void;
   refreshKey?: number;
+  // M3 admin extras (omitted ⇒ the rep's unscoped-by-UI list). When `agents` is
+  // supplied the list shows an OWNER-FILTER chip group (slice any agent) + the
+  // uncontacted facet. The owner filter drives `owner=<agent_id>` on the
+  // /work-queue read (server-side scope), so it is OWNED here and lifted to the
+  // workspace so the read re-pulls when it changes.
+  agents?: readonly TriageAgent[];
+  ownerFilter?: string | null;
+  onOwnerFilter?: (agentId: string | null) => void;
 }
 
 type LoadState =
@@ -165,6 +181,9 @@ const RECENCY_FACETS: readonly { key: Recency; label: string }[] = [
   { key: 'followed_up', label: 'working' },
 ];
 
+// The admin gains an extra 'uncontacted' facet (the team's never-reached pool).
+const UNCONTACTED_FACET = { key: 'uncontacted' as const, label: 'uncontacted' };
+
 export default function TriageList({
   scope,
   anchorDate,
@@ -175,15 +194,25 @@ export default function TriageList({
   sort,
   onSort,
   refreshKey = 0,
+  agents,
+  ownerFilter = null,
+  onOwnerFilter,
 }: TriageListProps): JSX.Element {
   const [state, setState] = useState<LoadState>({ status: 'loading' });
   const [recency, setRecency] = useState<Recency>('all');
   const [page, setPage] = useState(0);
+  // The admin owner-filter is only available when an agents roster is supplied.
+  const adminFilter = agents !== undefined && agents.length > 0;
 
   useEffect(() => {
     let cancelled = false;
     setState({ status: 'loading' });
-    apiFetch(`/work-queue?scope=active`)
+    // The admin owner-filter drives `owner=<agent_id>` (the M1 owner param) so
+    // the slice is enforced SERVER-SIDE; the rep's list omits it (the backend
+    // clamps the agent to its own book regardless).
+    const params = new URLSearchParams({ scope: 'active' });
+    if (ownerFilter) params.set('owner', ownerFilter);
+    apiFetch(`/work-queue?${params.toString()}`)
       .then((res) => {
         if (!res.ok) throw new Error(`work-queue request failed: ${res.status}`);
         return res.json() as Promise<WorkQueueItem[]>;
@@ -200,7 +229,7 @@ export default function TriageList({
     return () => {
       cancelled = true;
     };
-  }, [refreshKey]);
+  }, [refreshKey, ownerFilter]);
 
   // Coerce anything stray (incl. the dropped 'recoverable'/'score'/'date') to the
   // default hero axis, 'likely'.
@@ -228,13 +257,17 @@ export default function TriageList({
 
   // THEN the recency facet (kept separate so we can tell "scope empty" from
   // "filter empty" and offer the right one-tap remedy).
-  const scoped = useMemo<WorkQueueItem[]>(
-    () =>
-      recency === 'all'
-        ? scopedAll
-        : scopedAll.filter((it) => it.contact_status === recency),
-    [scopedAll, recency],
-  );
+  const scoped = useMemo<WorkQueueItem[]>(() => {
+    if (recency === 'all') return scopedAll;
+    // The admin 'uncontacted' facet = never reached (no last_contact_at), the
+    // team's never-touched pool; the rest match the contact_status enum.
+    if (recency === 'uncontacted') {
+      return scopedAll.filter(
+        (it) => it.last_contact_at === null || it.last_contact_at === undefined,
+      );
+    }
+    return scopedAll.filter((it) => it.contact_status === recency);
+  }, [scopedAll, recency]);
 
   const ranked = useMemo(
     () => sortEntries(scoped.map(toEntry), effectiveSort),
@@ -386,6 +419,44 @@ export default function TriageList({
 
           {/* Tier 2 — the quiet control cluster. */}
           <div className="triage-controls">
+            {adminFilter && (
+              <>
+                <div
+                  className="owner-filter"
+                  data-testid="triage-owner-filter"
+                  role="group"
+                  aria-label="Filter by agent"
+                  style={{ display: 'inline-flex', gap: 'var(--s-1)' }}
+                >
+                  <button
+                    type="button"
+                    className="facet-pill"
+                    data-testid="owner-all"
+                    aria-pressed={!ownerFilter}
+                    onClick={() => onOwnerFilter?.(null)}
+                  >
+                    everyone
+                  </button>
+                  {agents.map((a) => (
+                    <button
+                      key={a.agent_id}
+                      type="button"
+                      className="facet-pill"
+                      data-testid={`owner-${a.agent_id}`}
+                      aria-pressed={ownerFilter === a.agent_id}
+                      onClick={() =>
+                        onOwnerFilter?.(
+                          ownerFilter === a.agent_id ? null : a.agent_id,
+                        )
+                      }
+                    >
+                      {a.name}
+                    </button>
+                  ))}
+                </div>
+                <span className="triage-controls-divider" aria-hidden />
+              </>
+            )}
             <div
               className="scope-dial"
               data-testid="triage-scope"
@@ -410,7 +481,10 @@ export default function TriageList({
               style={{ display: 'inline-flex', gap: 'var(--s-1)' }}
               data-testid="triage-recency"
             >
-              {RECENCY_FACETS.map((f) => (
+              {(adminFilter
+                ? [...RECENCY_FACETS, UNCONTACTED_FACET]
+                : RECENCY_FACETS
+              ).map((f) => (
                 <button
                   key={f.key}
                   type="button"

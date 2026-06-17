@@ -1,5 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { CalendarDays, GitMerge, History, ListOrdered, Users } from 'lucide-react';
+import {
+  CalendarDays,
+  GitMerge,
+  History,
+  Inbox,
+  ListOrdered,
+  Users,
+} from 'lucide-react';
 import ActionPanel from '../ActionPanel';
 import DealView from '../DealView';
 import FundingTracker from '../FundingTracker';
@@ -10,10 +17,15 @@ import EnrollmentCalendar, {
   type DrillBulk,
   type SortKey,
 } from '../enrollment/EnrollmentCalendar';
-import TriageList, { type TriageScope } from '../enrollment/TriageList';
+import TriageList, {
+  type TriageScope,
+  type TriageAgent,
+} from '../enrollment/TriageList';
 import StudentBoard from '../enrollment/StudentBoard';
 import DropOffPanel from '../enrollment/DropOffPanel';
 import HistoryList from '../enrollment/HistoryList';
+import IntakeDesk from '../enrollment/IntakeDesk';
+import AgentRoster from '../enrollment/AgentRoster';
 import NotesTimeline, {
   type NotesTimelineHandle,
 } from '../enrollment/NotesTimeline';
@@ -21,6 +33,7 @@ import { ToastHost, useToasts } from '../enrollment/toast';
 import { type RecoverableRow, summarizeRecovery } from '../enrollment/recency';
 import { fmtUSD } from '../enrollment/format';
 import { apiFetch } from '../config';
+import { DEMO_AGENTS } from '../LoginPage';
 import { Card, WorkspaceToggle } from '../ui';
 import type { SendPartition } from '../enrollment/BulkBar';
 
@@ -51,7 +64,13 @@ interface FamilySummary {
 // Students (A-24) is the per-child board — one row per child, grouped by household.
 // Reconcile (the truth-layer staff view) is the household reconciliation board +
 // the human-review merge queue (ENROLLMENT_REFACTOR §8.1).
-type LeftView = 'calendar' | 'triage' | 'students' | 'reconcile' | 'history';
+type LeftView =
+  | 'calendar'
+  | 'triage'
+  | 'intake'
+  | 'students'
+  | 'reconcile'
+  | 'history';
 
 type FamiliesState =
   | { status: 'loading' }
@@ -117,6 +136,18 @@ export default function EnrollmentWorkspace(): JSX.Element {
   // Default to the HERO axis: likelihood (A-23) — so the loud "likely" column the
   // operator reads top-to-bottom IS the list order.
   const [sort, setSort] = useState<SortKey>('likely');
+
+  // ── M3 admin extras ─────────────────────────────────────────────────────────
+  // This workspace is the ADMIN view (App.tsx routes role==='agent' →
+  // RepWorkspace; admin → here). The owner-filter chip slices the working list by
+  // any agent (drives owner=<agent_id> on the /work-queue read, server-side
+  // scope). The agents roster (the seeded demo cohort) feeds both the chip labels
+  // and the per-agent roster panel's identity.
+  const [ownerFilter, setOwnerFilter] = useState<string | null>(null);
+  const triageAgents = useMemo<TriageAgent[]>(
+    () => DEMO_AGENTS.map((a) => ({ agent_id: a.id, name: a.name })),
+    [],
+  );
 
   const handleActionApproved = useCallback((): void => {
     setDealRefresh((n) => n + 1);
@@ -390,6 +421,7 @@ export default function EnrollmentWorkspace(): JSX.Element {
   const viewOptions = [
     { key: 'calendar' as const, label: 'Calendar', icon: CalendarDays },
     { key: 'triage' as const, label: 'Triage', icon: ListOrdered },
+    { key: 'intake' as const, label: 'Intake', icon: Inbox },
     { key: 'students' as const, label: 'Students', icon: Users },
     { key: 'reconcile' as const, label: 'Reconcile', icon: GitMerge },
     { key: 'history' as const, label: 'History', icon: History },
@@ -425,18 +457,35 @@ export default function EnrollmentWorkspace(): JSX.Element {
 
   const findHeadTitle =
     leftView === 'calendar'
-      ? 'Recovery calendar — the find surface, by stall date'
+      ? 'Attribution calendar — intake by day, per-agent share + unowned alarm'
       : leftView === 'triage'
         ? 'Triage — recover in priority order, the order to attack the wave'
-        : leftView === 'students'
-          ? 'Students — one application per child, grouped by household'
-          : leftView === 'reconcile'
-            ? 'Reconcile — one row per household, where the pipeline disagrees with itself'
-            : 'History — recovered & dismissed (read-only audit)';
+        : leftView === 'intake'
+          ? 'Intake · Unassigned — route the unowned pool to an agent'
+          : leftView === 'students'
+            ? 'Students — one application per child, grouped by household'
+            : leftView === 'reconcile'
+              ? 'Reconcile — one row per household, where the pipeline disagrees with itself'
+              : 'History — recovered & dismissed (read-only audit)';
+
+  // Picking an agent in the roster slices the working list to that agent and
+  // jumps to the Triage view (the working surface); "everyone" clears the slice.
+  const filterToAgent = useCallback((agentId: string | null): void => {
+    setOwnerFilter(agentId);
+    if (agentId !== null) setLeftView('triage');
+  }, []);
 
   return (
     <section aria-label="Enrollment workspace" className="enrollment-workspace">
       {recoveryRows !== null && <SituationBar rows={recoveryRows} />}
+
+      {/* The admin per-agent roster — queue / stall% / close% / load + the
+          unowned bucket. Clicking a row slices the working list to that agent. */}
+      <AgentRoster
+        activeAgentId={ownerFilter}
+        onFilterAgent={filterToAgent}
+        refreshKey={queueRefresh}
+      />
 
       <div className="operator-grid">
         <div className="operator-find">
@@ -466,7 +515,10 @@ export default function EnrollmentWorkspace(): JSX.Element {
           </div>
 
           {leftView === 'calendar' && (
+            // The admin's calendar is the ATTRIBUTION flavor (anchor=intake):
+            // intake-by-day + per-agent chips + an unowned-alarm line per cell.
             <EnrollmentCalendar
+              anchor="intake"
               selectedFamilyId={selectedFamilyId ?? undefined}
               onSelectFamily={selectFamily}
               onOpenScope={openTriageScope}
@@ -482,6 +534,16 @@ export default function EnrollmentWorkspace(): JSX.Element {
               bulk={bulk}
               sort={sort}
               onSort={setSort}
+              refreshKey={queueRefresh}
+              agents={triageAgents}
+              ownerFilter={ownerFilter}
+              onOwnerFilter={setOwnerFilter}
+            />
+          )}
+          {leftView === 'intake' && (
+            <IntakeDesk
+              selectedFamilyId={selectedFamilyId ?? undefined}
+              onSelectFamily={selectFamily}
               refreshKey={queueRefresh}
             />
           )}
