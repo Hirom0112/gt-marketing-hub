@@ -38,7 +38,16 @@ type Workspace =
 // the real workspaces.
 type NavKey = Workspace | 'switch-seat';
 
-const PRIMARY_NAV: ReadonlyArray<SidebarItem<NavKey>> = [
+// Enrollment is the only primary surface a rep (sales agent) sees — their seat is
+// the owner-scoped workspace. Marketing + Leadership are ADMIN-ONLY surfaces
+// (MULTI_AGENT_COCKPIT §5 role model: a rep gets just their queue + close panel,
+// never the marketing/leadership lenses), so they are gated to the admin seat
+// exactly like the Security tab.
+const REP_PRIMARY_NAV: ReadonlyArray<SidebarItem<NavKey>> = [
+  { key: 'enrollment', label: 'Enrollment', icon: LayoutGrid },
+];
+
+const ADMIN_PRIMARY_NAV: ReadonlyArray<SidebarItem<NavKey>> = [
   { key: 'enrollment', label: 'Enrollment', icon: LayoutGrid },
   { key: 'marketing', label: 'Marketing', icon: Megaphone, badge: 'In progress' },
   { key: 'leadership', label: 'Leadership', icon: BarChart3, badge: 'In progress' },
@@ -95,16 +104,23 @@ function AppShell(): JSX.Element {
   // Admin-only: the Security tab is injected at the top of the secondary group
   // for an admin seat ONLY. A rep (agent) never sees the nav item OR the tab.
   const isAdmin = session.role === 'admin';
+  const primaryNav = isAdmin ? ADMIN_PRIMARY_NAV : REP_PRIMARY_NAV;
   const secondaryNav = isAdmin
     ? [SECURITY_NAV, ...SECONDARY_NAV]
     : SECONDARY_NAV;
 
+  // A rep must never land on (or deep-link to) an admin-only workspace. If the
+  // active workspace isn't in the rep's nav, fall back to enrollment.
+  const repAllowed = new Set<Workspace>(['enrollment', 'settings', 'help']);
+  const activeWorkspace: Workspace =
+    isAdmin || repAllowed.has(workspace) ? workspace : 'enrollment';
+
   return (
     <div className="app-shell">
       <Sidebar
-        primary={PRIMARY_NAV}
+        primary={primaryNav}
         secondary={secondaryNav}
-        active={workspace}
+        active={activeWorkspace}
         onSelect={onSelect}
       />
 
@@ -112,19 +128,19 @@ function AppShell(): JSX.Element {
         <div className="page-body">
           {/* M2 — the rep gets ONE subset view (owner-scoped "My Queue" + close
               panel); the admin keeps the full command center. Branch by seat. */}
-          {workspace === 'enrollment' &&
+          {activeWorkspace === 'enrollment' &&
             (session.role === 'agent' ? (
               <RepWorkspace />
             ) : (
               <EnrollmentWorkspace />
             ))}
-          {workspace === 'marketing' && <MarketingWorkspace />}
-          {workspace === 'leadership' && <LeadershipWorkspace />}
-          {/* Admin-only (M7): guard the render too, so a rep can never reach the
-              Security surface even if the workspace state were forced. */}
-          {workspace === 'security' && isAdmin && <SecurityWorkspace />}
-          {workspace === 'settings' && <SettingsWorkspace />}
-          {workspace === 'help' && <HelpWorkspace />}
+          {/* Admin-only surfaces — gated by primaryNav AND guarded here so a rep
+              can never reach Marketing/Leadership/Security even if forced. */}
+          {activeWorkspace === 'marketing' && isAdmin && <MarketingWorkspace />}
+          {activeWorkspace === 'leadership' && isAdmin && <LeadershipWorkspace />}
+          {activeWorkspace === 'security' && isAdmin && <SecurityWorkspace />}
+          {activeWorkspace === 'settings' && <SettingsWorkspace />}
+          {activeWorkspace === 'help' && <HelpWorkspace />}
         </div>
       </main>
     </div>

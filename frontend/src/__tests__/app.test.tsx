@@ -56,6 +56,30 @@ describe('App shell', () => {
     }
   });
 
+  it('a rep (sales agent) sees ONLY Enrollment — Marketing/Leadership/Security are admin-only', () => {
+    // Seat a rep session directly (the admin-only surfaces must be gated out).
+    localStorage.setItem(
+      'gt_demo_session',
+      JSON.stringify({
+        role: 'agent',
+        agentId: 'a0000000-0000-4000-8000-000000000001',
+        agentRank: 1,
+        tier: 'closer',
+        agentName: 'Riley Carter',
+      }),
+    );
+    render(<App />);
+    const sidebar = screen.getByTestId('sidebar');
+    expect(within(sidebar).getByTestId('sidebar-nav-enrollment')).toBeInTheDocument();
+    // Admin-only surfaces are absent for a rep.
+    for (const key of ['marketing', 'leadership', 'security']) {
+      expect(within(sidebar).queryByTestId(`sidebar-nav-${key}`)).toBeNull();
+    }
+    // The rep still has the shared secondary items.
+    expect(within(sidebar).getByTestId('sidebar-nav-settings')).toBeInTheDocument();
+    expect(within(sidebar).getByTestId('sidebar-nav-switch-seat')).toBeInTheDocument();
+  });
+
   it('opens on Enrollment', () => {
     enterCockpit();
     expect(screen.getByTestId('sidebar-nav-enrollment')).toHaveAttribute(
