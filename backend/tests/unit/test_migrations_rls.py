@@ -48,9 +48,7 @@ def _strip_comments(sql: str) -> str:
 
 def _owner_delete_sql() -> str:
     """The 0007 owner-scoped DELETE migration DDL (comments stripped)."""
-    return _strip_comments(
-        (MIGRATIONS_DIR / "0007_owner_delete.sql").read_text(encoding="utf-8")
-    )
+    return _strip_comments((MIGRATIONS_DIR / "0007_owner_delete.sql").read_text(encoding="utf-8"))
 
 
 def _all_sql() -> str:
@@ -218,9 +216,7 @@ def test_0007_changes_nothing_else() -> None:
     assert not _CREATE_TABLE.search(sql), "0007 must not create a table"
     assert not _ENABLE_RLS.search(sql), "0007 must not re-toggle RLS (already enabled)"
     assert not _FOR_ALL.search(sql), "0007 must not use FOR ALL (DELETE-scoped only)"
-    assert not re.search(r"\bDROP\s+POLICY\b", sql, re.IGNORECASE), (
-        "0007 must not drop a policy"
-    )
+    assert not re.search(r"\bDROP\s+POLICY\b", sql, re.IGNORECASE), "0007 must not drop a policy"
     assert not re.search(r"\bDISABLE\s+ROW\s+LEVEL\s+SECURITY\b", sql, re.IGNORECASE), (
         "0007 must not disable RLS"
     )
