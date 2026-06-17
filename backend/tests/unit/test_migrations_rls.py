@@ -8,6 +8,9 @@ makes the deny-by-default + null-guard invariant impossible to silently lose.
 
 Asserts:
   * D-RLS-1 — every `CREATE TABLE` is matched by an `ENABLE ROW LEVEL SECURITY`.
+  * D-RLS-1 — every `CREATE TABLE` is matched by a `FORCE ROW LEVEL SECURITY`
+    (across all migrations) so the table-owner role obeys the policies too
+    (AUDIT R2: brand_memory was ENABLEd in 0002 but never FORCEd).
   * D-RLS-2 — every table carries at least one policy with the `auth.uid()` null
     guard (`auth.uid() ... IS NOT NULL`).
 """
@@ -21,6 +24,7 @@ MIGRATIONS_DIR = Path(__file__).resolve().parents[2] / "app" / "data" / "migrati
 
 _CREATE_TABLE = re.compile(r"\bCREATE\s+TABLE\b", re.IGNORECASE)
 _ENABLE_RLS = re.compile(r"\bENABLE\s+ROW\s+LEVEL\s+SECURITY\b", re.IGNORECASE)
+_FORCE_RLS = re.compile(r"\bFORCE\s+ROW\s+LEVEL\s+SECURITY\b", re.IGNORECASE)
 _CREATE_POLICY = re.compile(r"\bCREATE\s+POLICY\b", re.IGNORECASE)
 # The null guard: `auth.uid()` somewhere on a line/clause that also says
 # `IS NOT NULL`. We look for `auth.uid()` followed (allowing a closing paren and
@@ -65,6 +69,27 @@ def test_every_table_enables_rls() -> None:
         f"deny-by-default RLS violated (D-RLS-1): {n_tables} CREATE TABLE vs "
         f"{n_rls} ENABLE ROW LEVEL SECURITY — every public-schema table must "
         f"enable RLS at creation"
+    )
+
+
+def test_every_table_forces_rls() -> None:
+    """D-RLS-1: count(CREATE TABLE) == count(FORCE ROW LEVEL SECURITY).
+
+    ENABLE subjects non-owner roles to the policies, but the table-owner role is
+    exempt unless RLS is also FORCED. Every public table must therefore be FORCEd
+    across the migrations (AUDIT R2: brand_memory, created/ENABLEd in 0002, was
+    omitted from 0004's FORCE list and is FORCEd by 0008).
+    """
+    # Strip comments so the FORCE/CREATE counts reflect DDL, not the prose in
+    # 0004's header (which mentions "FORCE ROW LEVEL SECURITY" several times).
+    sql = _strip_comments(_all_sql())
+    n_tables = len(_CREATE_TABLE.findall(sql))
+    n_force = len(_FORCE_RLS.findall(sql))
+    assert n_tables > 0, "expected at least one CREATE TABLE in the migrations"
+    assert n_tables == n_force, (
+        f"owner-role escape hatch open (D-RLS-1): {n_tables} CREATE TABLE vs "
+        f"{n_force} FORCE ROW LEVEL SECURITY — every public-schema table must "
+        f"FORCE RLS so even the table-owner role obeys the owner-scoped policies"
     )
 
 

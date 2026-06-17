@@ -1,0 +1,23 @@
+-- 0008_force_brand_memory.sql — closes the AUDIT R2 FORCE-RLS gap on brand_memory.
+--
+-- Authoritative source: THREAT_MODEL.md §6 (D-RLS-1), CLAUDE.md §1 (INV-5),
+-- AUDIT.md R2 / TODO.md R0.
+--
+-- ===========================================================================
+-- WHY (defense-in-depth, no behavior change for the app paths).
+-- ===========================================================================
+-- 0002 CREATEs `brand_memory` and ENABLEs row level security on it, but 0004
+-- (which FORCEs RLS on the other 9 public tables) OMITTED brand_memory — so the
+-- table-owner role (the `postgres` migration/admin role) was still exempt from
+-- the owner-scoped, null-guarded policy on this one table. That is exactly the
+-- implicit owner-role escape hatch FORCE exists to remove. This migration FORCEs
+-- it, restoring the invariant that EVERY public-schema table is both ENABLEd and
+-- FORCEd (D-RLS-1), with no behavior change for the real app paths:
+--   * `service_role` has the BYPASSRLS attribute (server-only, D-RLS-4),
+--     independent of FORCE — the server's brand-memory read is intact.
+--   * `authenticated` / `anon` are not the table owner, so they were already
+--     fully governed by 0002's policy; FORCE leaves them unchanged.
+-- Net effect: deny-by-default, all the way down, on brand_memory too.
+-- ===========================================================================
+
+ALTER TABLE brand_memory FORCE ROW LEVEL SECURITY;
