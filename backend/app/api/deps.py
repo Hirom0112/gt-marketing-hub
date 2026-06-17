@@ -413,9 +413,17 @@ def _build_content_library(*, fresh: bool = False) -> ContentLibrary:
     are preserved. This is the fix for the "nor past content" defect: the prior
     unconditional ``unlink`` wiped every kept asset on every boot.
 
-    ``fresh=True`` is the TEST-ONLY path (:func:`reset_content_library`): it
-    unlinks the backing file first so each test starts from a clean seed with no
-    cross-test leakage; production always uses the persistent default.
+    ``fresh=True`` is the TEST-ONLY path (:func:`reset_content_library`): it unlinks
+    the backing file first so each test starts from a clean seed with no cross-test
+    leakage. The path is derived from :func:`tempfile.gettempdir`, which the test
+    harness (``tests/conftest.py``) redirects to a per-SESSION temp dir so test
+    processes never share the one fixed file. Sharing the single fixed path was the
+    root of a gate flake: a ``fresh=True`` unlink could clobber a live store and a
+    fresh connection then saw a tableless file → "no such table" (now also
+    self-healed in :meth:`SqliteContentLibrary._connect`). Production
+    (``fresh=False``) always uses the STABLE persistent path so the operator's past
+    kept assets survive a cockpit restart (D-8); the production path is never
+    randomized.
     """
     import tempfile
     from pathlib import Path

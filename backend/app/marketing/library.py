@@ -142,24 +142,39 @@ class SqliteContentLibrary(ContentLibrary):
         self._ensure_schema()
 
     def _connect(self) -> sqlite3.Connection:
-        """Open a connection to the backing sqlite file (stdlib only, no I/O deps)."""
-        return sqlite3.connect(self._db_path)
+        """Open a connection to the backing sqlite file with the schema asserted.
+
+        Stdlib only (no I/O deps). The idempotent ``CREATE TABLE IF NOT EXISTS`` is
+        re-run on EVERY connection (belt-and-suspenders, cheap): if the backing file
+        was unlinked out from under this instance — e.g. a test's
+        ``reset_content_library(fresh=True)`` unlinking a shared path — sqlite would
+        otherwise open a brand-new EMPTY file and the next query would raise
+        "no such table: content_library". Re-asserting the schema here lets such a
+        reused file self-heal instead of throwing, without weakening the D-8
+        persistence contract: the table is only created when absent; existing rows
+        are never touched, so a kept asset still survives a restart.
+        """
+        conn = sqlite3.connect(self._db_path)
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS content_library ("
+            "  id        TEXT PRIMARY KEY,"
+            "  seq       INTEGER,"
+            "  lifecycle TEXT NOT NULL,"
+            "  payload   TEXT NOT NULL"
+            ")"
+        )
+        return conn
 
     def _ensure_schema(self) -> None:
-        """Create the content_library table if it does not yet exist (idempotent).
+        """Assert the content_library schema exists (idempotent).
 
         ``seq`` preserves insertion order (the in-memory impl's contract) so search
-        returns assets in the order they were added, deterministically.
+        returns assets in the order they were added, deterministically. The schema
+        is now asserted by :meth:`_connect` on every connection (self-healing); this
+        remains as the explicit ``__init__`` call site for clarity.
         """
-        with self._connect() as conn:
-            conn.execute(
-                "CREATE TABLE IF NOT EXISTS content_library ("
-                "  id        TEXT PRIMARY KEY,"
-                "  seq       INTEGER,"
-                "  lifecycle TEXT NOT NULL,"
-                "  payload   TEXT NOT NULL"
-                ")"
-            )
+        with self._connect():
+            pass
 
     def add(self, asset: LibraryAsset) -> LibraryAsset:
         """Insert or replace ``asset`` by ``id`` (idempotent); persist and return it.
