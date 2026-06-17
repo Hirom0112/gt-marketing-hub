@@ -30,11 +30,17 @@ from app.data.models import FundingState
 
 EXAMPLE_PARAMS = Path(__file__).resolve().parents[3] / "params" / "params.example.yaml"
 
-# The legal §5.4 path, in order.
+# The legal §5.4 path, in order. The voucher selection/reconfirm gap (TODO.md R2)
+# is additively inserted between AWARDED_SELFREPORT and GT_CONFIRMED:
+# SELECTED_GT (family picked GT, not yet locked in) → RECONFIRMED (parent
+# completed the lock-in). The at-risk gap lives between those two; both are
+# GT-controlled (INV-10), never an Odyssey API.
 _LEGAL_PATH = [
     FundingState.NONE,
     FundingState.APPLIED,
     FundingState.AWARDED_SELFREPORT,
+    FundingState.SELECTED_GT,
+    FundingState.RECONFIRMED,
     FundingState.GT_CONFIRMED,
     FundingState.FIRST_INSTALLMENT_RECEIVED,
     FundingState.FUNDED,
@@ -59,8 +65,42 @@ def test_full_lifecycle_walk() -> None:
     assert state == FundingState.FUNDED
 
 
+def test_selection_reconfirm_gap_advances_one_step() -> None:
+    """The R2 gap advances stepwise across SELECTED_GT and RECONFIRMED.
+
+    AWARDED_SELFREPORT → SELECTED_GT → RECONFIRMED → GT_CONFIRMED, one legal step each.
+    """
+    assert (
+        advance_funding_state(FundingState.AWARDED_SELFREPORT, FundingState.SELECTED_GT)
+        == FundingState.SELECTED_GT
+    )
+    assert (
+        advance_funding_state(FundingState.SELECTED_GT, FundingState.RECONFIRMED)
+        == FundingState.RECONFIRMED
+    )
+    assert (
+        advance_funding_state(FundingState.RECONFIRMED, FundingState.GT_CONFIRMED)
+        == FundingState.GT_CONFIRMED
+    )
+
+
+def test_selection_reconfirm_skip_rejected() -> None:
+    """Skipping the reconfirm lock-in is illegal — the gap cannot be jumped."""
+    with pytest.raises(ValueError):
+        advance_funding_state(FundingState.SELECTED_GT, FundingState.GT_CONFIRMED)
+    # The old direct jump that used to be legal is now a skip over the gap.
+    with pytest.raises(ValueError):
+        advance_funding_state(FundingState.AWARDED_SELFREPORT, FundingState.GT_CONFIRMED)
+
+
+def test_selection_reconfirm_backwards_rejected() -> None:
+    """Backwards across the gap (RECONFIRMED → SELECTED_GT) is illegal (fail-closed)."""
+    with pytest.raises(ValueError):
+        advance_funding_state(FundingState.RECONFIRMED, FundingState.SELECTED_GT)
+
+
 def test_skip_transition_rejected() -> None:
-    """Skipping a step (e.g. applied → gt_confirmed) is illegal (fail-closed)."""
+    """Skipping a step along the §5.4 path is illegal (fail-closed)."""
     with pytest.raises(ValueError):
         advance_funding_state(FundingState.APPLIED, FundingState.GT_CONFIRMED)
     with pytest.raises(ValueError):

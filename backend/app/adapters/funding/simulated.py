@@ -65,4 +65,7 @@ class SimulatedFundingSignalAdapter(FundingSignalAdapter):
             gt_confirmed=_derive_bit(family_id, "gt_confirmed"),
             first_installment_received=_derive_bit(family_id, "first_installment_received"),
             self_report=_derive_bit(family_id, "self_report"),
+            # R2: the GT-controlled voucher-selection signal, derived like the
+            # others from a per-field salt (INV-10) — no external feed.
+            family_selected=_derive_bit(family_id, "family_selected"),
         )

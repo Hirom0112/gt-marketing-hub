@@ -57,6 +57,11 @@ ParamsDep = Annotated[Params, Depends(get_params)]
 _SIGNAL_TO_EVENT: tuple[tuple[str, FundingState], ...] = (
     ("first_installment_received", FundingState.FIRST_INSTALLMENT_RECEIVED),
     ("gt_confirmed", FundingState.GT_CONFIRMED),
+    # R2: the voucher-selection signal advances toward SELECTED_GT — the family
+    # picked GT but has not yet reconfirmed/locked in. GT-controlled (INV-10),
+    # ordered between gt_confirmed and self_report (it sits just past
+    # AWARDED_SELFREPORT on the §5.4 path).
+    ("family_selected", FundingState.SELECTED_GT),
     ("self_report", FundingState.AWARDED_SELFREPORT),
 )
 
@@ -80,14 +85,18 @@ class FundingView(BaseModel):
 class FundingSignalRequest(BaseModel):
     """A GT-controlled funding signal (INV-10) — the §5.4 advance trigger.
 
-    All three booleans are GT-owned (GT-confirmed enrollment, a first-installment
-    receipt, the family's self-report); none is sourced from an external Odyssey /
-    TEFA feed. Default ``False`` so a body may assert just the one signal it carries.
+    All booleans are GT-owned (GT-confirmed enrollment, a first-installment
+    receipt, the family's self-report, the family's voucher selection); none is
+    sourced from an external Odyssey / TEFA feed. Default ``False`` so a body may
+    assert just the one signal it carries.
     """
 
     gt_confirmed: bool = False
     first_installment_received: bool = False
     self_report: bool = False
+    # R2: the family indicated they picked GT for their voucher (not yet locked
+    # in). GT-controlled (INV-10), advances toward SELECTED_GT.
+    family_selected: bool = False
 
 
 def _funding_view(

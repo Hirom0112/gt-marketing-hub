@@ -52,6 +52,8 @@ def test_read_signal_returns_funding_signal() -> None:
     assert isinstance(signal.gt_confirmed, bool)
     assert isinstance(signal.first_installment_received, bool)
     assert isinstance(signal.self_report, bool)
+    # R2: the GT-controlled `family_selected` signal is derived like the others.
+    assert isinstance(signal.family_selected, bool)
 
     # Deterministic for a given family_id: same instance and a fresh instance agree.
     assert adapter.read_signal(family_id) == signal

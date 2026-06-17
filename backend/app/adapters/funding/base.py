@@ -34,15 +34,19 @@ from pydantic import BaseModel, ConfigDict
 class FundingSignal(BaseModel):
     """A GT-controlled funding signal for one family (§7.2, INV-10).
 
-    The three booleans the §5.4 funding gate reads — all GT-owned, none sourced
-    from an external Odyssey/TEFA feed. Frozen: a read of a signal is immutable,
-    never a mutable record.
+    The GT-owned booleans the §5.4 funding gate reads — none sourced from an
+    external Odyssey/TEFA feed. Frozen: a read of a signal is immutable, never a
+    mutable record.
 
     Attributes:
         gt_confirmed: GT has confirmed the family's enrollment (a GT-owned fact).
         first_installment_received: GT has received the first tuition installment
             (a GT-owned receipt, not a third-party status).
         self_report: The family self-reported funding via the app's own field.
+        family_selected: The family indicated they picked GT for their voucher
+            but has NOT yet reconfirmed/locked in (TODO.md R2). A GT-controlled
+            signal (INV-10), never an Odyssey/voucher API. Defaults to ``False``
+            so existing constructors stay valid (additive).
     """
 
     model_config = ConfigDict(frozen=True)
@@ -50,6 +54,7 @@ class FundingSignal(BaseModel):
     gt_confirmed: bool
     first_installment_received: bool
     self_report: bool
+    family_selected: bool = False
 
 
 class FundingSignalAdapter(ABC):

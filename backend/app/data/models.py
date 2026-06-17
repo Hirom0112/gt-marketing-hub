@@ -59,6 +59,12 @@ class FundingState(StrEnum):
     NONE = "none"
     APPLIED = "applied"
     AWARDED_SELFREPORT = "awarded_selfreport"
+    # The voucher selection/reconfirm gap (TODO.md R2): SELECTED_GT = the family
+    # indicates they picked GT but has NOT yet reconfirmed/locked in; RECONFIRMED
+    # = the parent completed the lock-in. The at-risk "lost on a deadline" gap
+    # lives between these two — both GT-controlled signals (INV-10), no Odyssey API.
+    SELECTED_GT = "selected_gt"
+    RECONFIRMED = "reconfirmed"
     GT_CONFIRMED = "gt_confirmed"
     FIRST_INSTALLMENT_RECEIVED = "first_installment_received"
     FUNDED = "funded"

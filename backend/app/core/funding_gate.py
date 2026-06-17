@@ -43,6 +43,13 @@ _LEGAL_PATH: tuple[FundingState, ...] = (
     FundingState.NONE,
     FundingState.APPLIED,
     FundingState.AWARDED_SELFREPORT,
+    # The voucher selection/reconfirm gap (TODO.md R2), additively inserted:
+    # SELECTED_GT = the family picked GT but has NOT yet reconfirmed/locked in;
+    # RECONFIRMED = the parent completed the lock-in. The "lost on a deadline"
+    # at-risk gap is the SELECTED_GT → RECONFIRMED step. Both are GT-controlled
+    # signals (INV-10) — never an Odyssey/voucher API.
+    FundingState.SELECTED_GT,
+    FundingState.RECONFIRMED,
     FundingState.GT_CONFIRMED,
     FundingState.FIRST_INSTALLMENT_RECEIVED,
     FundingState.FUNDED,

@@ -121,6 +121,23 @@ def test_funding_signal_advances_state_and_unlocks_tuition() -> None:
     assert body["tuition_unlocked"] is True
 
 
+def test_family_selected_signal_advances_to_selected_gt() -> None:
+    """The R2 `family_selected` GT-controlled signal advances AWARDED_SELFREPORT → SELECTED_GT."""
+    family = _family_in_state(FundingState.AWARDED_SELFREPORT, FundingType.TEFA_STANDARD)
+    advanced = advance_funding_state(FundingState.AWARDED_SELFREPORT, FundingState.SELECTED_GT)
+
+    resp = client.post(
+        f"/families/{family.family_id}/funding/signal",
+        json={"family_selected": True},
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["funding_state"] == advanced.value
+    assert body["funding_state"] == FundingState.SELECTED_GT.value
+    # Still locked: the selection gap sits far below the first-installment floor.
+    assert body["tuition_unlocked"] is False
+
+
 def test_funding_signal_illegal_advance_does_not_crash() -> None:
     """An illegal advance is rejected (409/422), never a 500."""
     # A family already at the threshold: a first-installment signal would be a
