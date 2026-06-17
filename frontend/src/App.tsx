@@ -3,11 +3,18 @@ import {
   BarChart3,
   CircleHelp,
   LayoutGrid,
+  LogOut,
   Megaphone,
   Settings,
 } from 'lucide-react';
 import './theme.css';
 import Sidebar, { type SidebarItem } from './Sidebar';
+import LoginPage, {
+  type DemoSession,
+  loadSession,
+  saveSession,
+  clearSession,
+} from './LoginPage';
 import EnrollmentWorkspace from './workspaces/EnrollmentWorkspace';
 import MarketingWorkspace from './workspaces/MarketingWorkspace';
 import LeadershipWorkspace from './workspaces/LeadershipWorkspace';
@@ -27,19 +34,47 @@ type Workspace =
   | 'settings'
   | 'help';
 
-const PRIMARY_NAV: ReadonlyArray<SidebarItem<Workspace>> = [
+// Nav keys include the 'switch-seat' action (returns to the login gate) alongside
+// the real workspaces.
+type NavKey = Workspace | 'switch-seat';
+
+const PRIMARY_NAV: ReadonlyArray<SidebarItem<NavKey>> = [
   { key: 'enrollment', label: 'Enrollment', icon: LayoutGrid },
   { key: 'marketing', label: 'Marketing', icon: Megaphone, badge: 'In progress' },
   { key: 'leadership', label: 'Leadership', icon: BarChart3, badge: 'In progress' },
 ];
 
-const SECONDARY_NAV: ReadonlyArray<SidebarItem<Workspace>> = [
+const SECONDARY_NAV: ReadonlyArray<SidebarItem<NavKey>> = [
   { key: 'settings', label: 'Settings', icon: Settings },
   { key: 'help', label: 'Help', icon: CircleHelp },
+  { key: 'switch-seat', label: 'Switch seat', icon: LogOut },
 ];
 
 export default function App(): JSX.Element {
+  const [session, setSession] = useState<DemoSession | null>(() => loadSession());
   const [workspace, setWorkspace] = useState<Workspace>('enrollment');
+
+  // No seat chosen yet ⇒ the demo login gate (M1).
+  if (session === null) {
+    return (
+      <LoginPage
+        onEnter={(s) => {
+          saveSession(s);
+          setSession(s);
+          setWorkspace('enrollment');
+        }}
+      />
+    );
+  }
+
+  function onSelect(key: NavKey): void {
+    if (key === 'switch-seat') {
+      clearSession();
+      setSession(null);
+      return;
+    }
+    setWorkspace(key);
+  }
 
   return (
     <div className="app-shell">
@@ -47,7 +82,7 @@ export default function App(): JSX.Element {
         primary={PRIMARY_NAV}
         secondary={SECONDARY_NAV}
         active={workspace}
-        onSelect={setWorkspace}
+        onSelect={onSelect}
       />
 
       <main className="app-main">
