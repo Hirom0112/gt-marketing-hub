@@ -175,3 +175,96 @@ def test_funding_signal_unknown_family_404() -> None:
         json={"first_installment_received": True},
     )
     assert resp.status_code == 404
+
+
+# --- R2: voucher_standing surfaced through the funding view -------------------
+
+
+def _repo_with_family_in_state(
+    funding_state: FundingState, funding_type: FundingType
+) -> InMemoryFamilyRepository:
+    """A one-family repo: a seeded TEFA family copied into the requested state.
+
+    Lets the acceptance tests reach funding states the demo cohort does not seed
+    (SELECTED_GT / FUNDED) without minting a synthetic record by hand — the family
+    keeps every other field of a real seeded row.
+    """
+    from app.data.synthetic import SyntheticDataset
+
+    base = _family_of_type(funding_type)
+    family = base.model_copy(update={"funding_state": funding_state})
+    return InMemoryFamilyRepository(SyntheticDataset(families=[family]))
+
+
+def test_funding_view_includes_voucher_standing_fields() -> None:
+    """The funding view carries the R2 voucher_standing fields, defaulting to tx_tefa."""
+    family = _family_of_type(FundingType.TEFA_STANDARD)
+    resp = client.get(f"/families/{family.family_id}/funding")
+    assert resp.status_code == 200
+    body = resp.json()
+
+    # The voucher-standing fields are present alongside state/tier/installments.
+    assert body["program"] == "tx_tefa"
+    assert isinstance(body["next_action"], str) and body["next_action"]
+    assert "due_by" in body
+    assert "days_remaining" in body
+    assert isinstance(body["at_risk"], bool)
+    assert body["award_full_vs_prorated"] in {"full", "prorated"}
+
+
+def test_funding_view_awarded_family_has_next_action_due_by_and_at_risk() -> None:
+    """An awarded (pre-reconfirm) TEFA family gets a next action + due_by + at_risk."""
+    family = _family_in_state(FundingState.AWARDED_SELFREPORT, FundingType.TEFA_STANDARD)
+    resp = client.get(f"/families/{family.family_id}/funding")
+    assert resp.status_code == 200
+    body = resp.json()
+
+    assert body["program"] == "tx_tefa"
+    # tx_tefa requires reconfirm, so a pre-reconfirm family carries the parent-select
+    # deadline as its "by when" and reads at-risk before that date (the $X-on-a-deadline gap).
+    assert body["due_by"] == "2026-07-15"
+    assert body["days_remaining"] is not None
+    assert body["at_risk"] is True
+    assert "select GT" in body["next_action"]
+
+
+def test_funding_view_selected_gt_family_must_reconfirm() -> None:
+    """A SELECTED_GT family (picked GT, not reconfirmed) is told to reconfirm by the deadline."""
+    repo = _repo_with_family_in_state(FundingState.SELECTED_GT, FundingType.TEFA_STANDARD)
+    app.dependency_overrides[deps.get_repository] = lambda: repo
+    family = repo.list_families()[0]
+    resp = client.get(f"/families/{family.family_id}/funding")
+    assert resp.status_code == 200
+    body = resp.json()
+
+    assert body["program"] == "tx_tefa"
+    assert body["due_by"] == "2026-07-15"
+    assert body["at_risk"] is True
+    assert "Reconfirm GT" in body["next_action"]
+
+
+def test_funding_view_funded_family_reports_funded_standing() -> None:
+    """A funded family reports the funded standing — no open deadline, not at-risk."""
+    repo = _repo_with_family_in_state(FundingState.FUNDED, FundingType.TEFA_STANDARD)
+    app.dependency_overrides[deps.get_repository] = lambda: repo
+    family = repo.list_families()[0]
+    resp = client.get(f"/families/{family.family_id}/funding")
+    assert resp.status_code == 200
+    body = resp.json()
+
+    assert body["program"] == "tx_tefa"
+    assert body["due_by"] is None
+    assert body["days_remaining"] is None
+    assert body["at_risk"] is False
+    assert "Funded" in body["next_action"]
+
+
+def test_funding_view_self_pay_still_has_voucher_standing_no_500() -> None:
+    """A SELF_PAY family (no TEFA award) still surfaces a voucher standing, no 500."""
+    family = _family_of_type(FundingType.SELF_PAY)
+    resp = client.get(f"/families/{family.family_id}/funding")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["program"] == "tx_tefa"
+    assert isinstance(body["next_action"], str) and body["next_action"]
+    assert body["award_full_vs_prorated"] in {"full", "prorated"}
