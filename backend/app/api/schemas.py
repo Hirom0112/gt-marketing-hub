@@ -326,6 +326,49 @@ class CalendarResponse(BaseModel):
     entries: list[CalendarEntry] = Field(default_factory=list)
 
 
+class AgentRollup(BaseModel):
+    """One agent's roster row on the admin lens (M3 R1; MULTI_AGENT_COCKPIT §5).
+
+    A PURE AGGREGATION over the SAME derivations ``/work-queue`` already computes,
+    grouped by ``assigned_rep_id`` — no new scoring math (PLAN M3 R1):
+
+    - ``queue_size`` — count of this agent's families in the ACTIVE work-queue set
+      (recovery_state ∈ {stalled, working}, the same active pre-filter + deriver the
+      work-queue route uses).
+    - ``stall_rate`` — fraction of that active set whose derived recovery_state is
+      ``stalled`` (gone quiet, not yet worked) — the EXISTING work-queue stall signal.
+    - ``close_rate`` — fraction of the agent's active-candidate book that RECOVERED,
+      via the EXISTING ``recovered_outcome`` (the same close signal the work-queue's
+      recovery summary uses); never a new close metric.
+    - ``load`` — ``queue_size`` relative to ``params.assignment.per_tier_load_cap``
+      (a ratio; the cap is the single params home, INV-11).
+
+    ``agent_id`` / ``synthetic_name`` / ``tier`` are identity, read straight off the
+    static sales-agent registry — not a recomputation. An ``unowned`` bucket (the
+    intake pool) carries the same metrics with a null identity.
+    """
+
+    agent_id: UUID | None = None
+    synthetic_name: str | None = None
+    tier: str | None = None
+    queue_size: int
+    stall_rate: float
+    close_rate: float
+    load: float
+
+
+class AgentsResponse(BaseModel):
+    """The admin-lens per-agent roster (M3 R1; `GET /enrollment/agents`).
+
+    ``agents`` is one :class:`AgentRollup` per registered demo agent (rank order);
+    ``unowned`` is the intake pool roll-up (``assigned_rep_id IS NULL``). Read-only
+    aggregation over the existing work-queue outputs (INV-2 — no writes).
+    """
+
+    agents: list[AgentRollup]
+    unowned: AgentRollup
+
+
 # --------------------------------------------------------------------------- #
 # S2 AI action surface (FR-2.4; ARCH §5.2/§6; INV-2/INV-3/INV-4).
 # --------------------------------------------------------------------------- #

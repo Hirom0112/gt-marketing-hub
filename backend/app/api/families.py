@@ -25,6 +25,8 @@ from app.api.deps import (
     resolve_owner_scope,
 )
 from app.api.schemas import (
+    AgentRollup,
+    AgentsResponse,
     CalendarEntry,
     CalendarResponse,
     DropOffBucketResponse,
@@ -51,6 +53,7 @@ from app.core.recovery_state import (
     is_active,
     recovered_outcome,
 )
+from app.core.sales_agents import SALES_AGENTS
 from app.core.work_queue import (
     WorkQueueFamily,
     WorkQueueStudent,
@@ -65,7 +68,13 @@ from app.core.work_queue import (
     value,
 )
 from app.data.models import FamilyRecord, FundingState, SeamStatus, Stage, StallReason
-from app.data.repository import FamilyRepository, JoinedFamily, JoinedStudent
+from app.data.repository import (
+    UNASSIGNED,
+    FamilyRepository,
+    JoinedFamily,
+    JoinedStudent,
+    OwnerScope,
+)
 from app.observability.log_store import DismissRecord, ObservabilityLog
 
 router = APIRouter(tags=["families"])
@@ -1097,3 +1106,118 @@ def get_households(repository: RepositoryDep) -> HouseholdsResponse:
             for r in rollups
         ]
     )
+
+
+# ===========================================================================
+# Per-agent roll-up (M3 R1) — GET /enrollment/agents. The admin lens's per-agent
+# roster (queue/stall%/close%/load) + an unowned (intake-pool) bucket. A PURE
+# AGGREGATION over the SAME work-queue derivations, grouped by assigned_rep_id —
+# NO new scoring math (PLAN M3 R1; MULTI_AGENT_COCKPIT §4). It reuses the work-
+# queue's active pre-filter, the recovery deriver (_recovery_state_for), and the
+# existing close signal (recovered_outcome) — never a new recoverability/close/
+# value formula. Read-only (INV-2 — no writes). Registered on the families router
+# (the /enrollment/ prefix lives in the path, like /enrollment/calendar).
+# ===========================================================================
+
+
+def _agent_metrics(
+    repository: FamilyRepository,
+    owner: OwnerScope,
+    *,
+    log: ObservabilityLog,
+    now: datetime,
+    params: Params,
+) -> tuple[int, float, float, float]:
+    """Aggregate one owner's (queue_size, stall_rate, close_rate, load) — no new math.
+
+    Reuses EXACTLY the work-queue derivations, grouped by the owner scope:
+
+    - candidate set = the agent's families that were ever stalled
+      (``stalled_since is not None``) — the SAME ``scope=active`` pre-filter
+      :func:`get_work_queue` applies before the per-family derive.
+    - each candidate's recovery_state via :func:`_recovery_state_for` (the SAME
+      deriver the work-queue route uses, not a new rule).
+    - ``queue_size`` = count whose state ∈ {stalled, working} (the active set).
+    - ``stall_rate`` = (# stalled) / queue_size — the EXISTING work-queue stall
+      signal (``working`` means already worked; ``stalled`` means gone-quiet,
+      untouched). 0.0 when the queue is empty.
+    - ``close_rate`` = (# recovered) / |candidates| via the EXISTING
+      :func:`recovered_outcome` (the same close signal the recovery summary uses).
+      0.0 when there are no candidates.
+    - ``load`` = queue_size / ``params.assignment.per_tier_load_cap`` (INV-11 — the
+      single params home for the cap; never hardcoded).
+
+    No recoverability/value/close formula is invented here — every metric is a
+    count or ratio over the existing helpers' outputs (PLAN M3 R1).
+    """
+    candidates = [
+        j for j in repository.list_joined(owner=owner) if j.family.stalled_since is not None
+    ]
+    states = [_recovery_state_for(j, log=log, now=now, params=params) for j in candidates]
+    active = [s for s in states if s in _ACTIVE_STATES]
+    queue_size = len(active)
+    stalled = sum(1 for s in active if s is RecoveryState.STALLED)
+    stall_rate = (stalled / queue_size) if queue_size else 0.0
+    recovered = sum(
+        1 for j in candidates if recovered_outcome(j, stall_stage=_stall_stage(j)) is not None
+    )
+    close_rate = (recovered / len(candidates)) if candidates else 0.0
+    load = queue_size / params.assignment.per_tier_load_cap
+    return queue_size, stall_rate, close_rate, load
+
+
+# Rounding for the rate/load ratios — a presentation precision, not a tunable
+# threshold (no decision is gated on it), so it is a plain display constant.
+_ROLLUP_DP = 4
+
+
+@router.get("/enrollment/agents", response_model=AgentsResponse)
+def get_agent_rollup(
+    repository: RepositoryDep,
+    params: ParamsDep,
+    log: LogDep,
+) -> AgentsResponse:
+    """The admin-lens per-agent roster (M3 R1; MULTI_AGENT_COCKPIT §5).
+
+    One :class:`AgentRollup` per registered demo agent (rank order) plus an
+    ``unowned`` bucket (the intake pool, ``assigned_rep_id IS NULL`` — the M1
+    ``owner=none`` scope), each carrying ``queue_size`` / ``stall_rate`` /
+    ``close_rate`` / ``load``. Every metric is a PURE AGGREGATION over the SAME
+    derivations ``/work-queue`` already computes (the active pre-filter,
+    :func:`_recovery_state_for`, and the existing :func:`recovered_outcome`),
+    grouped by ``assigned_rep_id`` — **no new scoring math** (PLAN M3 R1;
+    MULTI_AGENT_COCKPIT §4). Agent identity (``synthetic_name`` / ``tier``) is read
+    off the static :data:`SALES_AGENTS` registry, never recomputed.
+
+    Admin lens: it aggregates EVERY book (it iterates the registry and the pool),
+    so no ``owner`` query param is taken — the cross-agent roster is the whole
+    point. ``now`` is read once so the roster is internally consistent. Read-only,
+    no AI (INV-2 — no writes).
+    """
+    now = datetime.now(UTC)
+    agents = [
+        AgentRollup(
+            agent_id=agent.agent_id,
+            synthetic_name=agent.synthetic_name,
+            tier=agent.tier,
+            queue_size=qs,
+            stall_rate=round(sr, _ROLLUP_DP),
+            close_rate=round(cr, _ROLLUP_DP),
+            load=round(ld, _ROLLUP_DP),
+        )
+        for agent in SALES_AGENTS
+        for qs, sr, cr, ld in (
+            _agent_metrics(repository, agent.agent_id, log=log, now=now, params=params),
+        )
+    ]
+    uqs, usr, ucr, uld = _agent_metrics(repository, UNASSIGNED, log=log, now=now, params=params)
+    unowned = AgentRollup(
+        agent_id=None,
+        synthetic_name=None,
+        tier=None,
+        queue_size=uqs,
+        stall_rate=round(usr, _ROLLUP_DP),
+        close_rate=round(ucr, _ROLLUP_DP),
+        load=round(uld, _ROLLUP_DP),
+    )
+    return AgentsResponse(agents=agents, unowned=unowned)
