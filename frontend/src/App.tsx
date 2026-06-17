@@ -30,7 +30,7 @@ type Workspace =
 const PRIMARY_NAV: ReadonlyArray<SidebarItem<Workspace>> = [
   { key: 'enrollment', label: 'Enrollment', icon: LayoutGrid },
   { key: 'marketing', label: 'Marketing', icon: Megaphone, badge: 'In progress' },
-  { key: 'leadership', label: 'Leadership', icon: BarChart3, badge: '⚠ In progress' },
+  { key: 'leadership', label: 'Leadership', icon: BarChart3, badge: 'In progress' },
 ];
 
 const SECONDARY_NAV: ReadonlyArray<SidebarItem<Workspace>> = [
