@@ -36,7 +36,7 @@ from typing import TYPE_CHECKING
 from uuid import UUID
 
 if TYPE_CHECKING:
-    from app.core.params import Realistic
+    from app.core.params import Params, Realistic
 
 from app.ai.schemas.brand import (
     BrandMemoryItem,
@@ -918,6 +918,293 @@ def generate_back_to_school(
         ds.community_profiles.append(profile)
     _populate_students(ds, seed=seed)  # A-24 — per-child rows for the volume cohort.
     return ds
+
+
+# --------------------------------------------------------------------------- #
+# MD — the curated `COCKPIT_SCENARIO=demo` cohort (MULTI_AGENT_COCKPIT §10.1).
+#
+# A small, hand-shaped, deterministic fixture for the on-camera demo — NOT the
+# volume/cadence cohorts above. 8–10 synthetic households with controlled, legible
+# state: exactly one two-child household (household→student grouping), a stage
+# spread (mid-funnel + "went all the way"/Closed-pending-SIS), a funding/voucher
+# spread, an assignment split across the two demo agents (the closer holds the
+# high-value / deadline / multi-child case, the setter holds standard
+# re-engagement, ≥1 household is left unassigned for the admin to route LIVE), and
+# seeded SIS divergence.
+#
+# SIS divergence is produced by the EXISTING roster generator, not re-implemented:
+# ``generate_sis_roster`` sorts the PAID families by ``family_id`` and seeds the
+# first → 🔴 paid_not_in_sis, the second → 🟡 records_lag, the rest → ✅ confirmed
+# (it only needs ≥3 paid families). This cohort seeds FOUR paid households
+# (3 funded TUITION "went all the way" + 1 first-installment ENROLL), so the M5
+# reconcile yields ≥1 of each bucket deterministically.
+#
+# LIVE-Supabase concern (director live-step, NOT built here): seeding this cohort
+# into the shared apply-pages Supabase DB — "clear all existing synthetic/cohort
+# data, then seed each family as a synthetic anon-session user" — is the external
+# §10.5 live step (cloud-throwaway vs local-Docker was never resolved). This
+# function builds only the in-memory ``SyntheticDataset`` (the gate path); the
+# in-memory repo hydrates from it exactly like every other scenario.
+# --------------------------------------------------------------------------- #
+
+# The two seeded demo agents — STABLE per-rank uuid literals, identical to the
+# 0013_sales_agents.sql seed + app/core/sales_agents.py (the closer is rank 1, the
+# setter rank 2). Kept as literals here to avoid importing app.core into the data
+# generator; the registry test guards that these stay in sync.
+_DEMO_CLOSER_ID = UUID("a0000000-0000-4000-8000-000000000001")  # rank 1 — closer
+_DEMO_SETTER_ID = UUID("a0000000-0000-4000-8000-000000000002")  # rank 2 — setter
+
+# Fixed seed for the curated cohort — its OWN RNG instance, isolated from the
+# default/back-to-school/realistic streams (same discipline as the other cohorts),
+# so the determinism guards hold and the cohort is byte-identical across runs.
+_DEMO_SEED = 0x6D64  # "md"
+
+
+@dataclass(frozen=True)
+class _DemoHousehold:
+    """One curated household's controlled, legible demo state (MULTI_AGENT §10.1)."""
+
+    surname: str
+    stage: Stage
+    funding_type: FundingType
+    funding_state: FundingState
+    num_children: int
+    assigned_rep_id: UUID | None
+    stall_reason: StallReason | None
+    note: str  # the demo intent (documentation only — never emitted)
+
+
+# The curated cohort — 9 households, hand-shaped for legible on-camera state.
+# Composition (verified by ``test_demo_scenario_shape`` + the SIS divergence test):
+#   * EXACTLY ONE two-child household (the Rivera household — closer, mid-funnel).
+#   * Stage spread: 2 mid-funnel (APPLY/ENROLL) + 3 "went all the way" (TUITION,
+#     funded ⇒ Closed — pending SIS confirmation) + the rest top-of-funnel/active.
+#   * Funding/voucher spread: TEFA standard (voucher), self-pay, disability,
+#     homeschool — so the voucher clocks + SIS buckets each show something.
+#   * 4 PAID households (3 FUNDED + 1 FIRST_INSTALLMENT_RECEIVED) ⇒ the roster
+#     generator seeds 🔴 + 🟡 + ✅ deterministically.
+#   * Assignment: the closer (#1) holds the multi-child + high-value/deadline
+#     cases; the setter (#2) holds standard re-engagement; ≥1 is UNASSIGNED.
+_DEMO_HOUSEHOLDS: tuple[_DemoHousehold, ...] = (
+    # The two-child household — closer, mid-funnel (the household→student demo).
+    _DemoHousehold(
+        surname="Rivera",
+        stage=Stage.ENROLL,
+        funding_type=FundingType.TEFA_STANDARD,
+        funding_state=FundingState.AWARDED_SELFREPORT,
+        num_children=2,
+        assigned_rep_id=_DEMO_CLOSER_ID,
+        stall_reason=StallReason.FORMS_PARTIAL,
+        note="multi-child voucher household mid-enroll — the high-value closer case",
+    ),
+    # "Went all the way" — funded TUITION ⇒ Closed — pending SIS confirmation.
+    _DemoHousehold(
+        surname="Okafor",
+        stage=Stage.TUITION,
+        funding_type=FundingType.TEFA_STANDARD,
+        funding_state=FundingState.FUNDED,
+        num_children=1,
+        assigned_rep_id=_DEMO_CLOSER_ID,
+        stall_reason=None,
+        note="closed voucher enrollment, awaiting SIS confirmation",
+    ),
+    _DemoHousehold(
+        surname="Nguyen",
+        stage=Stage.TUITION,
+        funding_type=FundingType.SELF_PAY,
+        funding_state=FundingState.FUNDED,
+        num_children=1,
+        assigned_rep_id=_DEMO_SETTER_ID,
+        stall_reason=None,
+        note="closed self-pay enrollment, awaiting SIS confirmation",
+    ),
+    _DemoHousehold(
+        surname="Patel",
+        stage=Stage.TUITION,
+        funding_type=FundingType.TEFA_DISABILITY,
+        funding_state=FundingState.FUNDED,
+        num_children=1,
+        assigned_rep_id=_DEMO_SETTER_ID,
+        stall_reason=None,
+        note="closed disability-IEP ($30k tier) enrollment, awaiting SIS",
+    ),
+    # First-installment paid (mid-enroll) — a fourth PAID family so the ✅ bucket
+    # is non-empty after the 🔴/🟡 seeds consume the first two paid families.
+    _DemoHousehold(
+        surname="Johnson",
+        stage=Stage.ENROLL,
+        funding_type=FundingType.TEFA_STANDARD,
+        funding_state=FundingState.FIRST_INSTALLMENT_RECEIVED,
+        num_children=1,
+        assigned_rep_id=_DEMO_CLOSER_ID,
+        stall_reason=StallReason.FUNDING_PENDING,
+        note="first installment in, deadline-risk voucher — the closer's deadline case",
+    ),
+    # Mid-funnel (APPLY) standard re-engagement — the setter's book.
+    _DemoHousehold(
+        surname="Garcia",
+        stage=Stage.APPLY,
+        funding_type=FundingType.TEFA_STANDARD,
+        funding_state=FundingState.APPLIED,
+        num_children=1,
+        assigned_rep_id=_DEMO_SETTER_ID,
+        stall_reason=StallReason.APP_INCOMPLETE,
+        note="application incomplete — standard setter re-engagement",
+    ),
+    _DemoHousehold(
+        surname="Kim",
+        stage=Stage.INTEREST,
+        funding_type=FundingType.SELF_PAY,
+        funding_state=FundingState.NONE,
+        num_children=1,
+        assigned_rep_id=_DEMO_SETTER_ID,
+        stall_reason=StallReason.NO_RESPONSE,
+        note="top-of-funnel no-response — standard setter re-engagement",
+    ),
+    # UNASSIGNED — the intake pool the admin routes LIVE on camera.
+    _DemoHousehold(
+        surname="Silva",
+        stage=Stage.INTEREST,
+        funding_type=FundingType.TEFA_HOMESCHOOL,
+        funding_state=FundingState.NONE,
+        num_children=1,
+        assigned_rep_id=None,
+        stall_reason=StallReason.INFO_SESSION_NO_SHOW,
+        note="fresh homeschool ($2k tier) lead — UNASSIGNED, the live-route case",
+    ),
+    _DemoHousehold(
+        surname="Ahmed",
+        stage=Stage.APPLY,
+        funding_type=FundingType.SELF_PAY,
+        funding_state=FundingState.APPLIED,
+        num_children=1,
+        assigned_rep_id=None,
+        stall_reason=None,
+        note="second unassigned intake lead — pool depth for the live route",
+    ),
+)
+
+
+def generate_demo_cohort(*, params: Params) -> SyntheticDataset:
+    """Generate the curated ``COCKPIT_SCENARIO=demo`` cohort (MULTI_AGENT §10.1).
+
+    A SEPARATE deterministic fixture (its own ``random.Random(_DEMO_SEED)``, so the
+    other cohort streams stay byte-identical) of :data:`_DEMO_HOUSEHOLDS` — 9
+    synthetic households with controlled, legible state for the on-camera demo:
+    exactly one two-child household, a stage + funding/voucher spread, four PAID
+    households (so the M5 roster generator seeds the 🔴/🟡/✅ SIS buckets), and an
+    assignment split across the two demo agents with ≥1 household left UNASSIGNED
+    (the intake pool the admin routes live). Same input ⇒ byte-identical output.
+    All synthetic (INV-1): obviously-fake household labels, ``@example.invalid``
+    emails, ``555-01xx`` phones; no clock/random (deterministic, CLAUDE §4.1).
+
+    The LIVE-Supabase seed (clear-slate + each family a synthetic anon-session
+    user) is the director's live-step (the external §10.5 gate), NOT built here:
+    this returns only the in-memory dataset the gate path consumes.
+
+    Args:
+        params: the loaded params (the cohort reads its tunables from here, INV-11).
+
+    Returns:
+        An in-memory :class:`SyntheticDataset` — the curated demo scenario seed.
+    """
+    rng = random.Random(_DEMO_SEED)
+    ds = SyntheticDataset()
+    for spec in _DEMO_HOUSEHOLDS:
+        family, lead, app_form, enrollment, profile = _build_demo_household(rng, spec=spec)
+        ds.families.append(family)
+        ds.leads.append(lead)
+        ds.app_forms.append(app_form)
+        ds.enrollment_forms.append(enrollment)
+        ds.community_profiles.append(profile)
+    _populate_students(ds, seed=_DEMO_SEED)  # A-24 — one Student per child.
+    return ds
+
+
+def _build_demo_household(
+    rng: random.Random,
+    *,
+    spec: _DemoHousehold,
+) -> tuple[FamilyRecord, LeadsNew, AppForm, EnrollmentForms, CommunityProfile]:
+    """Build one curated demo household + its four joined source rows.
+
+    Everything legible comes from ``spec`` (stage, funding tier/state, child count,
+    assignment, stall); the incidental fields (given name, region, attribution,
+    contact, engagement) are drawn from ``rng`` so the household reads believable
+    while staying fully synthetic + deterministic. A "went all the way" closed
+    family is anchored older (it has run the full funnel) and an active/unassigned
+    family is anchored fresher.
+    """
+    family_id = _uuid(rng)
+    lead_id = _uuid(rng)
+    app_form_id = _uuid(rng)
+    enrollment_form_id = _uuid(rng)
+    community_profile_id = _uuid(rng)
+
+    given = rng.choice(_GIVEN_NAMES)
+    region = rng.choice(_REGIONS)
+    product = _weighted_choice(rng, _PRODUCT_WEIGHTS)
+    attribution_source = rng.choice(_ATTRIBUTION_SOURCES)
+    email = _synthetic_email(rng, spec.surname)
+    utm = _synthetic_utm(rng, attribution_source)
+
+    # Closed ("went all the way") families have run the whole funnel ⇒ anchor them
+    # older; active/intake families are fresher. Deterministic (drawn from rng).
+    closed = spec.stage is Stage.TUITION
+    if closed:
+        created = _timestamp_between(rng, min_days_ago=60, max_days_ago=150)
+    else:
+        created = _timestamp_between(rng, min_days_ago=0, max_days_ago=30)
+    stalled_since = _timestamp(rng, max_days_ago=21) if spec.stall_reason is not None else None
+    assigned_at = (
+        min(created + timedelta(days=rng.randint(0, 7)), _EPOCH)
+        if spec.assigned_rep_id is not None
+        else None
+    )
+
+    family = FamilyRecord(
+        family_id=family_id,
+        display_name=f"The {spec.surname} Family",
+        primary_contact_synthetic_email=email,
+        assigned_rep_id=spec.assigned_rep_id,
+        assigned_at=assigned_at,
+        lead_id=lead_id,
+        app_form_id=app_form_id,
+        enrollment_form_id=enrollment_form_id,
+        community_profile_id=community_profile_id,
+        current_stage=spec.stage,
+        stall_reason=spec.stall_reason,
+        stalled_since=stalled_since,
+        funding_type=spec.funding_type,
+        funding_state=spec.funding_state,
+        attribution_source=attribution_source,
+        attribution_utm=utm,
+        crm_seam_status=_seam_status(rng),
+        work_queue_score=round(rng.uniform(0.0, 1.0), 4),
+        created_at=created,
+        updated_at=min(created + timedelta(days=rng.randint(0, 14)), _EPOCH),
+    )
+
+    lead = LeadsNew(
+        lead_id=lead_id,
+        family_id=family_id,
+        synthetic_first_name=given,
+        synthetic_last_name=spec.surname,
+        synthetic_email=email,
+        synthetic_phone=_synthetic_phone(rng),
+        source=attribution_source,
+        utm=utm,
+        product_interest=product,
+        grade_interest=rng.choice(_GRADES),
+        region=region,
+        num_children=spec.num_children,
+        created_at=created,
+    )
+
+    app_form = _build_app_form(rng, app_form_id, family_id, spec.stage, created)
+    enrollment = _build_enrollment(rng, enrollment_form_id, family_id, spec.stage, created)
+    profile = _build_profile(rng, community_profile_id, family_id, created)
+    return family, lead, app_form, enrollment, profile
 
 
 # --------------------------------------------------------------------------- #

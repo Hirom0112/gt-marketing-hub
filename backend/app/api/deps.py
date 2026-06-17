@@ -111,14 +111,28 @@ def _build_in_memory_repository(params: Params) -> FamilyRepository:
     (``generate_back_to_school``). ``COCKPIT_SCENARIO=realistic`` ⇒ the
     cadence-calibrated cohort (``generate_realistic``): its dismiss-target ids are
     recorded in ``_realistic_dismissed_family_ids`` so the observability log can
-    seed the matching dismiss events (the dismissed slice). Every cohort is sized
-    entirely from params (INV-11).
+    seed the matching dismiss events (the dismissed slice).
+    ``COCKPIT_SCENARIO=demo`` ⇒ the curated on-camera demo cohort
+    (``generate_demo_cohort``, MULTI_AGENT §10.1): a small, hand-shaped fixture of
+    8–10 households with controlled, legible state. Every cohort is sized entirely
+    from params (INV-11).
     """
     import os
 
-    from app.data.synthetic import generate_back_to_school, generate_realistic
+    from app.data.synthetic import (
+        generate_back_to_school,
+        generate_demo_cohort,
+        generate_realistic,
+    )
 
     scenario = (os.environ.get("COCKPIT_SCENARIO", "") or "").strip().lower()
+    if scenario == "demo":
+        # MD — the curated on-camera demo cohort (MULTI_AGENT §10.1): a small,
+        # hand-shaped, deterministic fixture seeded into the in-memory repo (the
+        # gate path). The LIVE-Supabase seed (clear-slate + each family a synthetic
+        # anon-session user) is the director's live-step, NOT built here.
+        dataset = generate_demo_cohort(params=params)
+        return InMemoryFamilyRepository(dataset, params=params)
     if scenario == "back_to_school":
         bts = params.back_to_school
         dataset = generate_back_to_school(
