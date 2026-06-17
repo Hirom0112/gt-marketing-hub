@@ -12,6 +12,7 @@ import Sidebar, { type SidebarItem } from './Sidebar';
 import LoginPage from './LoginPage';
 import { SessionProvider, useSession } from './session/SessionContext';
 import EnrollmentWorkspace from './workspaces/EnrollmentWorkspace';
+import RepWorkspace from './workspaces/RepWorkspace';
 import MarketingWorkspace from './workspaces/MarketingWorkspace';
 import LeadershipWorkspace from './workspaces/LeadershipWorkspace';
 import SettingsWorkspace from './workspaces/SettingsWorkspace';
@@ -90,7 +91,14 @@ function AppShell(): JSX.Element {
 
       <main className="app-main">
         <div className="page-body">
-          {workspace === 'enrollment' && <EnrollmentWorkspace />}
+          {/* M2 — the rep gets ONE subset view (owner-scoped "My Queue" + close
+              panel); the admin keeps the full command center. Branch by seat. */}
+          {workspace === 'enrollment' &&
+            (session.role === 'agent' ? (
+              <RepWorkspace />
+            ) : (
+              <EnrollmentWorkspace />
+            ))}
           {workspace === 'marketing' && <MarketingWorkspace />}
           {workspace === 'leadership' && <LeadershipWorkspace />}
           {workspace === 'settings' && <SettingsWorkspace />}
