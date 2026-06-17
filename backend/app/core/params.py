@@ -836,6 +836,37 @@ class Crm(_StrictModel):
         return self
 
 
+class Security(_StrictModel):
+    """M7 security/observability detection thresholds (MULTI_AGENT_COCKPIT §7; INV-11).
+
+    The edge middleware (DETECTION, defense-in-depth — never inline blocking)
+    records a `security_event` when an observed signal crosses one of these
+    tunable thresholds. Each is the single canonical home (INV-11) — the
+    middleware never hardcodes a count:
+
+    * ``oversized_result_rows`` — a list response carrying at/above this many rows
+      is flagged ``oversized_result`` (API4:2023 Unrestricted Resource
+      Consumption — an enumeration/scraping/wide-band pull signal).
+    * ``auth_failure_burst`` — at/above this many 401/403 responses from one actor
+      within the rolling window is flagged ``auth_failure_burst`` (A07:2021
+      Identification & Authentication Failures).
+    * ``auth_failure_window_seconds`` — the rolling window (seconds) over which the
+      auth-failure burst is counted.
+    """
+
+    oversized_result_rows: int
+    auth_failure_burst: int
+    auth_failure_window_seconds: int
+
+    @model_validator(mode="after")
+    def _thresholds_positive(self) -> Security:
+        for name in ("oversized_result_rows", "auth_failure_burst", "auth_failure_window_seconds"):
+            value = getattr(self, name)
+            if value < 1:
+                raise ValueError(f"security.{name} must be >= 1, got {value!r}")
+        return self
+
+
 class Params(_StrictModel):
     """Typed view of the whole params file — one field per §8 top-level block."""
 
@@ -863,6 +894,7 @@ class Params(_StrictModel):
     kpi: Kpi
     scheduler: Scheduler
     crm: Crm
+    security: Security
 
 
 def _resolve_path(path: Path | None) -> Path:

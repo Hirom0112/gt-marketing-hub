@@ -80,6 +80,11 @@ def _sales_agents_sql() -> str:
     return _strip_comments((MIGRATIONS_DIR / "0013_sales_agents.sql").read_text(encoding="utf-8"))
 
 
+def _security_event_sql() -> str:
+    """The 0015 append-only `security_event` audit table DDL (comments stripped)."""
+    return _strip_comments((MIGRATIONS_DIR / "0015_security_event.sql").read_text(encoding="utf-8"))
+
+
 def _all_sql() -> str:
     return "\n".join(p.read_text(encoding="utf-8") for p in _sql_files())
 
@@ -750,3 +755,73 @@ def test_sales_agent_and_assigned_rep() -> None:
 
     # --- doctrine: no FOR ALL, no SECURITY DEFINER ---
     assert not _SECURITY_DEFINER.search(sql), "0013 must not use SECURITY DEFINER (D-RLS-7)"
+
+
+# ---------------------------------------------------------------------------
+# 0015 append-only `security_event` audit table (M7; MULTI_AGENT_COCKPIT §3/§7)
+# — the defense-in-depth (DETECTION) spine: one APPEND-ONLY row per suspicious
+# signal, each carrying an OWASP category mapping. This is NOT an RLS replacement
+# (RLS is the inline boundary); it is the observability feed Panel B reads.
+# A new CREATE TABLE that MUST ENABLE *and* FORCE RLS (D-RLS-1) and carry a
+# null-guarded policy (a system audit table, admin-read via service_role — the
+# SAME `auth.uid() IS NOT NULL` guard shape as 0013's registry, so the global
+# CREATE==ENABLE==FORCE + one-guard-per-policy invariants stay green). CRITICAL:
+# APPEND-ONLY — grants only SELECT + INSERT (NEVER UPDATE / DELETE), no UPDATE/
+# DELETE policy, the immutable-once-written audit posture of 0010. D-RLS-7: NO
+# SECURITY DEFINER in the exposed schema (the feed populate path is the app-layer
+# service_role repository, NOT a public SECURITY DEFINER helper).
+# ---------------------------------------------------------------------------
+
+
+def test_security_event_append_only() -> None:
+    """0015 adds an append-only `security_event` audit table: ENABLE+FORCE RLS, a
+    null-guarded policy, GRANT SELECT+INSERT only (no UPDATE/DELETE grant/policy),
+    and no SECURITY DEFINER — keeping the global RLS count invariants green.
+    """
+    sql = _security_event_sql()
+
+    # --- the table + ENABLE/FORCE RLS (D-RLS-1) ---
+    assert re.search(r"CREATE\s+TABLE\s+security_event\b", sql, re.IGNORECASE), (
+        "0015 must CREATE TABLE security_event"
+    )
+    assert re.search(
+        r"ALTER\s+TABLE\s+security_event\s+ENABLE\s+ROW\s+LEVEL\s+SECURITY", sql, re.IGNORECASE
+    ), "0015 must ENABLE RLS on security_event (D-RLS-1)"
+    assert re.search(
+        r"ALTER\s+TABLE\s+security_event\s+FORCE\s+ROW\s+LEVEL\s+SECURITY", sql, re.IGNORECASE
+    ), "0015 must FORCE RLS on security_event (owner-role escape hatch, D-RLS-1)"
+
+    # --- a null-guarded policy (admin-read system audit table) ---
+    security_event_policy = re.search(
+        r"CREATE\s+POLICY\s+\w+\s+ON\s+security_event\b[^;]*;", sql, re.IGNORECASE | re.DOTALL
+    )
+    assert security_event_policy, "0015 must add at least one CREATE POLICY on security_event"
+    assert _NULL_GUARD.search(security_event_policy.group(0)), (
+        "0015 security_event policy must carry the auth.uid() IS NOT NULL guard (D-RLS-2)"
+    )
+
+    # --- APPEND-ONLY: SELECT + INSERT grant only; NEVER UPDATE / DELETE ---
+    grant_select = re.search(r"GRANT\s+SELECT\b[^;]*ON\s+security_event\b[^;]*", sql, re.IGNORECASE)
+    assert grant_select, "0015 must GRANT SELECT on security_event"
+    grant_insert = re.search(r"GRANT\s+INSERT\b[^;]*ON\s+security_event\b[^;]*", sql, re.IGNORECASE)
+    assert grant_insert, "0015 must GRANT INSERT on security_event"
+    assert not re.search(r"GRANT\s+UPDATE\b", sql, re.IGNORECASE), (
+        "0015 must NOT grant UPDATE (append-only audit table)"
+    )
+    assert not re.search(r"GRANT\s+DELETE\b", sql, re.IGNORECASE), (
+        "0015 must NOT grant DELETE (append-only audit table)"
+    )
+
+    # --- no UPDATE/DELETE/ALL policy (immutable once written, like 0010) ---
+    assert not _FOR_ALL.search(sql), "0015 must not use FOR ALL on security_event"
+    assert not _FOR_DELETE.search(sql), (
+        "0015 must not add a DELETE policy (append-only — the audit row is immutable)"
+    )
+    assert not re.search(r"FOR\s+UPDATE", sql, re.IGNORECASE), (
+        "0015 must not add an UPDATE policy (append-only — the audit row is immutable)"
+    )
+
+    # --- D-RLS-7: no SECURITY DEFINER in the exposed schema ---
+    assert not _SECURITY_DEFINER.search(sql), (
+        "0015 must not use a SECURITY DEFINER helper in the exposed schema (D-RLS-7)"
+    )

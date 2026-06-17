@@ -44,6 +44,11 @@ from app.data.supabase_repository import build_supabase_repository
 from app.evals.suite import EvalSuiteResult
 from app.marketing.library import ContentLibrary, SqliteContentLibrary
 from app.observability.log_store import InMemoryObservabilityLog, ObservabilityLog
+from app.observability.security_log import (
+    InMemorySecurityEventLog,
+    SecurityEventLog,
+    seed_simulated_feed,
+)
 
 
 def _build_repository(params: Params) -> FamilyRepository:
@@ -589,9 +594,35 @@ def get_settings_dep() -> Settings:
     return _settings
 
 
+# Singleton security-event feed (M7 Panel B) — the append-only suspicious-signal
+# audit log, pre-seeded with the v1 SIMULATED stream (INV-9, labeled). One-slot
+# list so `reset_security_event_log` can rebind it for test isolation (the
+# `_observability` pattern). The edge middleware records observed signals here
+# server-side (never client-exposed; INV-5). Production swaps a Supabase-backed
+# impl behind the same interface.
+def _build_security_event_log() -> SecurityEventLog:
+    """Build the demo security-event feed, pre-seeded with the simulated stream (INV-9)."""
+    log = InMemorySecurityEventLog()
+    seed_simulated_feed(log)
+    return log
+
+
+_security_event_log: list[SecurityEventLog] = [_build_security_event_log()]
+
+
 def get_observability_log() -> ObservabilityLog:
     """FastAPI dependency yielding the active NFR-6 audit log (the A-3 store seam)."""
     return _observability[0]
+
+
+def get_security_event_log() -> SecurityEventLog:
+    """FastAPI dependency yielding the active M7 security-event feed (Panel B seam)."""
+    return _security_event_log[0]
+
+
+def reset_security_event_log() -> None:
+    """Rebind the security-event feed to a fresh seeded one (test isolation only)."""
+    _security_event_log[0] = _build_security_event_log()
 
 
 def reset_observability_log() -> None:

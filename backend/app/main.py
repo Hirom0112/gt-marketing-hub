@@ -13,6 +13,7 @@ from mangum import Mangum
 from app.api.ai_actions import router as ai_actions_router
 from app.api.content import router as content_router
 from app.api.crm_status import router as crm_status_router
+from app.api.deps import get_params, get_security_event_log
 from app.api.enrollment import router as enrollment_router
 from app.api.evals import router as evals_router
 from app.api.families import router as families_router
@@ -24,6 +25,8 @@ from app.api.notes import router as notes_router
 from app.api.publish import router as publish_router
 from app.api.scoreboard import router as scoreboard_router
 from app.api.seam import router as seam_router
+from app.api.security import SecurityEdgeMiddleware
+from app.api.security import router as security_router
 from app.core.settings import get_settings, posted_catalog_mount_root
 
 app = FastAPI(title="GT Pulse", version="0.1.0")
@@ -41,6 +44,19 @@ app.add_middleware(
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+)
+
+# M7 security edge — DETECTION (defense-in-depth), NOT inline blocking (MULTI_AGENT
+# §7). It OBSERVES each request/response and records a `security_event` for a
+# suspicious signal (401/403 burst, oversized result, user_id-reassign attempt,
+# anon hit on an admin/service route), each carrying an OWASP mapping. RLS + the
+# app-layer owner clamp remain the inline boundary; this only feeds Panel B. It
+# writes server-side via the singleton service_role feed (INV-5; never client-
+# exposed) and reads every threshold from params.security (INV-11).
+app.add_middleware(
+    SecurityEdgeMiddleware,
+    log=get_security_event_log(),
+    params=get_params(),
 )
 
 
@@ -146,6 +162,14 @@ app.include_router(evals_router)
 # rollup over the append-only audit spine (enrollment funnel, GEO lift vs the 0%
 # baseline, per-eval green/red). Read-only; nothing is logged.
 app.include_router(scoreboard_router)
+
+# M7 security/observability surface (MULTI_AGENT_COCKPIT §7) — /security/posture
+# (Panel A: the LIVE RLS posture — the same test_migrations_rls invariants run at
+# runtime, RED when a table loses FORCE), /security/events (Panel B: the append-only
+# suspicious-activity feed, a SIMULATED labeled stream in v1, INV-9), and the §7
+# acknowledge action. DETECTION, not inline blocking; the populate path is the
+# app-layer service_role feed (no public definer-rights helper, D-RLS-7).
+app.include_router(security_router)
 
 
 # AWS Lambda + API Gateway entrypoint (ARCHITECTURE.md §12).
