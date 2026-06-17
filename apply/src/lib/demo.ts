@@ -56,6 +56,107 @@ export function isDemoSupabase(sb: MinimalSupabase): sb is DemoSupabase {
 }
 
 /**
+ * The seeded synthetic anon-session tokens for ONE demo family — the restore
+ * credentials for `setSession`. SYNTHETIC ONLY (INV-1): these are the anon-session
+ * tokens the director's seed minted per family; they are NOT a service_role key
+ * and carry no privilege beyond that family's own RLS owner-scope (INV-5).
+ */
+export interface DemoSessionTokens {
+  access_token: string;
+  refresh_token: string;
+}
+
+/** uid → that family's seeded anon-session tokens. Demo/seed-time, synthetic-only. */
+export type DemoSessions = Record<string, DemoSessionTokens>;
+
+/**
+ * The slice of the REAL anon Supabase client the demo swap depends on: just
+ * `auth.setSession`. Typed structurally so `asDemoSupabase` can wrap a bare
+ * `@supabase/supabase-js` client (whose `auth` IS a superset of this) WITHOUT
+ * pulling the full client type into this module — and WITHOUT any service_role
+ * surface (INV-5). The real client's `setSession` returns `{ error }`; we keep
+ * only that field in the structural type.
+ */
+export interface DemoSessionClient extends MinimalSupabase {
+  auth: MinimalSupabase['auth'] & {
+    setSession: (tokens: DemoSessionTokens) => Promise<{
+      error: { message: string } | null;
+    }>;
+  };
+}
+
+/**
+ * Build a production `DemoSupabase` from the REAL anon client + the seeded
+ * per-family session map. The returned object IS the client, extended with a
+ * `signInAsUid` that restores the family's seeded anon session via
+ * `auth.setSession` — after which `getSession()` reports that family's uid and
+ * every owner-scoped read is RLS-scoped to it (no cross-family leak). Anon-only:
+ * no `service_role`, no privilege beyond the synthetic tokens (INV-5/INV-1).
+ *
+ * A missing uid or a `setSession` error THROWS (never silently no-ops) — an
+ * inconsistent seed/env must surface, not degrade quietly.
+ */
+export function asDemoSupabase(
+  client: DemoSessionClient,
+  sessions: DemoSessions,
+): DemoSupabase {
+  const demo: DemoSupabase = Object.assign(client, {
+    async signInAsUid(uid: string): Promise<void> {
+      const tokens = sessions[uid];
+      if (!tokens) {
+        throw new Error(
+          `no seeded demo session for uid ${uid} — VITE_DEMO_SESSIONS is inconsistent with VITE_DEMO_FAMILIES`,
+        );
+      }
+      const { error } = await client.auth.setSession({
+        access_token: tokens.access_token,
+        refresh_token: tokens.refresh_token,
+      });
+      if (error) {
+        throw new Error(`demo session restore failed for uid ${uid}: ${error.message}`);
+      }
+    },
+  });
+  return demo;
+}
+
+/**
+ * The seeded per-family anon-session tokens the production switcher restores from.
+ * Mirrors `loadDemoFamilies`: the director's live-seed step mints one anon session
+ * per demo family and writes a JSON OBJECT (uid → {access_token, refresh_token}) to
+ * `VITE_DEMO_SESSIONS`. Consumed ONLY by `asDemoSupabase` (never shown in the UI),
+ * synthetic-only (INV-1). When unset or malformed the map is empty (fail-safe) — the
+ * switcher then has no DemoSupabase and renders its honest "no seeded families" state.
+ */
+export function loadDemoSessions(): DemoSessions {
+  const raw = import.meta.env.VITE_DEMO_SESSIONS as string | undefined;
+  if (!raw) return {};
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+      return {};
+    }
+    const out: DemoSessions = {};
+    for (const [uid, value] of Object.entries(parsed as Record<string, unknown>)) {
+      if (
+        typeof value === 'object' &&
+        value !== null &&
+        typeof (value as DemoSessionTokens).access_token === 'string' &&
+        typeof (value as DemoSessionTokens).refresh_token === 'string'
+      ) {
+        out[uid] = {
+          access_token: (value as DemoSessionTokens).access_token,
+          refresh_token: (value as DemoSessionTokens).refresh_token,
+        };
+      }
+    }
+    return out;
+  } catch {
+    return {};
+  }
+}
+
+/**
  * The cockpit (admin/closer) URL for the "pages dropbox" quick-jump. INV-11: the
  * one canonical home is the `VITE_COCKPIT_URL` env var (TECH_STACK §5); this falls
  * back to a relative `/` only so the link renders in dev/test without the env set.
