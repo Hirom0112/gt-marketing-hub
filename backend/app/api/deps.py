@@ -115,15 +115,15 @@ def _build_in_memory_repository(params: Params) -> FamilyRepository:
             spike_share=bts.spike_share,
             spread_days=bts.spread_days,
         )
-        return InMemoryFamilyRepository(dataset)
+        return InMemoryFamilyRepository(dataset, params=params)
     if scenario == "realistic":
         cohort = generate_realistic(params=params.realistic)
         # Record the dismiss targets so the observability log can seed the dismiss
         # events for the same families (the dismissed slice of History).
         _realistic_dismissed_family_ids.clear()
         _realistic_dismissed_family_ids.extend(cohort.dismissed_family_ids)
-        return InMemoryFamilyRepository(cohort.dataset)
-    return InMemoryFamilyRepository.seeded()
+        return InMemoryFamilyRepository(cohort.dataset, params=params)
+    return InMemoryFamilyRepository.seeded(params=params)
 
 
 # Dismiss-target ids from the realistic cohort (empty under other scenarios). The

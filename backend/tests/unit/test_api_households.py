@@ -4,11 +4,12 @@
 per household, each child's DERIVED stage plus the household ``worst_stage``
 rollup (the least-advanced child — the weakest link).
 
-Like the drop-off routes, this degrades cleanly off the store seam: the roll-up
-lives only on the live :class:`SupabaseFamilyRepository`; the in-memory v1
-fallback (A-3) has no ``household_roll_up``, so the route returns an empty list
-rather than a 500. These tests cover BOTH the in-memory fallback and a stub repo
-that DOES expose the roll-up.
+The roll-up is implemented on BOTH stores now (TODO.md R1): the live
+:class:`SupabaseFamilyRepository` and the in-memory v1 fallback (A-3), which
+derives the roll-up locally off its synthetic ``student`` rows — so the default
+demo path populates the board, it no longer degrades to ``[]``. The route still
+degrades cleanly (no 500) for any partial repo that lacks the method. These tests
+cover the populated in-memory path, the degrade fallback, and the response shape.
 """
 
 from __future__ import annotations
@@ -29,8 +30,26 @@ def teardown_function() -> None:
     app.dependency_overrides.pop(deps.get_repository, None)
 
 
-def test_households_degrades_to_empty_on_in_memory_repo() -> None:
+def test_households_populates_on_in_memory_synthetic_cohort() -> None:
+    """The default in-memory demo path now returns real households (not []-degrade)."""
+    resp = client.get("/households")
+    assert resp.status_code == 200
+    households = resp.json()["households"]
+    assert households, "the synthetic cohort must populate the board, not degrade to []"
+    # Shape sanity: each row carries a family_id, children, and a worst_stage.
+    row = households[0]
+    assert row["family_id"]
+    assert row["children"]
+    assert row["worst_stage"] in {"interest", "apply", "enroll", "tuition"}
+
+
+class _NoRollUpRepo:
+    """A partial repo that does NOT expose household_roll_up (the degrade case)."""
+
+
+def test_households_degrades_to_empty_when_repo_lacks_method() -> None:
     """A repo without roll-up support ⇒ an empty household list, never a 500."""
+    app.dependency_overrides[deps.get_repository] = lambda: _NoRollUpRepo()
     resp = client.get("/households")
     assert resp.status_code == 200
     assert resp.json() == {"households": []}

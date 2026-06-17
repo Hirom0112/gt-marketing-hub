@@ -23,9 +23,12 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from datetime import datetime
+from pathlib import Path
 from uuid import UUID
 
+from app.core.params import Params, load_params
 from app.core.pipeline import pipeline_counts as core_pipeline_counts
+from app.core.stage_machine import FamilyInputs, derive_stage
 from app.data.models import (
     AppForm,
     CommunityProfile,
@@ -49,6 +52,13 @@ DEFAULT_SEED = 42
 # unbounded — `test_scale_5000_families` drives it directly at N=5000 (NFR-9) — so
 # this only sizes the local demo seed, not the generator's capability.
 DEFAULT_FAMILY_COUNT = 24
+
+# The committed example params, the fallback when no local `params/params.yaml`
+# exists (it is gitignored / absent in the build + test env). Mirrors the same
+# fallback the composition root uses (`app.api.deps`) so a bare-constructed store
+# can still derive stages without a local params.yaml — same values either way
+# (INV-11). `backend/app/data/repository.py` → `parents[3]` is the repo root.
+_EXAMPLE_PARAMS = Path(__file__).resolve().parents[3] / "params" / "params.example.yaml"
 
 
 @dataclass(frozen=True)
@@ -83,6 +93,102 @@ class JoinedStudent:
     app_form: AppForm | None
     enrollment_forms: EnrollmentForms | None
     community_profile: CommunityProfile | None
+
+
+@dataclass(frozen=True)
+class HouseholdChildStage:
+    """One child's DERIVED funnel position within a household roll-up (TODO.md R1).
+
+    The per-child cell of :class:`HouseholdRollUp`: the child's ``student_id``,
+    its display label, and the stage DERIVED on read (A-24 M2) from the child's
+    own ``app_form`` / ``enrollment_forms`` — never the stored placeholder.
+    """
+
+    student_id: UUID
+    display_label: str
+    stage: Stage
+
+
+@dataclass(frozen=True)
+class HouseholdRollUp:
+    """One household's children rolled up to a single row (TODO.md R1).
+
+    Children are grouped by household — keyed by the household's
+    ``family_record.user_id`` (the household identity key; ``None`` for a
+    server-only / unowned household, kept as its own group). ``family_id`` is the
+    household spine's id. ``children`` lists each child's DERIVED stage; the
+    ``worst_stage`` rollup is the LEAST-advanced child stage (the household's
+    weakest link — the one most in need of attention). Pure derivation (no LLM /
+    no write), the per-child analog of the family read (A-24 M2).
+    """
+
+    user_id: UUID | None
+    family_id: UUID
+    children: tuple[HouseholdChildStage, ...]
+    worst_stage: Stage
+
+
+# The §4.8 funnel order, least→most advanced. Used to pick a household's
+# ``worst_stage`` (its least-advanced child — the weakest link to recover).
+_STAGE_ORDER: tuple[Stage, ...] = (Stage.INTEREST, Stage.APPLY, Stage.ENROLL, Stage.TUITION)
+
+
+def roll_up_households(students: list[JoinedStudent]) -> list[HouseholdRollUp]:
+    """Group children by household → one row per household (the shared core logic).
+
+    The single, pure rollup both store impls call (DRY): the Supabase impl
+    delegates here, and the in-memory impl re-derives each child's stage onto the
+    student first then calls here — so the two stores produce byte-identical
+    rollups. Pure: no I/O, no write (INV-2). Each child's stage is read straight
+    off ``js.student.current_stage`` — the caller is responsible for that field
+    already being the DERIVED stage (A-24 M2), which both impls guarantee.
+
+    Households are keyed by ``family_record.user_id`` (the household identity key,
+    TODO.md R1); a ``None``-owner falls back to its own ``family_id`` so unowned
+    households stay separate rather than collapsing into one group. Each row
+    carries every child's stage plus a ``worst_stage`` rollup — the household's
+    LEAST-advanced child (its weakest link). Deterministic, stable order
+    (households by first appearance, children in read order).
+    """
+    groups: dict[tuple[bool, str, str], list[JoinedStudent]] = {}
+    order: list[tuple[bool, str, str]] = []
+    for js in students:
+        uid = js.family.user_id
+        # Group by household: when present, user_id IS the household key (all
+        # children sharing it are one household, even across spine rows during
+        # the backfill window). A NULL-owner (server-only) household has no
+        # user_id, so it falls back to its own family_id — keeping unowned
+        # households separate rather than collapsing them into one None group.
+        key = (False, str(uid), "") if uid is not None else (True, "", str(js.family.family_id))
+        if key not in groups:
+            groups[key] = []
+            order.append(key)
+        groups[key].append(js)
+
+    rollups: list[HouseholdRollUp] = []
+    for key in order:
+        members = groups[key]
+        children = tuple(
+            HouseholdChildStage(
+                student_id=js.student.student_id,
+                display_label=js.student.display_label,
+                stage=js.student.current_stage,  # already the DERIVED stage.
+            )
+            for js in members
+        )
+        worst = min(
+            (c.stage for c in children),
+            key=_STAGE_ORDER.index,
+        )
+        rollups.append(
+            HouseholdRollUp(
+                user_id=members[0].family.user_id,
+                family_id=members[0].family.family_id,
+                children=children,
+                worst_stage=worst,
+            )
+        )
+    return rollups
 
 
 class FamilyRepository(ABC):
@@ -135,6 +241,17 @@ class FamilyRepository(ABC):
         """Per-stage tally over ``family_record.current_stage`` (FR-2.1)."""
         raise NotImplementedError
 
+    def household_roll_up(self) -> list[HouseholdRollUp]:
+        """Group children by household → one row per household (TODO.md R1).
+
+        Concrete default (not abstract) so the ``GET /households`` route's
+        ``getattr`` fallback keeps working for any partial test double, and so the
+        real impls can override with the shared :func:`roll_up_households` logic.
+        The base seam returns ``[]`` (no children known) — both production stores
+        override it. See :func:`roll_up_households` for the grouping contract.
+        """
+        return []
+
     # ----------------------------------------------------------- write seam
     # The reconcile flow (FR-2.6) PERSISTS its result through these write methods
     # (TODO.md R1). The deterministic core still owns the *derivation* (INV-2);
@@ -171,7 +288,13 @@ class InMemoryFamilyRepository(FamilyRepository):
     production replaces it with a Supabase-backed :class:`FamilyRepository`.
     """
 
-    def __init__(self, dataset: SyntheticDataset) -> None:
+    def __init__(self, dataset: SyntheticDataset, *, params: Params | None = None) -> None:
+        # `params` is only needed to DERIVE each child's stage on read for the
+        # household roll-up (A-24 M2) — kept keyword-only + optional so the many
+        # existing call sites (and `.seeded()`) are unchanged. When omitted it is
+        # resolved lazily on first use (see `_resolve_params`), never at import, so
+        # constructing the store never touches the filesystem.
+        self._params: Params | None = params
         self._families: list[FamilyRecord] = list(dataset.families)
         # family_id → spine row, so get_family is genuinely O(1) and list_joined
         # is a single O(n) pass (not N linear scans — the O(n²) that made
@@ -203,9 +326,14 @@ class InMemoryFamilyRepository(FamilyRepository):
         *,
         n: int = DEFAULT_FAMILY_COUNT,
         seed: int = DEFAULT_SEED,
+        params: Params | None = None,
     ) -> InMemoryFamilyRepository:
-        """Hydrate the store from the synthetic generator (the only seed writer)."""
-        return cls(generate(n=n, seed=seed))
+        """Hydrate the store from the synthetic generator (the only seed writer).
+
+        ``params`` is forwarded for stage derivation (the household roll-up); when
+        omitted it is resolved lazily on first use (see :meth:`_resolve_params`).
+        """
+        return cls(generate(n=n, seed=seed), params=params)
 
     def list_families(
         self,
@@ -271,6 +399,58 @@ class InMemoryFamilyRepository(FamilyRepository):
         # in `core/pipeline.py` so it is defined once. A SQL-backed store maps the
         # same contract to a `GROUP BY current_stage`.
         return core_pipeline_counts(self._families)
+
+    def _resolve_params(self) -> Params:
+        """The params for stage derivation, lazily loaded + cached (INV-11).
+
+        The composition root passes the active params in; a bare construction
+        (e.g. ``.seeded()`` in a test, or the default demo path) loads them on
+        first use — never at import — so the store is cheap to build.
+        """
+        if self._params is None:
+            try:
+                self._params = load_params()
+            except FileNotFoundError:
+                # No local params.yaml (gitignored / absent): fall back to the
+                # committed example, exactly as the composition root does.
+                self._params = load_params(_EXAMPLE_PARAMS)
+        return self._params
+
+    def household_roll_up(self) -> list[HouseholdRollUp]:
+        """Group synthetic children by household (TODO.md R1) — see the shared helper.
+
+        Behaviorally identical to the live impl: each child's stage is DERIVED on
+        read with the SAME pure stage_machine the family/live path uses (A-24 M2)
+        — the synthetic ``student.current_stage`` is a write-time placeholder that
+        can disagree with the derived funnel position (an apply-stage child whose
+        application is not yet submitted derives to ``interest``). The DERIVED
+        stage is written back onto each (frozen) student, then the shared
+        :func:`roll_up_households` does the grouping + ``worst_stage`` rollup so
+        both stores produce byte-identical rows.
+        """
+        params = self._resolve_params()
+        derived: list[JoinedStudent] = []
+        for js in self.list_students():
+            stage = derive_stage(
+                FamilyInputs(
+                    app_form=js.app_form,
+                    enrollment_forms=js.enrollment_forms,
+                    stalled_since=js.student.stalled_since,
+                ),
+                params,
+            )
+            student = js.student.model_copy(update={"current_stage": stage})
+            derived.append(
+                JoinedStudent(
+                    student=student,
+                    family=js.family,
+                    lead=js.lead,
+                    app_form=js.app_form,
+                    enrollment_forms=js.enrollment_forms,
+                    community_profile=js.community_profile,
+                )
+            )
+        return roll_up_households(derived)
 
     # ----------------------------------------------------------- write seam
     def _replace(self, family_id: UUID, **update: object) -> None:

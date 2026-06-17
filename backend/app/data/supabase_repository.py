@@ -61,7 +61,20 @@ from app.data.models import (
     Stage,
     Student,
 )
-from app.data.repository import FamilyRepository, JoinedFamily, JoinedStudent
+from app.data.repository import (
+    FamilyRepository,
+    HouseholdChildStage,
+    HouseholdRollUp,
+    JoinedFamily,
+    JoinedStudent,
+    roll_up_households,
+)
+
+# Re-exported for back-compat: these moved to `app.data.repository` (the shared
+# home both stores import from, since this module already imports from there — so
+# the helper/dataclasses live there to avoid a circular import). Existing callers
+# that import them from here keep working.
+__all__ = ["HouseholdChildStage", "HouseholdRollUp"]
 
 # PostgREST surface (the API's own fixed routes — INV-11 does not apply to a
 # third party's URLs, the same carve-out as the HubSpot adapter's object paths).
@@ -122,44 +135,6 @@ class DropOffBucket:
     form_key: str | None
     field_key: str | None
     count: int
-
-
-@dataclass(frozen=True)
-class HouseholdChildStage:
-    """One child's DERIVED funnel position within a household roll-up (TODO.md R1).
-
-    The per-child cell of :class:`HouseholdRollUp`: the child's ``student_id``,
-    its display label, and the stage DERIVED on read (A-24 M2) from the child's
-    own ``app_form`` / ``enrollment_forms`` — never the stored placeholder.
-    """
-
-    student_id: UUID
-    display_label: str
-    stage: Stage
-
-
-@dataclass(frozen=True)
-class HouseholdRollUp:
-    """One household's children rolled up to a single row (TODO.md R1).
-
-    Children are grouped by household — keyed by the household's
-    ``family_record.user_id`` (the household identity key; ``None`` for a
-    server-only / unowned household, kept as its own group). ``family_id`` is the
-    household spine's id. ``children`` lists each child's DERIVED stage; the
-    ``worst_stage`` rollup is the LEAST-advanced child stage (the household's
-    weakest link — the one most in need of attention). Pure derivation (no LLM /
-    no write), the per-child analog of the family read (A-24 M2).
-    """
-
-    user_id: UUID | None
-    family_id: UUID
-    children: tuple[HouseholdChildStage, ...]
-    worst_stage: Stage
-
-
-# The §4.8 funnel order, least→most advanced. Used to pick a household's
-# ``worst_stage`` (its least-advanced child — the weakest link to recover).
-_STAGE_ORDER: tuple[Stage, ...] = (Stage.INTEREST, Stage.APPLY, Stage.ENROLL, Stage.TUITION)
 
 
 class SupabaseError(RuntimeError):
@@ -467,52 +442,15 @@ class SupabaseFamilyRepository(FamilyRepository):
     def household_roll_up(self) -> list[HouseholdRollUp]:
         """Group children by household → one row per household with per-child stages.
 
-        Households are keyed by ``family_record.user_id`` (the household identity
-        key, TODO.md R1; ``None`` is its own server-only group). Each row carries
-        every child's DERIVED stage (A-24 M2) and a ``worst_stage`` rollup — the
-        household's LEAST-advanced child (the weakest link most in need of
-        attention). Pure derivation over :meth:`list_students`; deterministic,
-        stable order (households by first appearance, children in read order).
+        Delegates to the shared pure :func:`app.data.repository.roll_up_households`
+        (DRY: the same grouping both stores use). ``list_students`` here already
+        writes the DERIVED stage (A-24 M2) onto each student, so the helper's
+        "stage is already derived" contract holds. Households are keyed by
+        ``family_record.user_id`` (TODO.md R1; ``None`` is its own server-only
+        group); each row carries every child's stage + a ``worst_stage`` rollup
+        (the least-advanced child). Behavior is unchanged by the extraction.
         """
-        groups: dict[tuple[bool, str, str], list[JoinedStudent]] = {}
-        order: list[tuple[bool, str, str]] = []
-        for js in self.list_students():
-            uid = js.family.user_id
-            # Group by household: when present, user_id IS the household key (all
-            # children sharing it are one household, even across spine rows during
-            # the backfill window). A NULL-owner (server-only) household has no
-            # user_id, so it falls back to its own family_id — keeping unowned
-            # households separate rather than collapsing them into one None group.
-            key = (False, str(uid), "") if uid is not None else (True, "", str(js.family.family_id))
-            if key not in groups:
-                groups[key] = []
-                order.append(key)
-            groups[key].append(js)
-
-        rollups: list[HouseholdRollUp] = []
-        for key in order:
-            members = groups[key]
-            children = tuple(
-                HouseholdChildStage(
-                    student_id=js.student.student_id,
-                    display_label=js.student.display_label,
-                    stage=js.student.current_stage,  # already the DERIVED stage.
-                )
-                for js in members
-            )
-            worst = min(
-                (c.stage for c in children),
-                key=_STAGE_ORDER.index,
-            )
-            rollups.append(
-                HouseholdRollUp(
-                    user_id=members[0].family.user_id,
-                    family_id=members[0].family.family_id,
-                    children=children,
-                    worst_stage=worst,
-                )
-            )
-        return rollups
+        return roll_up_households(self.list_students())
 
     def get_family(self, family_id: UUID) -> JoinedFamily | None:
         rows = self._get(
