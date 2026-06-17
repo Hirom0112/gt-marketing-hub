@@ -17,14 +17,8 @@ from uuid import UUID
 
 from app.adapters.sis.base import MatchAttrs, RosterRecord
 from app.core.params import Params
-from app.data.models import FundingState
+from app.core.sis_reconcile import PAID_FUNDING_STATES
 from app.data.synthetic import _EPOCH, SyntheticDataset
-
-# "Paid" = at/after the §5.4 first-installment floor — the families a SIS should
-# already carry; divergence from that expectation is what the buckets surface.
-_PAID: frozenset[FundingState] = frozenset(
-    {FundingState.FIRST_INSTALLMENT_RECEIVED, FundingState.FUNDED}
-)
 
 _CONFIRMED = "confirmed"
 _PENDING = "pending"
@@ -46,7 +40,7 @@ def generate_sis_roster(
     phone_by_family = {lead.family_id: lead.synthetic_phone for lead in dataset.leads}
 
     paid = sorted(
-        (f for f in dataset.families if f.funding_state in _PAID),
+        (f for f in dataset.families if f.funding_state in PAID_FUNDING_STATES),
         key=lambda f: str(f.family_id),
     )
     enough = len(paid) >= 3

@@ -20,9 +20,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 from uuid import UUID
 
-from app.adapters.sis.base import MatchAttrs, RosterRecord
 from app.core.params import load_params
-from app.core.sis_reconcile import FamilyMatchKey, SisBucket, reconcile
+from app.core.sis_reconcile import FamilyMatchKey, SisBucket, SisRosterRow, reconcile
 
 EXAMPLE_PARAMS = Path(__file__).resolve().parents[3] / "params" / "params.example.yaml"
 
@@ -46,30 +45,34 @@ def test_match_and_bucket() -> None:
     ]
     roster = [
         # exact-email + confirmed ⇒ ✅
-        RosterRecord(
+        SisRosterRow(
             external_id="SIS-1",
-            match_attrs=MatchAttrs(email="a@example.invalid", phone="555-0110"),
+            email="a@example.invalid",
+            phone="555-0110",
             enrollment_status="confirmed",
             confirmed_at=confirmed_at,
         ),
         # exact-email but SIS not confirmed ⇒ 🟡
-        RosterRecord(
+        SisRosterRow(
             external_id="SIS-2",
-            match_attrs=MatchAttrs(email="b@example.invalid", phone="555-0120"),
+            email="b@example.invalid",
+            phone="555-0120",
             enrollment_status="pending",
             confirmed_at=None,
         ),
         # phone-only match (different email) ⇒ ambiguous → merge queue
-        RosterRecord(
+        SisRosterRow(
             external_id="SIS-9",
-            match_attrs=MatchAttrs(email="someone-else@example.invalid", phone="555-0140"),
+            email="someone-else@example.invalid",
+            phone="555-0140",
             enrollment_status="confirmed",
             confirmed_at=confirmed_at,
         ),
         # a confirmed row for the UNPAID family — must still be ignored (not paid)
-        RosterRecord(
+        SisRosterRow(
             external_id="SIS-5",
-            match_attrs=MatchAttrs(email="e@example.invalid", phone="555-0150"),
+            email="e@example.invalid",
+            phone="555-0150",
             enrollment_status="confirmed",
             confirmed_at=confirmed_at,
         ),
@@ -104,9 +107,10 @@ def test_thresholds_read_from_params_not_hardcoded() -> None:
     params = load_params(EXAMPLE_PARAMS)
     key = [FamilyMatchKey(_FID_AMBIGUOUS, "d@example.invalid", "555-0140", paid=True)]
     roster = [
-        RosterRecord(
+        SisRosterRow(
             external_id="SIS-9",
-            match_attrs=MatchAttrs(email="other@example.invalid", phone="555-0140"),
+            email="other@example.invalid",
+            phone="555-0140",
             enrollment_status="confirmed",
             confirmed_at=datetime(2026, 6, 10, tzinfo=UTC),
         )

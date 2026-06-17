@@ -1,9 +1,8 @@
 """M5 — pure SIS match + bucket classifier (deterministic core; INV-2/INV-11).
 
 The reconcile core matches GT's **paid** families against a school's SIS roster
-(:class:`~app.adapters.sis.base.RosterRecord` — the only SIS view it consumes,
-INV-9) on a normalized email/phone score, then sorts each into a bucket whose
-boundaries come entirely from ``params.sis`` (INV-11):
+on a normalized email/phone score, then sorts each into a bucket whose boundaries
+come entirely from ``params.sis`` (INV-11):
 
 * ✅ ``confirmed``        — confident match, SIS row confirmed.
 * 🟡 ``records_lag``      — confident match, SIS row not yet confirmed.
@@ -12,6 +11,10 @@ boundaries come entirely from ``params.sis`` (INV-11):
   carries the candidate SIS id for the **human merge queue** and is NEVER an
   auto-merge/auto-confirm (INV-2/INV-4).
 
+Core purity (ARCHITECTURE §3): this module imports nothing from ``app.adapters``
+or ``app.ai``. The SIS boundary shape lives in ``app.adapters.sis.base``; the
+matcher consumes a flat core-local :class:`SisRosterRow` instead, and the edge
+(``app.data.sis_reconcile_job``) converts the adapter's ``RosterRecord`` into it.
 No I/O, no LLM, no clock: a pure function of (families, roster, params). Non-paid
 families are not reconciled — a SIS has no reason to carry them yet.
 """
@@ -25,11 +28,18 @@ from datetime import datetime
 from enum import StrEnum
 from uuid import UUID
 
-from app.adapters.sis.base import RosterRecord
 from app.core.params import Params
+from app.data.models import FundingState
 
 _EXACT_EMAIL_CONFIDENCE = 1.0  # an exact email match is a full-confidence match
 _NO_MATCH_CONFIDENCE = 0.0
+
+# "Paid" = at/after the §5.4 first-installment floor — the families a SIS should
+# already carry; divergence from that is what the reconcile buckets surface. The
+# canonical home, consumed by the roster generator and the reconcile job.
+PAID_FUNDING_STATES: frozenset[FundingState] = frozenset(
+    {FundingState.FIRST_INSTALLMENT_RECEIVED, FundingState.FUNDED}
+)
 
 
 class SisBucket(StrEnum):
@@ -39,6 +49,22 @@ class SisBucket(StrEnum):
     RECORDS_LAG = "records_lag"
     PAID_NOT_IN_SIS = "paid_not_in_sis"
     AMBIGUOUS = "ambiguous"  # → human merge queue, never a silent merge
+
+
+@dataclass(frozen=True)
+class SisRosterRow:
+    """The flat, core-local view of one SIS roster row the matcher consumes.
+
+    Mirrors the fields of the adapter boundary's ``RosterRecord`` (email/phone
+    flattened off ``match_attrs``) so the pure core need not import
+    ``app.adapters`` (ARCHITECTURE §3 core purity). The edge converts.
+    """
+
+    external_id: str
+    email: str | None
+    phone: str | None
+    enrollment_status: str
+    confirmed_at: datetime | None = None
 
 
 @dataclass(frozen=True)
@@ -82,54 +108,51 @@ def _norm_phone(value: str | None) -> str | None:
 
 
 def _best_match(
-    key: FamilyMatchKey, roster: list[RosterRecord], phone_only: float
-) -> tuple[float, RosterRecord | None]:
-    """Return the highest-confidence (score, record) for ``key`` over the roster."""
+    key: FamilyMatchKey, roster: list[SisRosterRow], phone_only: float
+) -> tuple[float, SisRosterRow | None]:
+    """Return the highest-confidence (score, row) for ``key`` over the roster."""
     best_score = _NO_MATCH_CONFIDENCE
-    best_record: RosterRecord | None = None
+    best_row: SisRosterRow | None = None
     key_email, key_phone = _norm_email(key.email), _norm_phone(key.phone)
-    for record in roster:
-        rec_email, rec_phone = (
-            _norm_email(record.match_attrs.email),
-            _norm_phone(record.match_attrs.phone),
-        )
-        if key_email and rec_email and key_email == rec_email:
+    for row in roster:
+        row_email, row_phone = _norm_email(row.email), _norm_phone(row.phone)
+        if key_email and row_email and key_email == row_email:
             score = _EXACT_EMAIL_CONFIDENCE
-        elif key_phone and rec_phone and key_phone == rec_phone:
+        elif key_phone and row_phone and key_phone == row_phone:
             score = phone_only
         else:
             score = _NO_MATCH_CONFIDENCE
         if score > best_score:
-            best_score, best_record = score, record
-    return best_score, best_record
+            best_score, best_row = score, row
+    return best_score, best_row
 
 
-def reconcile_family(key: FamilyMatchKey, roster: list[RosterRecord], params: Params) -> SisVerdict:
+def reconcile_family(key: FamilyMatchKey, roster: list[SisRosterRow], params: Params) -> SisVerdict:
     """Classify one paid family against the roster into a :class:`SisBucket`."""
     sis = params.sis
-    score, record = _best_match(key, roster, sis.phone_only_confidence)
+    score, row = _best_match(key, roster, sis.phone_only_confidence)
 
     if score >= sis.match_confidence_cutoff:
         # A confident match. Confirmed only if the SIS row itself is confirmed;
         # otherwise the SIS is lagging behind GT's recorded payment.
         if (
-            record is not None
-            and record.enrollment_status == "confirmed"
-            and record.confirmed_at is not None
+            row is not None
+            and row.enrollment_status == "confirmed"
+            and row.confirmed_at is not None
             and score >= sis.confirmed_min_confidence
         ):
             return SisVerdict(
-                key.family_id, True, record.confirmed_at, SisBucket.CONFIRMED, record.external_id
+                key.family_id, True, row.confirmed_at, SisBucket.CONFIRMED, row.external_id
             )
         return SisVerdict(
-            key.family_id, True, None, SisBucket.RECORDS_LAG, record.external_id if record else None
+            key.family_id, True, None, SisBucket.RECORDS_LAG, row.external_id if row else None
         )
 
     if score > sis.paid_not_in_sis_max_confidence:
         # Uncertain — a candidate exists but is below the confident cutoff: route
         # the pair to the human merge queue, never an auto-merge (INV-2/INV-4).
         return SisVerdict(
-            key.family_id, True, None, SisBucket.AMBIGUOUS, record.external_id if record else None
+            key.family_id, True, None, SisBucket.AMBIGUOUS, row.external_id if row else None
         )
 
     # No usable match for a paid family ⇒ paid-not-in-SIS.
@@ -137,8 +160,8 @@ def reconcile_family(key: FamilyMatchKey, roster: list[RosterRecord], params: Pa
 
 
 def reconcile(
-    keys: Iterable[FamilyMatchKey], roster: Iterable[RosterRecord], params: Params
+    keys: Iterable[FamilyMatchKey], roster: Iterable[SisRosterRow], params: Params
 ) -> list[SisVerdict]:
     """Reconcile every PAID family against the roster (input order preserved)."""
-    records = list(roster)
-    return [reconcile_family(key, records, params) for key in keys if key.paid]
+    rows = list(roster)
+    return [reconcile_family(key, rows, params) for key in keys if key.paid]
