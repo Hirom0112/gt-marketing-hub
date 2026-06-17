@@ -135,8 +135,8 @@ _SILVA = ConversionSignals(
         (_OKAFOR, "High"),
         (_RIVERA, "High"),
         (_NGUYEN, "Med"),
-        (_KIM, "Med"),
         (_PATEL, "Med"),
+        (_KIM, "Low"),
         (_SILVA, "Low"),
     ],
     ids=["okafor", "rivera", "nguyen", "kim", "patel", "silva"],
@@ -167,7 +167,7 @@ def test_demo_family_score_band_and_top_factor(
 def test_score_reads_params_not_a_hardcoded_literal() -> None:
     """A pinned literal AND its param source — the test fails if the weight drifts.
 
-    Okafor (the prime case) scores 0.8450 against the COMMITTED example weights.
+    Okafor (the prime case) scores 0.8875 against the COMMITTED example weights.
     We assert BOTH the literal and the params it derives from, so retuning a
     weight without updating this expectation flips it red (CLAUDE.md §4.1).
     """
@@ -175,14 +175,14 @@ def test_score_reads_params_not_a_hardcoded_literal() -> None:
     w = params.conversion.weights
     # Pin the committed weights so the literal below is anchored to params.
     assert (w.affluence, w.income, w.children, w.funding, w.depth) == (
-        0.20,
-        0.20,
-        0.15,
         0.25,
+        0.25,
+        0.10,
+        0.20,
         0.20,
     )
     result = conversion_likelihood(_OKAFOR, params)
-    assert round(result.score, 4) == 0.8450
+    assert round(result.score, 4) == 0.8875
 
 
 def test_none_income_uses_the_neutral_value_not_zero() -> None:

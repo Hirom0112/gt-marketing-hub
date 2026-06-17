@@ -398,17 +398,17 @@ def test_params_loads_conversion_block() -> None:
     # Five dimension weights — MUST sum to 1.0 (the value term partition guard).
     w = conversion.weights
     assert (w.affluence, w.income, w.children, w.funding, w.depth) == (
-        0.20,
-        0.20,
-        0.15,
         0.25,
+        0.25,
+        0.10,
+        0.20,
         0.20,
     )
     assert w.affluence + w.income + w.children + w.funding + w.depth == pytest.approx(1.0)
 
     # Band cutoffs (High >= high_cutoff, Med >= med_cutoff, else Low).
     assert conversion.band_high_cutoff == 0.65
-    assert conversion.band_med_cutoff == 0.40
+    assert conversion.band_med_cutoff == 0.45
 
     # Neighborhood→affluence table (aggregate area labels only — P-4/INV-6) + default.
     assert conversion.neighborhood_affluence["Highland Park"] == 0.95

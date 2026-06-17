@@ -19,13 +19,13 @@ work_queue:                 # FR-2.5 — score = w_recoverability·recoverabilit
 
 conversion:                 # DH-1 — deterministic conversion-likelihood signal (replaces the "MAP signal" in the deal view): who is most likely to enroll + the top contributing factor. score = Σ weight·dimension, each dimension ∈ [0,1] ⇒ score ∈ [0,1].
   weights:                  # the five dimension weights — MUST sum to 1.0 (value-term partition guard, INV-11)
-    affluence: 0.20           # neighborhood affluence (richer area ⇒ more likely to afford tuition) — aggregate area LABEL only (P-4/INV-6)
-    income: 0.20              # self-reported family income (higher ⇒ higher)
-    children: 0.15            # number of children (more ⇒ more commitment/value)
-    funding: 0.25             # funding type (a funded voucher path ⇒ money lined up ⇒ likelier to close) — the heaviest single dimension
+    affluence: 0.25           # neighborhood affluence (richer area ⇒ more likely to afford tuition) — aggregate area LABEL only (P-4/INV-6)
+    income: 0.25              # self-reported family income (higher ⇒ higher) — co-leads with affluence: ability-to-pay is the strongest "use it to close" lever
+    children: 0.10            # number of children (more ⇒ more commitment/value)
+    funding: 0.20             # funding type (a funded voucher path ⇒ money lined up ⇒ likelier to close)
     depth: 0.20               # application depth — the REUSED recoverability term (funnel depth), NOT a new funnel score
   band_high_cutoff: 0.65    # score >= this ⇒ "High"
-  band_med_cutoff: 0.40     # score >= this (and < high) ⇒ "Med"; else "Low"
+  band_med_cutoff: 0.45     # score >= this (and < high) ⇒ "Med"; else "Low"
   neighborhood_affluence:   # coarse AGGREGATE area label → [0,1] affluence (P-4/INV-6: a district label, NEVER precise minor geo)
     Highland Park: 0.95       # affluent district (HIGH)
     Riverside: 0.60           # middle district (MED)
