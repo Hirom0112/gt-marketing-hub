@@ -19,11 +19,16 @@ SIS_MODE* — not that a working sim adapter returns records.
 from __future__ import annotations
 
 from abc import ABC
+from pathlib import Path
 
 import pytest
 
 from app.adapters.registry import get_enrollment_system_adapter
 from app.adapters.sis.base import EnrollmentSystemAdapter, MatchAttrs, RosterRecord
+
+# The committed example params (the loader's bare default is gitignored); ``parents[3]``
+# from ``tests/adapters/`` is the repo root (the house pattern).
+EXAMPLE_PARAMS = Path(__file__).resolve().parents[3] / "params" / "params.example.yaml"
 
 
 def test_roster_record_contract(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -72,3 +77,37 @@ def test_roster_record_contract(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("SIS_MODE", "live")
     with pytest.raises(NotImplementedError):
         get_enrollment_system_adapter()
+
+
+def test_demo_scenario_adapter_yields_all_three_buckets(monkeypatch: pytest.MonkeyPatch) -> None:
+    """DH-3: under ``COCKPIT_SCENARIO=demo`` the registry adapter is aligned to the
+    served demo cohort, so ``run_sis_reconcile`` yields ≥1 of every SIS bucket.
+
+    Before the fix the registry built the roster over an INDEPENDENT default cohort
+    (``from_seed(DEFAULT_FAMILY_COUNT, DEFAULT_SEED)``) regardless of scenario, so
+    no demo family matched the roster ⇒ every paid family fell into 🔴 paid_not_in_sis
+    (0 🟡, 0 ✅). After the fix the demo roster is built over ``generate_demo_cohort``
+    — the SAME dataset the cockpit serves — so all three buckets are reachable.
+    """
+    from app.core.params import load_params
+    from app.core.sis_reconcile import SisBucket
+    from app.data.repository import InMemoryFamilyRepository
+    from app.data.sis_reconcile_job import run_sis_reconcile
+    from app.data.synthetic import generate_demo_cohort
+
+    params = load_params(EXAMPLE_PARAMS)
+
+    monkeypatch.setenv("SIS_MODE", "simulate")
+    monkeypatch.setenv("COCKPIT_SCENARIO", "demo")
+
+    # The SAME repository the demo path serves (deps.py `scenario == "demo"` branch).
+    repo = InMemoryFamilyRepository(generate_demo_cohort(params=params), params=params)
+    # The registry hands back the SIS adapter — now scenario-aware (DH-3 fix).
+    adapter = get_enrollment_system_adapter()
+
+    verdicts = run_sis_reconcile(repo, adapter, params)
+    buckets = {v.bucket for v in verdicts}
+
+    assert SisBucket.PAID_NOT_IN_SIS in buckets, "≥1 🔴 paid_not_in_sis"
+    assert SisBucket.RECORDS_LAG in buckets, "≥1 🟡 records_lag"
+    assert SisBucket.CONFIRMED in buckets, "≥1 ✅ confirmed"

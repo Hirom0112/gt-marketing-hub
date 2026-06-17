@@ -301,7 +301,9 @@ def get_enrollment_system_adapter() -> EnrollmentSystemAdapter:
     (read only through :func:`app.core.settings.get_settings`):
 
     - ``simulate`` (v1 default) ⇒ a ``SimulatedSISAdapter`` reading the synthetic
-      roster (M5) — built over the same default cohort the cockpit serves.
+      roster (M5) — built over the same cohort the cockpit serves, selected by
+      ``COCKPIT_SCENARIO`` exactly as ``deps.py`` does (DH-3): the curated demo
+      cohort under ``COCKPIT_SCENARIO=demo``, else the default June cohort.
     - ``live`` ⇒ ``NotImplementedError`` — no ``LiveSISAdapter`` per a real SIS in
       v1; fail loud rather than silently read an external roster (INV-9).
 
@@ -313,15 +315,37 @@ def get_enrollment_system_adapter() -> EnrollmentSystemAdapter:
     """
     mode = get_settings().sis_mode
     if mode == "simulate":
-        # M5: the synthetic-roster-backed SimulatedSISAdapter, built over the SAME
-        # default June cohort the in-memory cockpit repository serves
-        # (``generate(DEFAULT_FAMILY_COUNT, DEFAULT_SEED)``) so the reconcile
-        # buckets line up with the families on screen. INV-1 synthetic.
+        # M5: the synthetic-roster-backed SimulatedSISAdapter. The roster MUST be
+        # built over the SAME cohort the cockpit serves so the reconcile buckets
+        # line up with the families on screen — so the adapter is scenario-aware,
+        # mirroring how ``deps.py`` selects the served cohort by ``COCKPIT_SCENARIO``
+        # (DH-3). INV-1 synthetic.
         from app.adapters.sis.simulated import SimulatedSISAdapter
+
+        params = _load_params()
+        # Read the scenario EXACTLY as deps.py does, so the two never diverge.
+        scenario = (os.environ.get("COCKPIT_SCENARIO", "") or "").strip().lower()
+        if scenario == "demo":
+            # DH-3: align the roster to the served curated demo cohort
+            # (``generate_demo_cohort``; deps.py `scenario == "demo"` branch). The
+            # ROSTER divergence seed is independent of the cohort's own seed — it
+            # only drives which paid family lands in which bucket. Reuse the shared
+            # back_to_school seed (the same seed the demo-cohort divergence test
+            # uses in tests/data/test_demo_cohort.py) so all three buckets seed
+            # deterministically (INV-11: a named params value, not an inline magic).
+            from app.data.synthetic import generate_demo_cohort
+
+            return SimulatedSISAdapter.from_cohort(
+                generate_demo_cohort(params=params),
+                seed=params.back_to_school.seed,
+                params=params,
+            )
+        # Any other / unset scenario ⇒ the unchanged default-cohort path: the roster
+        # over ``generate(DEFAULT_FAMILY_COUNT, DEFAULT_SEED)``.
         from app.data.repository import DEFAULT_FAMILY_COUNT, DEFAULT_SEED
 
         return SimulatedSISAdapter.from_seed(
-            n=DEFAULT_FAMILY_COUNT, seed=DEFAULT_SEED, params=_load_params()
+            n=DEFAULT_FAMILY_COUNT, seed=DEFAULT_SEED, params=params
         )
     raise NotImplementedError(
         "No LiveSISAdapter in v1: SIS_MODE='live' is reserved for a supplied "
