@@ -504,8 +504,17 @@ def test_guard2_read_mirror_returns_only_stage_and_timestamp() -> None:
 
     mirror = adapter.read_mirror(uuid4())
 
-    # MirrorState carries ONLY stage + mirror_updated_at — structurally PII-free.
-    assert set(mirror.__slots__) == {"stage", "mirror_updated_at"}
+    # MirrorState carries ONLY PII-free reconcile fields: funnel stage, the mirror
+    # timestamp, the funding-state enum, and the HubSpot OWNER id (a staff user id —
+    # never contact/family/minor PII). This exact-set assertion still fails CLOSED
+    # if anyone adds a PII-carrying slot (e.g. name/email/dob) — the multi-field
+    # reconcile widening (R1) is bounded to these four (INV-1 firewall, AUDIT/R1).
+    assert set(mirror.__slots__) == {
+        "stage",
+        "mirror_updated_at",
+        "funding_state",
+        "owner",
+    }
     assert mirror.stage is Stage.APPLY
 
 

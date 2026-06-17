@@ -16,7 +16,7 @@ Pure unit: no I/O, no adapters, no LLM — only the model + the deriver.
 from __future__ import annotations
 
 from datetime import UTC, datetime
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 from app.core.seam import (
     MirrorState,
@@ -25,7 +25,7 @@ from app.core.seam import (
     derive_seam_status,
     propose_reconcile,
 )
-from app.data.models import FamilyRecord, SeamStatus, Stage
+from app.data.models import FamilyRecord, FundingState, SeamStatus, Stage
 
 # A fixed clock so every comparison is exact and reproducible (no magic numbers
 # floating in the assertions — all instants derive from these anchors).
@@ -39,13 +39,17 @@ def _family_record(
     updated_at: datetime,
     crm_synced_at: datetime | None,
     current_stage: Stage = Stage.APPLY,
+    funding_state: FundingState = FundingState.NONE,
+    user_id: UUID | None = None,
 ) -> FamilyRecord:
     """A FamilyRecord seeded with just the §4.1 seam-relevant columns."""
     return FamilyRecord(
         family_id=uuid4(),
+        user_id=user_id,
         display_name="The Rivera Family",
         primary_contact_synthetic_email="rivera.synthetic@example.invalid",
         current_stage=current_stage,
+        funding_state=funding_state,
         attribution_source="referral",
         attribution_utm={"utm_source": "newsletter"},
         updated_at=updated_at,
@@ -93,6 +97,90 @@ def test_derive_conflict() -> None:
     conflicting = _family_record(updated_at=_T0, crm_synced_at=_AFTER, current_stage=Stage.APPLY)
     mirror_diverges = MirrorState(stage=Stage.ENROLL, mirror_updated_at=_T0)
     assert derive_seam_status(conflicting, mirror_diverges) is SeamStatus.CONFLICT
+
+
+# ---------------------------------------------------------------------------
+# R1 — multi-field reconcile with per-field authority (TODO.md R1; §4.7).
+# `funding_state` is DB-authoritative (DB always wins → drift is a pending push,
+# never a conflict). `owner` is CRM-authoritative (human-edited in HubSpot →
+# any divergence is a genuine conflict, never silently overwritten). Row status
+# aggregates per-field results: any conflict ⇒ conflict; else any unsynced ⇒
+# unsynced; else synced.
+# ---------------------------------------------------------------------------
+
+
+def test_funding_state_drift_is_db_authoritative_unsynced() -> None:
+    """`funding_state` diverges but `stage` matches ⇒ drift, DB wins (unsynced).
+
+    The mirror holds a stale `funding_state`; the stage agrees and crm_synced_at
+    is behind updated_at. `funding_state` is DB-authoritative, so its divergence
+    is a pending push (→ push_local), NOT a conflict — even though the value
+    differs. Aggregated row status is `unsynced`.
+    """
+    record = _family_record(
+        updated_at=_T0,
+        crm_synced_at=_BEFORE,
+        current_stage=Stage.APPLY,
+        funding_state=FundingState.GT_CONFIRMED,
+    )
+    # Mirror agrees on stage, but holds a stale (diverging) funding_state.
+    mirror = MirrorState(
+        stage=Stage.APPLY,
+        funding_state=FundingState.APPLIED,
+        mirror_updated_at=_BEFORE,
+    )
+    assert derive_seam_status(record, mirror) is SeamStatus.UNSYNCED
+
+    proposal = propose_reconcile(record, mirror)
+    assert proposal is not None
+    assert proposal.direction is ReconcileDirection.PUSH_LOCAL
+
+
+def test_owner_divergence_is_crm_authoritative_conflict() -> None:
+    """`owner` diverges ⇒ conflict (CRM-authoritative, never overwritten).
+
+    Even with timestamps that would otherwise read `synced` (crm_synced_at after
+    updated_at) and stage/funding agreeing, a diverging CRM-authoritative `owner`
+    is a genuine conflict the gate must flag, not silently push over.
+    """
+    local_owner = uuid4()
+    record = _family_record(
+        updated_at=_T0,
+        crm_synced_at=_AFTER,
+        current_stage=Stage.APPLY,
+        funding_state=FundingState.NONE,
+        user_id=local_owner,
+    )
+    mirror = MirrorState(
+        stage=Stage.APPLY,
+        funding_state=FundingState.NONE,
+        owner="someone-else-in-hubspot",
+        mirror_updated_at=_AFTER,
+    )
+    assert derive_seam_status(record, mirror) is SeamStatus.CONFLICT
+
+    proposal = propose_reconcile(record, mirror)
+    assert proposal is not None
+    assert proposal.direction is ReconcileDirection.FLAG_CONFLICT
+
+
+def test_all_tracked_fields_match_is_synced() -> None:
+    """Every tracked field agrees and CRM is fresh ⇒ `synced` (§4.7)."""
+    local_owner = uuid4()
+    record = _family_record(
+        updated_at=_T0,
+        crm_synced_at=_AFTER,
+        current_stage=Stage.APPLY,
+        funding_state=FundingState.GT_CONFIRMED,
+        user_id=local_owner,
+    )
+    mirror = MirrorState(
+        stage=Stage.APPLY,
+        funding_state=FundingState.GT_CONFIRMED,
+        owner=str(local_owner),
+        mirror_updated_at=_AFTER,
+    )
+    assert derive_seam_status(record, mirror) is SeamStatus.SYNCED
 
 
 # ---------------------------------------------------------------------------

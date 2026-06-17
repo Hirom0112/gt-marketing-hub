@@ -17,41 +17,143 @@ adapter imports — it consumes only the model + a plain value object and return
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime
 from enum import StrEnum
+from typing import NamedTuple
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict
 
-from app.data.models import FamilyRecord, SeamStatus, Stage
+from app.data.models import FamilyRecord, FundingState, SeamStatus, Stage
 
 
 @dataclass(frozen=True, slots=True)
 class MirrorState:
     """The simulated HubSpot mirror's view of a family's tracked fields (§4.7).
 
-    Only fields actually mirrored into HubSpot live here. v1 tracks ``stage``
-    (the §4.7 worked example); ``mirror_updated_at`` is when the mirror last
-    changed, used to judge "neither side clearly newer" for conflict detection.
+    Only fields actually mirrored into HubSpot live here. v1 tracked just
+    ``stage`` (the §4.7 worked example); R1 generalizes the mirror to additional
+    tracked fields with per-field authority (see :data:`_TRACKED_FIELDS`):
+
+    - ``funding_state`` — DB-authoritative (derived by the funding gate, §5.4):
+      a divergence is a pending push, never a conflict (DB always wins).
+    - ``owner`` — CRM-authoritative (the HubSpot deal owner, human-edited): a
+      divergence is a genuine conflict the gate flags, never silently overwrites.
+
+    The new fields are optional with ``None`` defaults so every existing
+    constructor stays backward-compatible: a ``None`` mirror field means "not
+    tracked / not pushed" and is skipped by divergence detection.
+    ``mirror_updated_at`` is when the mirror last changed, used to judge
+    "neither side clearly newer" for DB-authoritative conflict detection.
 
     Attributes:
         stage: The funnel stage HubSpot currently holds, or ``None`` if the
             mirror has no record yet (nothing pushed).
         mirror_updated_at: When the mirror last changed, or ``None`` if never.
+        funding_state: The funding-gate state HubSpot holds, or ``None`` if not
+            tracked/pushed (DB-authoritative).
+        owner: The HubSpot deal owner identifier (human-edited), or ``None`` if
+            not tracked/pushed (CRM-authoritative).
     """
 
     stage: Stage | None
     mirror_updated_at: datetime | None
+    funding_state: FundingState | None = None
+    owner: str | None = None
+
+
+class _FieldAuthority(StrEnum):
+    """Which side owns a tracked field when it diverges (R1; §4.7).
+
+    - ``db`` — the local DB is the source of truth (derived fields like ``stage``
+      / ``funding_state``): a divergence is a pending push (``push_local``), and
+      is only a *conflict* when neither side is clearly newer (the §4.7 rule).
+    - ``crm`` — HubSpot is the source of truth (human-edited fields like
+      ``owner``): ANY divergence is a genuine conflict, regardless of
+      timestamps — never silently overwritten (INV-4-style fail-closed).
+    """
+
+    DB = "db"
+    CRM = "crm"
+
+
+class _TrackedField(NamedTuple):
+    """One reconciled field: its local accessor, mirror accessor, and authority."""
+
+    name: str
+    authority: _FieldAuthority
+    local_value: Callable[[FamilyRecord], object]
+    mirror_value: Callable[[MirrorState], object]
+
+
+# The set of tracked fields and their per-field authority (R1; §4.7). This is a
+# structural policy — like the SeamStatus enum it defines *what* the seam
+# reconciles — so it lives in code: INV-11 governs numeric tunables, not
+# structural field definitions. Local ``owner`` is the ownership root
+# ``user_id`` (THREAT_MODEL §6 D-RLS-2), compared as a string against the
+# mirror's HubSpot owner id.
+_TRACKED_FIELDS: tuple[_TrackedField, ...] = (
+    _TrackedField(
+        name="stage",
+        authority=_FieldAuthority.DB,
+        local_value=lambda r: r.current_stage,
+        mirror_value=lambda m: m.stage,
+    ),
+    _TrackedField(
+        name="funding_state",
+        authority=_FieldAuthority.DB,
+        local_value=lambda r: r.funding_state,
+        mirror_value=lambda m: m.funding_state,
+    ),
+    _TrackedField(
+        name="owner",
+        authority=_FieldAuthority.CRM,
+        local_value=lambda r: None if r.user_id is None else str(r.user_id),
+        mirror_value=lambda m: m.owner,
+    ),
+)
+
+
+def _diverging_fields(record: FamilyRecord, mirror: MirrorState) -> list[_TrackedField]:
+    """The tracked fields whose mirror value diverges from local.
+
+    Only compares when the mirror actually holds a value: a ``None`` mirror
+    field means "not pushed/tracked", which is an ``unsynced`` concern, not
+    divergence.
+    """
+    diverging: list[_TrackedField] = []
+    for field in _TRACKED_FIELDS:
+        mirror_val = field.mirror_value(mirror)
+        if mirror_val is not None and mirror_val != field.local_value(record):
+            diverging.append(field)
+    return diverging
+
+
+def _is_conflict(record: FamilyRecord, mirror: MirrorState) -> bool:
+    """True iff any diverging tracked field is a genuine conflict (§4.7, R1).
+
+    Per-field authority decides:
+
+    - a CRM-authoritative field (e.g. ``owner``) that diverges is ALWAYS a
+      conflict — HubSpot owns it, so we never silently overwrite it;
+    - a DB-authoritative field (e.g. ``stage`` / ``funding_state``) that diverges
+      is a conflict only when neither side is clearly newer (the original §4.7
+      rule); otherwise it is a plain pending push.
+    """
+    diverging = _diverging_fields(record, mirror)
+    if not diverging:
+        return False
+    if any(field.authority is _FieldAuthority.CRM for field in diverging):
+        return True
+    # Only DB-authoritative divergences remain: a conflict iff recency is unclear.
+    return _neither_side_clearly_newer(record, mirror)
 
 
 def _mirror_diverges(record: FamilyRecord, mirror: MirrorState) -> bool:
-    """True iff the mirror holds a tracked-field value differing from local.
-
-    Only compares when the mirror actually holds a value: a ``None`` mirror
-    field means "not pushed", which is an ``unsynced`` concern, not divergence.
-    """
-    return mirror.stage is not None and mirror.stage != record.current_stage
+    """True iff the mirror holds any tracked-field value differing from local."""
+    return bool(_diverging_fields(record, mirror))
 
 
 def _neither_side_clearly_newer(record: FamilyRecord, mirror: MirrorState) -> bool:
@@ -72,11 +174,15 @@ def _neither_side_clearly_newer(record: FamilyRecord, mirror: MirrorState) -> bo
 def derive_seam_status(record: FamilyRecord, mirror: MirrorState) -> SeamStatus:
     """Derive ``crm_seam_status`` for one family record (§4.7).
 
-    Rules, in order:
+    Row-level status aggregates the per-field results (R1): any field in
+    conflict ⇒ ``conflict``; else any unsynced signal ⇒ ``unsynced``; else
+    ``synced``. Rules, in order:
 
-    1. ``conflict`` — the mirror holds a tracked-field value that diverges from
-       local and neither side is clearly newer. Divergence with a clear winner
-       is just a pending push, not a conflict.
+    1. ``conflict`` — some tracked field is a genuine conflict per its authority
+       (:func:`_is_conflict`): a CRM-authoritative field (``owner``) diverges, or
+       a DB-authoritative field (``stage`` / ``funding_state``) diverges with
+       neither side clearly newer. DB divergence with a clear winner is just a
+       pending push, not a conflict.
     2. ``synced`` — ``crm_synced_at >= updated_at``: the CRM reflects the latest
        local state (inclusive boundary: an equal instant is synced).
     3. ``unsynced`` — otherwise: ``crm_synced_at`` is null or strictly precedes
@@ -90,7 +196,7 @@ def derive_seam_status(record: FamilyRecord, mirror: MirrorState) -> SeamStatus:
     Returns:
         The derived :class:`SeamStatus`.
     """
-    if _mirror_diverges(record, mirror) and _neither_side_clearly_newer(record, mirror):
+    if _is_conflict(record, mirror):
         return SeamStatus.CONFLICT
 
     synced_at = record.crm_synced_at
@@ -138,11 +244,22 @@ class ReconcileProposal(BaseModel):
     values involved so the caller can render the diff and so ``apply_reconcile``
     needs no second mirror fetch.
 
+    R1 adds the extra tracked fields (``funding_state`` / ``owner``) as optional
+    with ``None`` defaults so every existing constructor and consumer stays
+    backward-compatible. ``apply_reconcile`` uses them to faithfully reconstruct
+    the conflicting mirror (so a multi-field conflict re-derives unchanged) and
+    to mirror all DB-authoritative local values on a ``push_local``.
+
     Attributes:
         family_id: The family this proposal resolves.
         direction: The proposed resolution (see :class:`ReconcileDirection`).
         local_stage: The local tracked-field value (``current_stage``).
         mirror_stage: The mirror's tracked-field value, or ``None`` if unpushed.
+        local_funding_state: The local ``funding_state`` (DB-authoritative).
+        mirror_funding_state: The mirror's ``funding_state``, or ``None``.
+        local_owner: The local owner id (the ownership root ``user_id``), or
+            ``None``.
+        mirror_owner: The mirror's HubSpot owner (CRM-authoritative), or ``None``.
         summary: A human-readable one-line description of the proposal.
     """
 
@@ -152,6 +269,10 @@ class ReconcileProposal(BaseModel):
     direction: ReconcileDirection
     local_stage: Stage
     mirror_stage: Stage | None
+    local_funding_state: FundingState | None = None
+    mirror_funding_state: FundingState | None = None
+    local_owner: str | None = None
+    mirror_owner: str | None = None
     summary: str
 
 
@@ -205,19 +326,25 @@ def propose_reconcile(record: FamilyRecord, mirror: MirrorState) -> ReconcilePro
 
     if status is SeamStatus.CONFLICT:
         direction = ReconcileDirection.FLAG_CONFLICT
+        diverging = ", ".join(field.name for field in _diverging_fields(record, mirror))
         summary = (
-            f"Conflict: local stage '{record.current_stage}' vs CRM "
-            f"'{mirror.stage}' with neither side clearly newer — needs a human choice."
+            f"Conflict on {diverging}: local and CRM disagree and the change is "
+            "not a clear local-newer push — needs a human choice."
         )
     else:  # SeamStatus.UNSYNCED
         direction = ReconcileDirection.PUSH_LOCAL
         summary = f"Unsynced: push local stage '{record.current_stage}' to the CRM."
 
+    local_owner = None if record.user_id is None else str(record.user_id)
     return ReconcileProposal(
         family_id=record.family_id,
         direction=direction,
         local_stage=record.current_stage,
         mirror_stage=mirror.stage,
+        local_funding_state=record.funding_state,
+        mirror_funding_state=mirror.funding_state,
+        local_owner=local_owner,
+        mirror_owner=mirror.owner,
         summary=summary,
     )
 
@@ -231,9 +358,12 @@ def apply_reconcile(record: FamilyRecord, proposal: ReconcileProposal) -> Reconc
     closed, leaving the seam in ``conflict`` until a human supplies a chosen
     direction (INV-4-style: flag, don't soften).
 
-    For ``push_local``: the mirror adopts the local tracked field and
+    For ``push_local``: the mirror adopts every DB-authoritative local tracked
+    field (``stage`` + ``funding_state``) and carries the local owner, and
     ``crm_synced_at`` advances to ``updated_at``, so :func:`derive_seam_status`
-    on the returned pair yields ``synced``.
+    on the returned pair yields ``synced``. (A ``push_local`` is only ever
+    proposed when there is no CRM-authoritative conflict, so mirroring the local
+    owner cannot clobber a human edit.)
 
     Args:
         record: The family record the proposal was computed against.
@@ -243,10 +373,14 @@ def apply_reconcile(record: FamilyRecord, proposal: ReconcileProposal) -> Reconc
         A :class:`ReconcileResult` carrying the post-reconcile state and the
         re-derived :class:`SeamStatus`.
     """
+    local_owner = None if record.user_id is None else str(record.user_id)
+
     if proposal.direction is ReconcileDirection.PUSH_LOCAL:
         new_record = record.model_copy(update={"crm_synced_at": record.updated_at})
         new_mirror = MirrorState(
             stage=record.current_stage,
+            funding_state=record.funding_state,
+            owner=local_owner,
             mirror_updated_at=record.updated_at,
         )
         return ReconcileResult(
@@ -257,15 +391,29 @@ def apply_reconcile(record: FamilyRecord, proposal: ReconcileProposal) -> Reconc
         )
 
     if proposal.direction is ReconcileDirection.ACCEPT_MIRROR:
-        # Human-chosen: adopt the mirror's tracked field as the new local truth,
+        # Human-chosen: adopt the mirror's tracked fields as the new local truth,
         # then mark synced. (Reserved path; v1 propose never auto-selects it.)
         adopted_stage = (
             proposal.mirror_stage if proposal.mirror_stage is not None else (record.current_stage)
         )
-        new_record = record.model_copy(
-            update={"current_stage": adopted_stage, "crm_synced_at": record.updated_at}
+        adopted_funding = (
+            proposal.mirror_funding_state
+            if proposal.mirror_funding_state is not None
+            else record.funding_state
         )
-        new_mirror = MirrorState(stage=adopted_stage, mirror_updated_at=record.updated_at)
+        new_record = record.model_copy(
+            update={
+                "current_stage": adopted_stage,
+                "funding_state": adopted_funding,
+                "crm_synced_at": record.updated_at,
+            }
+        )
+        new_mirror = MirrorState(
+            stage=adopted_stage,
+            funding_state=adopted_funding,
+            owner=proposal.mirror_owner if proposal.mirror_owner is not None else local_owner,
+            mirror_updated_at=record.updated_at,
+        )
         return ReconcileResult(
             applied=True,
             seam_status=derive_seam_status(new_record, new_mirror),
@@ -274,8 +422,14 @@ def apply_reconcile(record: FamilyRecord, proposal: ReconcileProposal) -> Reconc
         )
 
     # FLAG_CONFLICT — fail closed: do not resolve. Reconstruct the conflicting
-    # mirror from the proposal so the caller re-derives the unchanged status.
-    flagged_mirror = MirrorState(stage=proposal.mirror_stage, mirror_updated_at=record.updated_at)
+    # mirror from the proposal (all tracked fields) so the caller re-derives the
+    # unchanged conflict status — for whichever field(s) actually diverged.
+    flagged_mirror = MirrorState(
+        stage=proposal.mirror_stage,
+        funding_state=proposal.mirror_funding_state,
+        owner=proposal.mirror_owner,
+        mirror_updated_at=record.updated_at,
+    )
     return ReconcileResult(
         applied=False,
         seam_status=derive_seam_status(record, flagged_mirror),
