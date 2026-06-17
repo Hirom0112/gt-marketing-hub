@@ -1,0 +1,53 @@
+-- 0012_funding_state_values.sql — add the two `funding_state` enum values the
+-- live signal map + Python `FundingState` enum can transition INTO that 0001's
+-- enum is MISSING: 'selected_gt' and 'reconfirmed'.
+--
+-- Authoritative source: app/data/models.py (`FundingState` — SELECTED_GT,
+-- RECONFIRMED), TODO.md R2 (the voucher selection/reconfirm gap), ARCHITECTURE.md
+-- §5.4 (funding-gate progression), CLAUDE.md §1 (INV-10 GT-controlled signals,
+-- INV-11). THREAT_MODEL.md §6 (D-RLS-1…7) — no RLS/policy change here.
+--
+-- ===========================================================================
+-- WHAT THIS MIGRATION ADDS (and why), ADDITIVE and doctrine-preserving.
+-- ===========================================================================
+-- 0001's `funding_state` enum was
+--   (none, applied, awarded_selfreport, gt_confirmed,
+--    first_installment_received, funded)
+-- but the Python `FundingState` enum (app/data/models.py) — and the live
+-- GT-controlled signal map (INV-10) — model the voucher selection/reconfirm gap
+-- with two states that sit BETWEEN `awarded_selfreport` and `gt_confirmed`:
+--   * 'selected_gt'  — the family indicated they picked GT (not yet reconfirmed);
+--   * 'reconfirmed'  — the parent completed the lock-in.
+-- Without these, `family_record.funding_state` and 0010's
+-- `voucher_event.to_state funding_state` column cannot STORE the two states the
+-- code can transition into. This migration adds them to close the SQL↔Python gap.
+--
+-- Placed in ENUM-POSITION ORDER to match the Python enum's ordinal layout
+-- (SELECTED_GT, RECONFIRMED come after AWARDED_SELFREPORT and before GT_CONFIRMED)
+-- using `BEFORE 'gt_confirmed'`. Position is cosmetic — Python reads enums BY
+-- VALUE, not ordinal — so an appended order would also be correct; we order them
+-- only so `\dT+ funding_state` reads in lifecycle order.
+--
+-- This migration adds NO table, NO policy, and does NOT toggle RLS — the existing
+-- owner-scoped, null-guarded policies on every funding_state-bearing table are
+-- unchanged (test_migrations_rls's CREATE==ENABLE==FORCE + null-guard invariants
+-- are untouched). `service_role` (server-only, D-RLS-4) is unaffected.
+--
+-- ===========================================================================
+-- ORDERING REQUIREMENT (Postgres `ALTER TYPE ... ADD VALUE`) — same caveat as 0006.
+-- ===========================================================================
+-- A newly-added enum value cannot be USED in the same transaction that adds it,
+-- and on older servers `ALTER TYPE ... ADD VALUE` cannot run inside a transaction
+-- block at all. This migration NEVER uses the new values (it only adds enum
+-- labels — no data writes that reference them), so the statements are independent
+-- and safe to apply in order. If a migration tool wraps each file in one
+-- transaction, run the two `ALTER TYPE` statements WITHOUT an enclosing
+-- BEGIN/COMMIT (auto-commit / one statement per call); on modern Postgres (12+)
+-- leave them in-file — ADD VALUE is transactional there as long as the value is
+-- not referenced in the same transaction (it is not here). `IF NOT EXISTS` makes
+-- each idempotent — safe to re-apply to a DB that already has them.
+-- (NOTE: live cloud application of this is the director's separate batched pass.)
+-- ===========================================================================
+
+ALTER TYPE funding_state ADD VALUE IF NOT EXISTS 'selected_gt' BEFORE 'gt_confirmed';
+ALTER TYPE funding_state ADD VALUE IF NOT EXISTS 'reconfirmed' BEFORE 'gt_confirmed';

@@ -65,6 +65,16 @@ def _voucher_events_sql() -> str:
     return _strip_comments((MIGRATIONS_DIR / "0010_voucher_events.sql").read_text(encoding="utf-8"))
 
 
+def _apply_writes_sql() -> str:
+    """The 0011 apply-write policies migration DDL (comments stripped)."""
+    return _strip_comments((MIGRATIONS_DIR / "0011_apply_writes.sql").read_text(encoding="utf-8"))
+
+
+def _funding_state_enum_sql() -> str:
+    """The 0012 funding_state enum-value addition migration text (NOT stripped)."""
+    return (MIGRATIONS_DIR / "0012_funding_state_values.sql").read_text(encoding="utf-8")
+
+
 def _all_sql() -> str:
     return "\n".join(p.read_text(encoding="utf-8") for p in _sql_files())
 
@@ -482,3 +492,156 @@ def test_0010_no_security_definer() -> None:
     assert not _SECURITY_DEFINER.search(_voucher_events_sql()), (
         "0010 must not use a SECURITY DEFINER helper (D-RLS-7)"
     )
+
+
+# ---------------------------------------------------------------------------
+# 0011 apply-write policies (the two write paths the apply SPA needs that were
+# deny-by-default): (A) student owner-scoped, null-guarded INSERT (the child-write
+# path 0009 deferred), scoped through family_id → family_record.user_id; and (B)
+# family_record owner-scoped, null-guarded UPDATE (so the SPA can write
+# funding_type), mirroring 0007's owner-DELETE predicate but FOR UPDATE with BOTH
+# USING and WITH CHECK. Adds NO table (RLS/FORCE counts unchanged), no FOR ALL, no
+# DROP, no SECURITY DEFINER; grants INSERT(student)/UPDATE(family_record) to
+# `authenticated` only — never anon (D-RLS-3). service_role is unaffected.
+# ---------------------------------------------------------------------------
+
+_FOR_UPDATE = re.compile(r"\bFOR\s+UPDATE\b", re.IGNORECASE)
+_WITH_CHECK = re.compile(r"\bWITH\s+CHECK\b", re.IGNORECASE)
+_USING = re.compile(r"\bUSING\b", re.IGNORECASE)
+
+
+def test_0011_adds_student_owner_insert_policy() -> None:
+    """0011 adds an owner-scoped FOR INSERT policy on student (the deferred child-write path).
+
+    Scoped through family_id → family_record.user_id (the SAME ownership subquery
+    0009's SELECT/DELETE use), with a null-guarded WITH CHECK.
+    """
+    sql = _apply_writes_sql()
+    insert_policy = re.search(
+        r"CREATE\s+POLICY\s+\w+\s+ON\s+student\b[^;]*FOR\s+INSERT[^;]*WITH\s+CHECK[^;]*;",
+        sql,
+        re.IGNORECASE | re.DOTALL,
+    )
+    assert insert_policy, (
+        "0011 must add an owner-scoped FOR INSERT policy on student with WITH CHECK"
+    )
+    assert _NULL_GUARD.search(insert_policy.group(0)), (
+        "0011 student INSERT WITH CHECK must be null-guarded (auth.uid() IS NOT NULL)"
+    )
+    assert re.search(
+        r"family_id\s+IN\s*\(\s*SELECT\s+fr\.family_id\s+FROM\s+family_record\s+fr"
+        r"\s+WHERE\s+fr\.user_id\s*=\s*\(\s*SELECT\s+auth\.uid\(\)\s*\)",
+        insert_policy.group(0),
+        re.IGNORECASE,
+    ), "0011 student INSERT must scope via family_id → family_record.user_id"
+
+
+def test_0011_adds_family_record_owner_update_policy() -> None:
+    """0011 adds an owner-scoped FOR UPDATE policy on family_record (so the SPA sets funding_type).
+
+    Mirrors 0007's owner-DELETE predicate but FOR UPDATE with BOTH USING (gates the
+    rows visible to update) and WITH CHECK (gates the post-image so the owner can't
+    reassign user_id away), each null-guarded.
+    """
+    sql = _apply_writes_sql()
+    update_policy = re.search(
+        r"CREATE\s+POLICY\s+\w+\s+ON\s+family_record\b[^;]*FOR\s+UPDATE[^;]*;",
+        sql,
+        re.IGNORECASE | re.DOTALL,
+    )
+    assert update_policy, "0011 must add an owner-scoped FOR UPDATE policy on family_record"
+    body = update_policy.group(0)
+    assert _USING.search(body), "0011 family_record UPDATE must have a USING clause"
+    assert _WITH_CHECK.search(body), "0011 family_record UPDATE must have a WITH CHECK clause"
+    # Both clauses null-guarded (≥2 guards: one in USING, one in WITH CHECK).
+    assert len(_NULL_GUARD.findall(body)) >= 2, (
+        "0011 family_record UPDATE must be null-guarded in BOTH USING and WITH CHECK"
+    )
+    assert re.search(r"\(\s*SELECT\s+auth\.uid\(\)\s*\)\s*=\s*user_id", body, re.IGNORECASE), (
+        "0011 family_record UPDATE must match (SELECT auth.uid()) = user_id (the spine owner)"
+    )
+
+
+def test_0011_policies_are_only_insert_and_update_null_guarded() -> None:
+    """D-RLS-2: 0011 adds exactly the two write policies, both null-guarded; no FOR ALL/DELETE."""
+    sql = _apply_writes_sql()
+    n_policies = len(_CREATE_POLICY.findall(sql))
+    assert n_policies == 2, f"0011 should add exactly 2 policies, found {n_policies}"
+    assert len(_FOR_INSERT.findall(sql)) == 1, "0011 should add exactly one FOR INSERT policy"
+    assert len(_FOR_UPDATE.findall(sql)) == 1, "0011 should add exactly one FOR UPDATE policy"
+    # The UPDATE policy carries USING + WITH CHECK (2 guards) + the INSERT WITH
+    # CHECK (1 guard) = ≥3 null guards across the two policies.
+    assert len(_NULL_GUARD.findall(sql)) >= n_policies, (
+        "every 0011 policy must be null-guarded (D-RLS-2)"
+    )
+    assert not _FOR_ALL.search(sql), "0011 must not use FOR ALL"
+    assert not _FOR_DELETE.search(sql), "0011 must not add a DELETE policy"
+    assert not re.search(r"FOR\s+SELECT", sql, re.IGNORECASE), (
+        "0011 must not add a SELECT policy (SELECT is governed by 0001/0009)"
+    )
+
+
+def test_0011_grants_insert_and_update_to_authenticated_only() -> None:
+    """0011 grants INSERT(student) + UPDATE(family_record) to authenticated; never anon."""
+    sql = _apply_writes_sql()
+    grant_insert = re.search(r"GRANT\s+INSERT\s+ON\s+student\b[^;]*", sql, re.IGNORECASE)
+    assert grant_insert, "0011 must GRANT INSERT ON student"
+    assert re.search(r"\bauthenticated\b", grant_insert.group(0), re.IGNORECASE), (
+        "0011 must grant INSERT(student) to authenticated"
+    )
+    assert not re.search(r"\banon\b", grant_insert.group(0), re.IGNORECASE), (
+        "0011 must NOT grant INSERT(student) to anon (D-RLS-3)"
+    )
+    grant_update = re.search(r"GRANT\s+UPDATE\b[^;]*ON\s+family_record\b[^;]*", sql, re.IGNORECASE)
+    assert grant_update, "0011 must GRANT UPDATE ON family_record"
+    assert re.search(r"\bauthenticated\b", grant_update.group(0), re.IGNORECASE), (
+        "0011 must grant UPDATE(family_record) to authenticated"
+    )
+    assert not re.search(r"\banon\b", grant_update.group(0), re.IGNORECASE), (
+        "0011 must NOT grant UPDATE(family_record) to anon (D-RLS-3)"
+    )
+
+
+def test_0011_changes_nothing_else() -> None:
+    """0011 is policy+grant-only: no CREATE TABLE / RLS toggle / DROP / SECURITY DEFINER."""
+    sql = _apply_writes_sql()
+    assert not _CREATE_TABLE.search(sql), (
+        "0011 must not create a table (RLS/FORCE counts unchanged)"
+    )
+    assert not _ENABLE_RLS.search(sql), "0011 must not re-toggle RLS (already enabled)"
+    assert not _FORCE_RLS.search(sql), "0011 must not re-FORCE RLS (already forced)"
+    assert not re.search(r"\bDROP\s+POLICY\b", sql, re.IGNORECASE), "0011 must not drop a policy"
+    assert not re.search(r"\bDISABLE\s+ROW\s+LEVEL\s+SECURITY\b", sql, re.IGNORECASE), (
+        "0011 must not disable RLS"
+    )
+    assert not _SECURITY_DEFINER.search(sql), "0011 must not use SECURITY DEFINER (D-RLS-7)"
+
+
+# ---------------------------------------------------------------------------
+# 0012 funding_state enum values — adds the two values the Python FundingState
+# enum + live signal map can transition INTO ('selected_gt', 'reconfirmed') that
+# 0001's funding_state enum is MISSING. Mirrors 0006's ADD VALUE IF NOT EXISTS
+# idempotent house style + the transaction-ordering caveat. Adds no table, no
+# policy, no RLS toggle.
+# ---------------------------------------------------------------------------
+
+_FUNDING_STATE_NEW_VALUES = ("selected_gt", "reconfirmed")
+
+
+def test_0012_adds_funding_state_values_idempotently() -> None:
+    """0012 ADDs 'selected_gt' + 'reconfirmed' to funding_state via ADD VALUE IF NOT EXISTS."""
+    sql = _funding_state_enum_sql()
+    for value in _FUNDING_STATE_NEW_VALUES:
+        assert re.search(
+            rf"ALTER\s+TYPE\s+funding_state\s+ADD\s+VALUE\s+IF\s+NOT\s+EXISTS\s+'{value}'",
+            sql,
+            re.IGNORECASE,
+        ), f"0012 must `ALTER TYPE funding_state ADD VALUE IF NOT EXISTS '{value}'`"
+
+
+def test_0012_does_not_alter_rls_or_tables() -> None:
+    """0012 is enum-only: no CREATE TABLE / CREATE POLICY / RLS toggle."""
+    sql = _strip_comments(_funding_state_enum_sql())
+    assert not _CREATE_TABLE.search(sql), "0012 must not create a table (enum-only)"
+    assert not _CREATE_POLICY.search(sql), "0012 must not add a policy (enum-only)"
+    assert not _ENABLE_RLS.search(sql), "0012 must not re-toggle RLS (enum-only)"
