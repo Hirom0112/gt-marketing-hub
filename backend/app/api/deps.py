@@ -11,7 +11,11 @@ from __future__ import annotations
 
 from datetime import timedelta
 from pathlib import Path
+from typing import Annotated, Literal
 from uuid import UUID
+
+from fastapi import Header
+from pydantic import BaseModel
 
 from app.adapters import registry
 from app.adapters.brand_memory.base import BrandMemoryStore
@@ -26,10 +30,16 @@ from app.ai.client import AnthropicLLMClient, LLMClient
 from app.ai.schemas.brand import BrandRule
 from app.core.eval_gate import BrandJudge
 from app.core.params import Params, load_params
+from app.core.sales_agents import lookup as lookup_sales_agent
 from app.core.seam import MirrorState
 from app.core.settings import Settings
 from app.data.notes_repository import InMemoryNotesRepository, NotesRepository
-from app.data.repository import FamilyRepository, InMemoryFamilyRepository
+from app.data.repository import (
+    UNASSIGNED,
+    FamilyRepository,
+    InMemoryFamilyRepository,
+    OwnerScope,
+)
 from app.data.supabase_repository import build_supabase_repository
 from app.evals.suite import EvalSuiteResult
 from app.marketing.library import ContentLibrary, SqliteContentLibrary
@@ -455,6 +465,109 @@ _brand_rules: list[BrandRule] = _build_brand_rules()
 def get_repository() -> FamilyRepository:
     """FastAPI dependency yielding the active repository (the store seam)."""
     return _repository
+
+
+# ===========================================================================
+# M1 demo principal — the app-layer stand-in for auth.uid() (the IDOR atonement).
+# MULTI_AGENT_COCKPIT §4: a dependency reading X-Demo-Role + X-Demo-Agent-Id →
+# {role, agent_id, tier}. It scopes reads at the repository/app layer and MUST
+# NEVER grant RLS bypass or touch service_role (D-RLS-4). It is an app-layer
+# scope, not a DB role.
+# ===========================================================================
+
+# The two demo principal roles. ``agent`` = a single rep (scoped to its own book);
+# ``admin`` = the cross-agent view (may slice any owner). Named constants, not
+# tunables (INV-11): they are the wire spelling of the X-Demo-Role header.
+DemoRole = Literal["admin", "agent"]
+
+# The fail-closed scope for an agent principal with no resolvable agent_id: a nil
+# UUID that no real ``assigned_rep_id`` ever equals, so the rep sees ZERO rows
+# (never the unassigned pool, never another rep's book). A malformed agent request
+# must read nothing — deny-by-default (INV-5).
+_NIL_AGENT_ID = UUID(int=0)
+
+
+class DemoPrincipal(BaseModel):
+    """The resolved demo principal — the app-layer auth.uid() stand-in (§4).
+
+    ``role`` is the authority (admin vs a single agent); ``agent_id`` is the
+    rep's id (``None`` for an admin); ``tier`` is the agent's closer/setter tier
+    (``None`` for an admin). It carries NO db-role / service_role field — scoping
+    is enforced at the app/repository layer, never by an RLS-bypass DB role.
+    """
+
+    role: DemoRole
+    agent_id: UUID | None = None
+    tier: str | None = None
+
+
+def get_demo_principal(
+    demo_role: Annotated[str | None, Header(alias="X-Demo-Role")] = None,
+    demo_agent_id: Annotated[str | None, Header(alias="X-Demo-Agent-Id")] = None,
+) -> DemoPrincipal:
+    """Resolve the demo principal from the two headers (§4) — auth.uid() stand-in.
+
+    Reads ONLY ``X-Demo-Role`` + ``X-Demo-Agent-Id`` (never the DB, never
+    service_role). ``X-Demo-Role=agent`` (+ a known ``X-Demo-Agent-Id``) resolves
+    the agent's ``tier`` via the static :func:`app.core.sales_agents.lookup` (the
+    rank→agent registry, which mirrors 0013_sales_agents.sql; tier follows
+    ``params.assignment.closer_rank_max``). Anything else (no/blank role, an
+    unknown role) is treated as ``admin`` — the default cross-agent demo view; an
+    ``agent`` role with no/unknown ``agent_id`` resolves to an agent principal with
+    a ``None`` id, which the owner-scope resolver clamps to the empty (own) set
+    fail-closed. This dependency NEVER sets or reads ``service_role``.
+    """
+    role: DemoRole = "agent" if (demo_role or "").strip().lower() == "agent" else "admin"
+    if role == "admin":
+        return DemoPrincipal(role="admin", agent_id=None, tier=None)
+
+    agent_id: UUID | None = None
+    if demo_agent_id:
+        try:
+            agent_id = UUID(demo_agent_id.strip())
+        except ValueError:
+            agent_id = None
+    tier = None
+    if agent_id is not None:
+        agent = lookup_sales_agent(agent_id)
+        tier = agent.tier if agent is not None else None
+    return DemoPrincipal(role="agent", agent_id=agent_id, tier=tier)
+
+
+def resolve_owner_scope(principal: DemoPrincipal, requested_owner: str | None) -> OwnerScope:
+    """Clamp the client-requested owner against the principal's authority (§4, §6).
+
+    The SINGLE security chokepoint (DRY): every owner-scoped read route resolves
+    its effective scope here, so the IDOR clamp is enforced identically everywhere.
+    The ROLE — never the client-supplied ``owner`` — decides:
+
+    - ``role=agent`` ⇒ ALWAYS the principal's own ``agent_id`` (its ``OwnerScope``),
+      regardless of what ``owner`` the client passed (``all`` / another agent's id
+      are IGNORED — the IDOR defense). An agent with no resolved id clamps to the
+      nil-uuid sentinel (:data:`_NIL_AGENT_ID`) ⇒ ZERO rows (fail-closed: never the
+      unassigned pool, never a foreign book).
+    - ``role=admin`` ⇒ honors ``requested_owner``: ``None``/``"all"`` ⇒ everything;
+      ``"none"`` ⇒ the unassigned pool (:data:`UNASSIGNED`); a uuid string ⇒ that
+      agent's book. An unparseable owner is treated as ``all`` (no narrowing).
+
+    Returns the typed :data:`OwnerScope` the repository read consumes.
+    """
+    if principal.role == "agent":
+        # The clamp: an agent is ALWAYS scoped to its own book. A principal with no
+        # resolved agent_id owns nothing → the nil-uuid sentinel matches no real
+        # assigned_rep_id (fail-closed; it can never read the pool OR a foreign book).
+        return principal.agent_id if principal.agent_id is not None else _NIL_AGENT_ID
+
+    # admin: honor the requested owner.
+    requested = (requested_owner or "").strip()
+    if requested == "" or requested.lower() == "all":
+        return None
+    if requested.lower() == UNASSIGNED:
+        return UNASSIGNED
+    try:
+        return UUID(requested)
+    except ValueError:
+        return None
 
 
 def get_notes_repository() -> NotesRepository:

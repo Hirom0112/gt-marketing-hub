@@ -24,6 +24,7 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
+from typing import Literal
 from uuid import UUID
 
 from app.core.params import Params, load_params
@@ -128,6 +129,39 @@ class HouseholdRollUp:
     worst_stage: Stage
 
 
+# ---------------------------------------------------------------------------
+# Owner scope — the M1 server-side deal-ownership filter (the IDOR atonement).
+# ---------------------------------------------------------------------------
+# The sentinel for "the unassigned pool" (``assigned_rep_id IS NULL``) — the intake
+# desk's view. A named constant, not a magic string (INV-11 spirit): it is the wire
+# spelling of ``owner=none`` AND the typed in-repo value. Kept distinct from
+# ``None`` (which means "no owner filter at all" — the admin's see-everyone view).
+UNASSIGNED: Literal["none"] = "none"
+
+# The typed owner filter passed to ``list_families``:
+#   * ``None``        ⇒ NO filter — every row (the admin's default see-all).
+#   * ``"none"``      ⇒ only ``assigned_rep_id IS NULL`` (the unassigned pool).
+#   * ``UUID``        ⇒ only rows assigned to that agent (rep self-scope / admin slice).
+# The role-driven CLAMP (an agent always resolves to its own id) happens ABOVE this
+# layer, in the api ``resolve_owner_scope`` chokepoint — the repo just applies the
+# already-resolved scope, so the store seam stays a dumb, total filter.
+OwnerScope = UUID | Literal["none"] | None
+
+
+def _matches_owner(family: FamilyRecord, owner: OwnerScope) -> bool:
+    """Whether ``family`` passes the owner scope (the shared predicate, both stores).
+
+    ``None`` ⇒ everything; ``"none"`` ⇒ only unassigned (``assigned_rep_id`` is
+    ``None``); a ``UUID`` ⇒ only rows assigned to that agent. Defined once so the
+    in-memory and Supabase impls scope identically.
+    """
+    if owner is None:
+        return True
+    if owner == UNASSIGNED:
+        return family.assigned_rep_id is None
+    return family.assigned_rep_id == owner
+
+
 # The §4.8 funnel order, least→most advanced. Used to pick a household's
 # ``worst_stage`` (its least-advanced child — the weakest link to recover).
 _STAGE_ORDER: tuple[Stage, ...] = (Stage.INTEREST, Stage.APPLY, Stage.ENROLL, Stage.TUITION)
@@ -205,8 +239,14 @@ class FamilyRepository(ABC):
         stage: Stage | None = None,
         funding_state: FundingState | None = None,
         seam_status: SeamStatus | None = None,
+        owner: OwnerScope = None,
     ) -> list[FamilyRecord]:
-        """List spine rows, optionally filtered by stage / funding_state / seam_status."""
+        """List spine rows, optionally filtered by stage / funding_state / seam_status.
+
+        ``owner`` is the M1 server-side deal-ownership scope (see :data:`OwnerScope`):
+        ``None`` ⇒ every row; ``"none"`` ⇒ the unassigned pool; a ``UUID`` ⇒ one
+        agent's book. The role-driven clamp lives above the store (api layer).
+        """
         raise NotImplementedError
 
     @abstractmethod
@@ -215,24 +255,27 @@ class FamilyRepository(ABC):
         raise NotImplementedError
 
     @abstractmethod
-    def list_joined(self) -> list[JoinedFamily]:
+    def list_joined(self, *, owner: OwnerScope = None) -> list[JoinedFamily]:
         """Every family joined to its four source rows (the work-queue's input).
 
         The FR-2.5 work-queue scorer needs the ``community_profile`` engagement
         signals (only available via the join, not :meth:`list_families`), so the
         ranking router reads the cohort through this seam. A SQL-backed impl maps
-        it to the same join ``list_families`` would, over all rows.
+        it to the same join ``list_families`` would, over all rows. ``owner`` is the
+        M1 owner scope (see :data:`OwnerScope`), applied identically to
+        :meth:`list_families`.
         """
         raise NotImplementedError
 
     @abstractmethod
-    def list_students(self) -> list[JoinedStudent]:
+    def list_students(self, *, owner: OwnerScope = None) -> list[JoinedStudent]:
         """Every child joined to its own app/enrollment + parent household (A-24).
 
         The per-child work queue scores STUDENTS, so the board reads the cohort
         through this seam. A SQL-backed impl maps it to a join of ``student`` onto
         its ``app_form``/``enrollment_forms`` (by ``student_id``) and the parent
-        ``family_record`` (by ``family_id``).
+        ``family_record`` (by ``family_id``). ``owner`` scopes by the PARENT
+        household's ``assigned_rep_id`` (the deal owner; see :data:`OwnerScope`).
         """
         raise NotImplementedError
 
@@ -341,6 +384,7 @@ class InMemoryFamilyRepository(FamilyRepository):
         stage: Stage | None = None,
         funding_state: FundingState | None = None,
         seam_status: SeamStatus | None = None,
+        owner: OwnerScope = None,
     ) -> list[FamilyRecord]:
         return [
             family
@@ -348,6 +392,7 @@ class InMemoryFamilyRepository(FamilyRepository):
             if (stage is None or family.current_stage == stage)
             and (funding_state is None or family.funding_state == funding_state)
             and (seam_status is None or family.crm_seam_status == seam_status)
+            and _matches_owner(family, owner)
         ]
 
     def _assemble(self, family: FamilyRecord) -> JoinedFamily:
@@ -367,20 +412,26 @@ class InMemoryFamilyRepository(FamilyRepository):
             return None
         return self._assemble(family)
 
-    def list_joined(self) -> list[JoinedFamily]:
+    def list_joined(self, *, owner: OwnerScope = None) -> list[JoinedFamily]:
         # One JoinedFamily per spine row, in stored order. A single O(n) pass —
         # each spine row joined via the O(1) source indexes (no per-family scan).
-        return [self._assemble(family) for family in self._families]
+        # ``owner`` applies the same M1 deal-ownership scope as ``list_families``.
+        return [
+            self._assemble(family) for family in self._families if _matches_owner(family, owner)
+        ]
 
-    def list_students(self) -> list[JoinedStudent]:
+    def list_students(self, *, owner: OwnerScope = None) -> list[JoinedStudent]:
         # One JoinedStudent per child, joined via the O(1) indexes: its own app/
         # enrollment (by student_id) + parent household (by family_id). Students
         # whose parent family is absent are skipped (defensive; never happens for
         # generator output, where every student references a real family).
+        # ``owner`` scopes by the PARENT household's assigned_rep_id (the deal owner).
         joined: list[JoinedStudent] = []
         for student in self._students:
             family = self._family_index.get(student.family_id)
             if family is None:
+                continue
+            if not _matches_owner(family, owner):
                 continue
             joined.append(
                 JoinedStudent(

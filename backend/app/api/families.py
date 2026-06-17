@@ -16,10 +16,13 @@ from pydantic import BaseModel
 
 from app.adapters.hubspot.crm_adapter import CRMAdapter, StudentSyncResult
 from app.api.deps import (
+    DemoPrincipal,
     get_crm_adapter_dep,
+    get_demo_principal,
     get_observability_log,
     get_params,
     get_repository,
+    resolve_owner_scope,
 )
 from app.api.schemas import (
     CalendarEntry,
@@ -78,6 +81,19 @@ LogDep = Annotated[ObservabilityLog, Depends(get_observability_log)]
 # The CRM boundary (INV-9) — simulated by default, live behind CRM_MODE=live; the
 # per-child transfer route pushes through this seam, never a direct HubSpot call.
 CRMAdapterDep = Annotated[CRMAdapter, Depends(get_crm_adapter_dep)]
+# The M1 demo principal — the app-layer auth.uid() stand-in (the IDOR atonement).
+# The role decides the effective owner scope; the clamp lives in resolve_owner_scope.
+PrincipalDep = Annotated[DemoPrincipal, Depends(get_demo_principal)]
+
+# The shared description for the ``owner`` query param on the owner-scoped reads.
+# An AGENT principal is ALWAYS clamped to its own book (this param is ignored for
+# agents — the IDOR defense); only an ADMIN principal may use it to slice.
+_OWNER_QUERY_DESC = (
+    "Deal-ownership scope (admin only; ignored for an agent, who is always clamped "
+    "to its own book). **<agent_id>** — only that agent's families; **all** (or "
+    "omitted) — every family; **none** — only the unassigned pool. Mirrors the "
+    "stage/funding_state/seam_status filters."
+)
 
 # The operator identity recorded on a manual write (mirrors seam/ai_actions).
 DEFAULT_HUMAN = "operator"
@@ -385,10 +401,12 @@ def get_pipeline(repository: RepositoryDep) -> PipelineResponse:
 def list_families(
     repository: RepositoryDep,
     params: ParamsDep,
+    principal: PrincipalDep,
     stage: Stage | None = None,
     funding_state: FundingState | None = None,
     seam_status: SeamStatus | None = None,
     min_score: float | None = None,
+    owner: Annotated[str | None, Query(description=_OWNER_QUERY_DESC)] = None,
 ) -> list[FamilyRecord]:
     """List Family Records, filtered by stage / funding_state / seam_status / score (FR-2.1).
 
@@ -398,16 +416,23 @@ def list_families(
     ``min_score`` is set the cohort is read via ``list_joined`` and scored
     through the same pure scorer as ``/work-queue`` (one source of truth), then
     the column-level filters are re-applied.
+
+    ``owner`` is the M1 server-side deal-ownership scope, resolved through the SAME
+    :func:`resolve_owner_scope` clamp every owner-scoped route uses (the single
+    IDOR chokepoint): an agent is always scoped to its own book regardless of the
+    requested ``owner``; an admin may slice any agent / the unassigned pool.
     """
+    scope = resolve_owner_scope(principal, owner)
     if min_score is None:
         return repository.list_families(
             stage=stage,
             funding_state=funding_state,
             seam_status=seam_status,
+            owner=scope,
         )
     scored_ids = {
         joined.family.family_id
-        for joined in repository.list_joined()
+        for joined in repository.list_joined(owner=scope)
         if score_family(_work_queue_family(joined, params), params) >= min_score
     }
     return [
@@ -416,6 +441,7 @@ def list_families(
             stage=stage,
             funding_state=funding_state,
             seam_status=seam_status,
+            owner=scope,
         )
         if family.family_id in scored_ids
     ]
@@ -545,6 +571,8 @@ def get_work_queue(
     repository: RepositoryDep,
     params: ParamsDep,
     log: LogDep,
+    principal: PrincipalDep,
+    owner: Annotated[str | None, Query(description=_OWNER_QUERY_DESC)] = None,
     scope: Annotated[
         WorkQueueScope,
         Query(
@@ -595,11 +623,17 @@ def get_work_queue(
     """
     now = datetime.now(UTC)
 
+    # M1 owner scope, resolved through the single IDOR clamp (resolve_owner_scope):
+    # an agent is always scoped to its own book here regardless of `owner`; an
+    # admin may slice any agent / the unassigned pool. Applied at the store seam so
+    # a foreign rep's rows are NEVER read into the queue (server-side, INV-5).
+    owner_scope = resolve_owner_scope(principal, owner)
+
     # The candidate cohort. For the ACTIVE default, pre-filter to families that
     # were ever stalled (the only ones that can be {stalled, working}) BEFORE the
     # per-family derive — so the default response is computed over ~140 rows, not
     # 5,146. history/all keep the full cohort (then cap by `limit` after ranking).
-    candidates = repository.list_joined()
+    candidates = repository.list_joined(owner=owner_scope)
     if scope == "active":
         candidates = [j for j in candidates if j.family.stalled_since is not None]
 
@@ -710,6 +744,8 @@ def get_students(
     repository: RepositoryDep,
     params: ParamsDep,
     log: LogDep,
+    principal: PrincipalDep,
+    owner: Annotated[str | None, Query(description=_OWNER_QUERY_DESC)] = None,
     scope: Annotated[
         StudentScope,
         Query(
@@ -749,7 +785,10 @@ def get_students(
     scorer (INV-2); ``now`` is read once.
     """
     now = datetime.now(UTC)
-    joined_students = repository.list_students()
+    # M1 owner scope (the single IDOR clamp): an agent sees only its own
+    # households' children; an admin may slice. Applied at the store seam.
+    owner_scope = resolve_owner_scope(principal, owner)
+    joined_students = repository.list_students(owner=owner_scope)
     joined_by_id = {js.student.student_id: js for js in joined_students}
 
     units = [_work_queue_student(js, params) for js in joined_students]
@@ -888,6 +927,8 @@ def get_enrollment_calendar(
     repository: RepositoryDep,
     params: ParamsDep,
     log: LogDep,
+    principal: PrincipalDep,
+    owner: Annotated[str | None, Query(description=_OWNER_QUERY_DESC)] = None,
     month: Annotated[
         str | None,
         Query(
@@ -934,11 +975,15 @@ def get_enrollment_calendar(
     """
     now = datetime.now(UTC)
 
+    # M1 owner scope (the single IDOR clamp): an agent's calendar shows only its
+    # own book; an admin may slice. Applied at the store seam.
+    owner_scope = resolve_owner_scope(principal, owner)
+
     # Compute every family's stall_date once (the grouping/anchor key) so the
     # month resolution and the in-month filter read one consistent derivation.
     stalled: list[tuple[datetime, JoinedFamily]] = [
         (_stall_date(joined, log=log, now=now, params=params), joined)
-        for joined in repository.list_joined()
+        for joined in repository.list_joined(owner=owner_scope)
     ]
 
     if month is None:

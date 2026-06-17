@@ -33,14 +33,17 @@ from __future__ import annotations
 from typing import Annotated
 from uuid import UUID, uuid4
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 
 from app.adapters.hubspot.crm_adapter import CRMAdapter
 from app.api.deps import (
+    DemoPrincipal,
+    get_demo_principal,
     get_observability_log,
     get_repository,
     get_seam_crm_adapter_dep,
+    resolve_owner_scope,
 )
 from app.core.seam import (
     ReconcileDirection,
@@ -59,6 +62,14 @@ router = APIRouter(tags=["seam"])
 RepositoryDep = Annotated[FamilyRepository, Depends(get_repository)]
 LogDep = Annotated[ObservabilityLog, Depends(get_observability_log)]
 CRMAdapterDep = Annotated[CRMAdapter, Depends(get_seam_crm_adapter_dep)]
+# The M1 demo principal — the app-layer auth.uid() stand-in (the IDOR atonement).
+PrincipalDep = Annotated[DemoPrincipal, Depends(get_demo_principal)]
+# The shared ``owner`` query-param description (admin-only slice; agent is clamped).
+_OWNER_QUERY_DESC = (
+    "Deal-ownership scope (admin only; ignored for an agent, who is always clamped "
+    "to its own book). **<agent_id>** — only that agent's families; **all** (or "
+    "omitted) — every family; **none** — only the unassigned pool."
+)
 
 # The audited §10 flow tag + schema version for a seam reconcile (the audit head).
 RECONCILE_FLOW = "seam_reconcile"
@@ -103,15 +114,26 @@ class ReconcileResponse(BaseModel):
 
 
 @router.get("/seam", response_model=list[SeamRow])
-def list_non_synced(repository: RepositoryDep, crm_adapter: CRMAdapterDep) -> list[SeamRow]:
+def list_non_synced(
+    repository: RepositoryDep,
+    crm_adapter: CRMAdapterDep,
+    principal: PrincipalDep,
+    owner: Annotated[str | None, Query(description=_OWNER_QUERY_DESC)] = None,
+) -> list[SeamRow]:
     """List families whose derived §4.7 seam status is not ``synced`` (FR-1.3/2.6).
 
     Derives each family's status from the REAL CRM mirror (R1): the adapter's
     ``read_mirror`` vs the DB record, across every tracked field. No fabricated
     mirror — the simulated (v1) adapter is seeded so this stays demoable.
+
+    ``owner`` is the M1 server-side deal-ownership scope, resolved through the SAME
+    :func:`resolve_owner_scope` clamp the other reads use (the single IDOR
+    chokepoint): an agent sees only its own book regardless of ``owner``; an admin
+    may slice any agent / the unassigned pool.
     """
+    owner_scope = resolve_owner_scope(principal, owner)
     rows: list[SeamRow] = []
-    for record in repository.list_families():
+    for record in repository.list_families(owner=owner_scope):
         mirror = crm_adapter.read_mirror(record.family_id)
         status = derive_seam_status(record, mirror)
         if status is not SeamStatus.SYNCED:

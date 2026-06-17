@@ -67,6 +67,8 @@ from app.data.repository import (
     HouseholdRollUp,
     JoinedFamily,
     JoinedStudent,
+    OwnerScope,
+    _matches_owner,
     roll_up_households,
 )
 
@@ -355,10 +357,13 @@ class SupabaseFamilyRepository(FamilyRepository):
         rows = self._get(f"{_REST}/family_record", {"select": _FAMILY_EMBED})
         return [self._to_joined(row) for row in rows]
 
-    def list_joined(self) -> list[JoinedFamily]:
+    def list_joined(self, *, owner: OwnerScope = None) -> list[JoinedFamily]:
         # Every family (with a lead) joined to its source rows — the work-queue's
         # input. A SQL store maps this to the same join the in-memory impl does.
-        return self._fetch_joined()
+        # ``owner`` applies the M1 deal-ownership scope in-process (one read path,
+        # like the stage filter); a production push-down would add an
+        # `assigned_rep_id=eq.` predicate, but the demo cohort is small.
+        return [jf for jf in self._fetch_joined() if _matches_owner(jf.family, owner)]
 
     def _student_derived_stage(self, joined: JoinedStudent) -> Stage:
         """The §5.1 stage DERIVED from the CHILD's own source rows (A-24 M2).
@@ -408,7 +413,7 @@ class SupabaseFamilyRepository(FamilyRepository):
             ),
         )
 
-    def list_students(self) -> list[JoinedStudent]:
+    def list_students(self, *, owner: OwnerScope = None) -> list[JoinedStudent]:
         # The real household→child grain (TODO.md R1): one JoinedStudent per child
         # in the live `student` table, joined to its OWN app_form/enrollment_forms
         # (per-child, via the student's FK columns) and its parent household
@@ -419,10 +424,14 @@ class SupabaseFamilyRepository(FamilyRepository):
         # placeholder. service_role bypasses RLS for this cross-household read
         # (D-RLS-4). When the live `student` table is empty, this is [] — the same
         # empty board as before, now backed by a real query rather than a stub.
+        # ``owner`` scopes each child by its PARENT household's assigned_rep_id (the
+        # deal owner) — the M1 server-side ownership scope.
         rows = self._get(f"{_REST}/student", {"select": _STUDENT_EMBED})
         result: list[JoinedStudent] = []
         for row in rows:
             joined = self._to_joined_student(row)
+            if not _matches_owner(joined.family, owner):
+                continue
             stage = self._student_derived_stage(joined)
             # Round-trip the DERIVED stage onto the (frozen) student model so every
             # consumer reads the authoritative funnel position (A-24 M2).
@@ -468,6 +477,7 @@ class SupabaseFamilyRepository(FamilyRepository):
         stage: Stage | None = None,
         funding_state: FundingState | None = None,
         seam_status: SeamStatus | None = None,
+        owner: OwnerScope = None,
     ) -> list[FamilyRecord]:
         # Stage is DERIVED on read (A-24 M2), so the stage filter cannot push down
         # to a PostgREST `current_stage=eq.` predicate (that column is a stale
@@ -476,6 +486,8 @@ class SupabaseFamilyRepository(FamilyRepository):
         # funding_state / seam_status ARE authoritative spine columns; they could
         # push down, but filtering here keeps one read path (the join) and one
         # source of truth, and the demo cohort is small (query-per-request).
+        # ``owner`` is the M1 deal-ownership scope, applied through the SAME shared
+        # predicate the in-memory store uses (identical scoping across both stores).
         joined = self._fetch_joined()
         result: list[FamilyRecord] = []
         for jf in joined:
@@ -485,6 +497,8 @@ class SupabaseFamilyRepository(FamilyRepository):
             if funding_state is not None and family.funding_state != funding_state:
                 continue
             if seam_status is not None and family.crm_seam_status != seam_status:
+                continue
+            if not _matches_owner(family, owner):
                 continue
             result.append(family)
         return result

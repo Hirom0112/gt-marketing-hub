@@ -114,6 +114,15 @@ class FamilyRecord(BaseModel):
     # must agree on this column. Optional ⇒ adding it is non-breaking.
     user_id: UUID | None = None
 
+    # Deal ownership — the assigned SALESPERSON (M1; 0013_sales_agents.sql). Mirrors
+    # the nullable `assigned_rep_id uuid REFERENCES sales_agent` column. DISTINCT
+    # from `user_id` (A-30 / R1): `user_id` = the applicant family's RLS owner
+    # (auth.uid()); `assigned_rep_id` = the salesperson who owns the deal in the
+    # cockpit. NULL ⇒ unassigned (the intake pool). The demo principal scopes reads
+    # by THIS column (server-side owner scoping, INV-5/D-RLS-4); the two identities
+    # must never be conflated (the IDOR-class confusion the threat model forbids).
+    assigned_rep_id: UUID | None = None
+
     # Join keys, nullable until the related record exists (§4.1).
     lead_id: UUID | None = None
     app_form_id: UUID | None = None
