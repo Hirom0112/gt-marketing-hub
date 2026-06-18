@@ -424,7 +424,7 @@ class InMemoryFamilyRepository(FamilyRepository):
         # Lead-assignment state (LEAD_ASSIGNMENT.md §10): the append-only ownership
         # history + the per-pool round-robin cursors (A-3 in-memory; the Supabase
         # impl persists these to the 0017 tables).
-        self._lead_assignments: list[LeadAssignment] = []
+        self._lead_assignments: list[LeadAssignment] = list(dataset.lead_assignments)
         self._cursors: dict[str, int] = {}
 
     @classmethod

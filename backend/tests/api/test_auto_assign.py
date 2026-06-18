@@ -105,14 +105,17 @@ def test_existing_owner_is_never_reassigned() -> None:
     # return owner-match and leave its owner unchanged (the duplicate-lead guard).
     owned = next(f for f in repo.list_families() if f.assigned_rep_id is not None)
     prior_owner = owned.assigned_rep_id
+    # The owned demo family carries its seeded baseline history fact (LA-23); the
+    # owner-match no-op must not append ON TOP of it.
+    history_before = len(repo.list_assignments(owned.family_id))
 
     resp = client.post("/enrollment/leads/auto-assign", json={"family_ids": [str(owned.family_id)]})
     assert resp.status_code == 200, resp.text
     (result,) = resp.json()["results"]
     assert result["owner_match"] is True
     assert result["agent_id"] == str(prior_owner)
-    # No history row is appended for a no-op owner-match (nothing changed).
-    assert repo.list_assignments(owned.family_id) == []
+    # No NEW history row is appended for a no-op owner-match (nothing changed).
+    assert len(repo.list_assignments(owned.family_id)) == history_before
     reread = repo.get_family(owned.family_id)
     assert reread is not None and reread.family.assigned_rep_id == prior_owner
 

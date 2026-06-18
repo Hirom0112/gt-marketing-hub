@@ -239,6 +239,51 @@ def test_demo_cohort_territory_and_income_tier() -> None:
     assert tiers & {IncomeTier.LT_65K, IncomeTier.MID_65K_160K}, "≥1 TEFA-eligible tier"
 
 
+def test_demo_cohort_seeds_assignment_history_for_owned_families() -> None:
+    """LA-23 — every ALREADY-OWNED demo household carries exactly one seeded
+    initial-assignment history fact, so the deal-view timeline has provenance to
+    show the moment an operator (rep or admin) taps into the deal. Unassigned
+    intake leads carry NONE (their first fact is appended live when routed).
+    """
+    params = load_params(EXAMPLE_PARAMS)
+    ds = generate_demo_cohort(params=params)
+
+    owned = [f for f in ds.families if f.assigned_rep_id is not None]
+    unassigned = [f for f in ds.families if f.assigned_rep_id is None]
+    assert owned and unassigned, "the demo has both owned + unassigned families"
+
+    by_family = {a.family_id: a for a in ds.lead_assignments}
+    # Exactly one seeded fact per owned family; one per family (no duplicates).
+    assert len(ds.lead_assignments) == len(owned)
+    assert len(by_family) == len(ds.lead_assignments)
+
+    for f in owned:
+        ev = by_family.get(f.family_id)
+        assert ev is not None, f"owned family {f.display_name} has no seeded history"
+        # out of intake → the family's current owner, dated to its assignment, with
+        # a human-readable territory reason (every assignment is explainable, §2).
+        assert ev.from_rep_id is None
+        assert ev.to_rep_id == f.assigned_rep_id
+        assert ev.occurred_at == f.assigned_at
+        assert ev.assigned_by == "seed"
+        assert f.state in ev.reason and ev.reason
+        assert ev.routed_role in {"closer", "qualifier"}
+
+    # No seeded fact for an unassigned intake lead (its provenance starts at the
+    # live route).
+    for f in unassigned:
+        assert f.family_id not in by_family
+
+
+def test_demo_assignment_history_is_deterministic() -> None:
+    """The seeded history is byte-identical across runs (same assignment_ids,
+    reasons, dates) — it draws from a family-keyed rng, never the wall clock."""
+    params = load_params(EXAMPLE_PARAMS)
+    a = generate_demo_cohort(params=params).lead_assignments
+    b = generate_demo_cohort(params=params).lead_assignments
+    assert [x.model_dump() for x in a] == [y.model_dump() for y in b]
+
+
 def test_default_cohort_carries_territory_and_income() -> None:
     """LA-5 — the DEFAULT synthetic generator stamps every family with a state in
     the known set and a typed income_tier, and the cohort exercises BOTH a covered

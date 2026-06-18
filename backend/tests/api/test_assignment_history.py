@@ -125,3 +125,27 @@ def test_history_is_owner_scoped_foreign_agent_blocked() -> None:
 def test_history_unknown_family_is_404() -> None:
     resp = client.get(f"/families/{uuid4()}/assignments", headers={"X-Demo-Role": "admin"})
     assert resp.status_code == 404
+
+
+def test_seeded_owned_family_serves_its_baseline_history() -> None:
+    """LA-23 — an ALREADY-OWNED demo family (no live routing) still serves a seeded
+    baseline history fact through the endpoint, so the timeline shows provenance the
+    moment an operator taps in — for both the admin and the OWNING agent."""
+    repo = _repo()
+    owned = next(f for f in repo.list_families() if f.assigned_rep_id is not None)
+
+    # Admin sees the seeded baseline row.
+    rows = client.get(
+        f"/families/{owned.family_id}/assignments", headers={"X-Demo-Role": "admin"}
+    ).json()
+    assert len(rows) == 1
+    assert rows[0]["from_rep_id"] is None
+    assert rows[0]["to_rep_id"] == str(owned.assigned_rep_id)
+    assert rows[0]["assigned_by"] == "seed" and rows[0]["reason"]
+
+    # The OWNING agent sees its own deal's history too (owner-scoped, not just admin).
+    own = client.get(
+        f"/families/{owned.family_id}/assignments",
+        headers={"X-Demo-Role": "agent", "X-Demo-Agent-Id": str(owned.assigned_rep_id)},
+    )
+    assert own.status_code == 200 and len(own.json()) == 1

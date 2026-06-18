@@ -70,6 +70,7 @@ from app.data.models import (
     FundingState,
     FundingType,
     IncomeTier,
+    LeadAssignment,
     LeadsNew,
     ProductInterest,
     SeamStatus,
@@ -315,6 +316,13 @@ class SyntheticDataset:
     students: list[Student] = field(default_factory=list)
     student_app_forms: list[AppForm] = field(default_factory=list)
     student_enrollment_forms: list[EnrollmentForms] = field(default_factory=list)
+
+    # LEAD_ASSIGNMENT.md §10 — append-only ownership-history rows. Empty for the
+    # bulk cohorts (their owners are unset); the curated demo cohort seeds ONE
+    # initial-assignment fact per already-owned household so the deal-view timeline
+    # (LA-23) has provenance to show the moment an operator taps in. The live
+    # router appends further facts at runtime; these are the baseline.
+    lead_assignments: list[LeadAssignment] = field(default_factory=list)
 
 
 # --------------------------------------------------------------------------- #
@@ -1265,7 +1273,50 @@ def generate_demo_cohort(*, params: Params) -> SyntheticDataset:
         ds.enrollment_forms.append(enrollment)
         ds.community_profiles.append(profile)
     _populate_students(ds, seed=_DEMO_SEED)  # A-24 — one Student per child.
+    _seed_demo_assignment_history(ds, params=params)  # LA-23 — per-deal provenance.
     return ds
+
+
+def _seed_demo_assignment_history(ds: SyntheticDataset, *, params: Params) -> None:
+    """Seed one initial-assignment history fact per ALREADY-OWNED demo household.
+
+    The curated demo cohort sets ``assigned_rep_id`` directly (the demo's starting
+    state), so without this the deal-view timeline (LA-23) would be empty for every
+    pre-assigned deal — the operator would see provenance only on the 3 leads they
+    route live. This appends the baseline fact each owned family WOULD have produced
+    had it been routed: out of intake (``from_rep_id=None``) → its owner, with the
+    territory reason (the demo owners are territory-consistent, FL→closer / CA→
+    qualifier) and ``assigned_by="seed"`` (honest: this is the seeded baseline, not a
+    live router run). ``occurred_at`` = the family's ``assigned_at`` so the timeline
+    date matches the card.
+
+    Determinism (CLAUDE §4.1): the ``assignment_id`` is drawn from an INDEPENDENT
+    rng seeded per family_id — it consumes ZERO draws from the demo stream, so the
+    family/student rows stay byte-identical (the same discipline as ``_attr_rng``).
+    """
+    for family in ds.families:
+        if family.assigned_rep_id is None:
+            continue
+        policy = params.assignment.agents.get(str(family.assigned_rep_id))
+        role = policy.role if policy is not None else None
+        # Independent, family-keyed rng → a stable id with no stream perturbation.
+        id_rng = random.Random(family.family_id.int ^ _DEMO_SEED)
+        ds.lead_assignments.append(
+            LeadAssignment(
+                assignment_id=UUID(int=id_rng.getrandbits(128)),
+                family_id=family.family_id,
+                from_rep_id=None,
+                to_rep_id=family.assigned_rep_id,
+                routed_role=role,
+                assigned_by="seed",
+                reason=(
+                    f"seed: initial assignment — territory state={family.state} → {role or 'pool'}"
+                ),
+                batch_id="demo-seed",
+                occurred_at=family.assigned_at,
+                created_at=family.assigned_at,
+            )
+        )
 
 
 def _build_demo_household(

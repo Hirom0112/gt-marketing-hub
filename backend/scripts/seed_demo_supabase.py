@@ -175,12 +175,17 @@ def main() -> None:
             ],
         )
         # The rest are plain shape-and-post, in FK order (table → source models).
+        # `lead_assignment` carries the seeded baseline ownership-history facts (one
+        # per owned family, LA-23) so the deal-view timeline has provenance live in
+        # the cloud demo; its FKs (family_record above + sales_agent from migration
+        # 0013) are already present.
         plain: list[tuple[str, list[Any]]] = [
             ("leads_new", list(ds.leads)),
             ("app_form", [*ds.app_forms, *ds.student_app_forms]),
             ("enrollment_forms", [*ds.enrollment_forms, *ds.student_enrollment_forms]),
             ("community_profiles", list(ds.community_profiles)),
             ("student", list(ds.students)),
+            ("lead_assignment", list(ds.lead_assignments)),
         ]
         for table, items in plain:
             _post_rows(url, service_key, table, [shape(x, table) for x in items])
