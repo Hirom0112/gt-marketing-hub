@@ -14,7 +14,7 @@ from app.ai.schemas.content import GeneratedBy
 from app.api.deps import _build_brand_memory_store
 from app.api.geo import _default_prompt_set
 from app.data.library_ingest import seed_available
-from app.marketing.library import InMemoryContentLibrary
+from tests.support.content_library import InMemoryContentLibrary
 
 
 def test_brand_memory_store_seeded_with_import_exemplars() -> None:

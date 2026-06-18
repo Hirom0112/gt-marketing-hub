@@ -18,13 +18,13 @@ hardcoded (CLAUDE.md INV-11): the tests pass the committed example file.
 
 from __future__ import annotations
 
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from pathlib import Path
 from uuid import uuid4
 
 from app.core.params import Params, load_params
-from app.core.stage_machine import FamilyInputs, derive_stage, derive_stall_reason
-from app.data.models import AppForm, EnrollmentForms, Stage, StallReason
+from app.core.stage_machine import FamilyInputs, derive_stage
+from app.data.models import AppForm, EnrollmentForms, Stage
 
 # The committed example file is the authoritative params source for these tests.
 EXAMPLE_PARAMS = Path(__file__).resolve().parents[3] / "params" / "params.example.yaml"
@@ -119,63 +119,3 @@ def test_stage_derived_from_source_tables() -> None:
         )
         is Stage.TUITION
     )
-
-
-def test_stall_reason_assigned_by_rule() -> None:
-    """`derive_stall_reason` assigns the §4.8 label by the §5.1 rule table.
-
-    Stall reasons are deterministic and depend on the stall window read from
-    params (`work_queue.stall_window_days`, INV-11): a stall is only flagged when
-    `stalled_since` is older than that window.
-    """
-    params = _params()
-    window = params.work_queue.stall_window_days
-    now = datetime(2026, 6, 14, tzinfo=UTC)
-    stale = now - timedelta(days=window + 1)
-    recent = now - timedelta(days=window - 1)
-
-    # forms_partial — 0 < forms_signed < forms_total and stalled past the window.
-    partial_stale = FamilyInputs(
-        app_form=_app_form(submitted=True),
-        enrollment_forms=_enrollment(signed=2),
-        stalled_since=stale,
-    )
-    assert derive_stall_reason(partial_stale, params, now=now) is StallReason.FORMS_PARTIAL
-
-    # No stall reason while still inside the window (not yet stalled).
-    partial_recent = FamilyInputs(
-        app_form=_app_form(submitted=True),
-        enrollment_forms=_enrollment(signed=2),
-        stalled_since=recent,
-    )
-    assert derive_stall_reason(partial_recent, params, now=now) is None
-
-    # No stall reason when `stalled_since` is unset.
-    partial_no_since = FamilyInputs(
-        app_form=_app_form(submitted=True),
-        enrollment_forms=_enrollment(signed=2),
-    )
-    assert derive_stall_reason(partial_no_since, params, now=now) is None
-
-    # app_incomplete — application started but never submitted, stalled past window.
-    app_incomplete = FamilyInputs(
-        app_form=_app_form(submitted=False),
-        stalled_since=stale,
-    )
-    assert derive_stall_reason(app_incomplete, params, now=now) is StallReason.APP_INCOMPLETE
-
-    # funding_pending — all forms signed, tuition still locked, stalled past window.
-    funding_pending = FamilyInputs(
-        app_form=_app_form(submitted=True),
-        enrollment_forms=_enrollment(signed=6, tuition_unlocked=False),
-        stalled_since=stale,
-    )
-    assert derive_stall_reason(funding_pending, params, now=now) is StallReason.FUNDING_PENDING
-
-    # No stall reason once tuition is unlocked (progressed, not stalled).
-    tuition_unlocked = FamilyInputs(
-        app_form=_app_form(submitted=True),
-        enrollment_forms=_enrollment(signed=6, tuition_unlocked=True),
-        stalled_since=stale,
-    )
-    assert derive_stall_reason(tuition_unlocked, params, now=now) is None

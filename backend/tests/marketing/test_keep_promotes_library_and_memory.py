@@ -36,8 +36,8 @@ from app.ai.schemas.content import (
 from app.core.eval_gate import RuleVerdict, ValidationResult
 from app.core.params import load_params
 from app.marketing.keep_discard import KeepRefused, discard, keep
-from app.marketing.library import InMemoryContentLibrary
 from app.observability.log_store import DecisionAction, InMemoryObservabilityLog
+from tests.support.content_library import InMemoryContentLibrary
 
 EXAMPLE_PARAMS = Path(__file__).resolve().parents[3] / "params" / "params.example.yaml"
 

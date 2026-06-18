@@ -19,7 +19,7 @@ from fastapi.testclient import TestClient
 from app.api.deps import get_content_library_dep, get_settings_dep
 from app.core.settings import Settings
 from app.main import app
-from app.marketing.library import InMemoryContentLibrary
+from tests.support.content_library import InMemoryContentLibrary
 
 client = TestClient(app)
 

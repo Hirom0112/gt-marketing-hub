@@ -32,10 +32,8 @@ from app.core.notes import (
     NoteAuthor,
     NoteKind,
     summarize_followup,
-    summarize_funding_change,
-    summarize_stage_change,
 )
-from app.data.models import FundingState, Stage
+from app.data.models import Stage
 from app.data.notes_repository import InMemoryNotesRepository, NotesRepository
 from app.main import app
 
@@ -62,11 +60,13 @@ def test_notes_timeline_appends_manual_and_auto() -> None:
         body="called family",
         created_at=_T1,
     )
-    auto = summarize_stage_change(
+    auto = Note(
+        note_id=uuid4(),
         family_id=family_id,
-        from_stage=Stage.APPLY,
-        to_stage=Stage.ENROLL,
-        at=_T0,
+        author=NoteAuthor.SYSTEM,
+        kind=NoteKind.STATE_CHANGE,
+        body=f"Stage advanced: {Stage.APPLY.value} → {Stage.ENROLL.value}",
+        created_at=_T0,
     )
     repo.add_note(manual)
     repo.add_note(auto)
@@ -85,42 +85,6 @@ def test_notes_timeline_appends_manual_and_auto() -> None:
     # The manual note kept its operator/manual provenance.
     assert manual.author is NoteAuthor.OPERATOR
     assert manual.kind is NoteKind.MANUAL
-
-
-def test_summarize_stage_change_is_deterministic() -> None:
-    """Same inputs ⇒ identical body; the body names both from and to stages."""
-    family_id = uuid4()
-    a = summarize_stage_change(
-        family_id=family_id, from_stage=Stage.INTEREST, to_stage=Stage.APPLY, at=_T0
-    )
-    b = summarize_stage_change(
-        family_id=family_id, from_stage=Stage.INTEREST, to_stage=Stage.APPLY, at=_T0
-    )
-    assert a.body == b.body
-    assert "interest" in a.body
-    assert "apply" in a.body
-
-
-def test_summarize_funding_change_is_deterministic() -> None:
-    """Funding summaries are deterministic and name both from and to states."""
-    family_id = uuid4()
-    a = summarize_funding_change(
-        family_id=family_id,
-        from_state=FundingState.AWARDED_SELFREPORT,
-        to_state=FundingState.GT_CONFIRMED,
-        at=_T0,
-    )
-    b = summarize_funding_change(
-        family_id=family_id,
-        from_state=FundingState.AWARDED_SELFREPORT,
-        to_state=FundingState.GT_CONFIRMED,
-        at=_T0,
-    )
-    assert a.body == b.body
-    assert a.author is NoteAuthor.SYSTEM
-    assert a.kind is NoteKind.STATE_CHANGE
-    assert "awarded_selfreport" in a.body
-    assert "gt_confirmed" in a.body
 
 
 def test_summarize_followup_is_deterministic_and_channel_mapped() -> None:
@@ -202,9 +166,15 @@ def test_auto_note_is_not_a_proposal() -> None:
         f"core/notes.py must stay pure — found forbidden imports in {imported}"
     )
 
-    # The builders return a Note directly (not a proposal-shaped object).
-    note = summarize_stage_change(
-        family_id=uuid4(), from_stage=Stage.ENROLL, to_stage=Stage.TUITION, at=_T2
+    # The follow-up builder returns a plain string body (not a proposal-shaped
+    # object); the auto-note path constructs a Note directly.
+    note = Note(
+        note_id=uuid4(),
+        family_id=uuid4(),
+        author=NoteAuthor.SYSTEM,
+        kind=NoteKind.STATE_CHANGE,
+        body=f"Stage advanced: {Stage.ENROLL.value} → {Stage.TUITION.value}",
+        created_at=_T2,
     )
     assert isinstance(note, Note)
     assert note.author is NoteAuthor.SYSTEM

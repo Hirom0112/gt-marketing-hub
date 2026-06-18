@@ -25,12 +25,12 @@ hardcoded (CLAUDE.md INV-11).
 
 from __future__ import annotations
 
-from datetime import UTC, datetime, timedelta
+from datetime import datetime
 
 from pydantic import BaseModel, ConfigDict
 
 from app.core.params import Params
-from app.data.models import AppForm, EnrollmentForms, Stage, StallReason
+from app.data.models import AppForm, EnrollmentForms, Stage
 
 
 class FamilyInputs(BaseModel):
@@ -82,61 +82,3 @@ def derive_stage(family_inputs: FamilyInputs, params: Params) -> Stage:
         return Stage.TUITION
 
     return Stage.ENROLL
-
-
-def _is_stalled(stalled_since: datetime | None, window_days: int, now: datetime) -> bool:
-    """True when `stalled_since` is older than the stall window (§5.1, INV-11)."""
-    if stalled_since is None:
-        return False
-    return now - stalled_since > timedelta(days=window_days)
-
-
-def derive_stall_reason(
-    family_inputs: FamilyInputs,
-    params: Params,
-    *,
-    now: datetime | None = None,
-) -> StallReason | None:
-    """Assign the §4.8 `stall_reason` by the §5.1 rule, or ``None`` if not stalled.
-
-    A family is only flagged once it has been stalled longer than
-    ``work_queue.stall_window_days`` (read from params, never hardcoded — INV-11).
-    The reason is keyed off the family's current stage:
-
-      - ``app_incomplete``  — application started but never submitted.
-      - ``forms_partial``   — ``0 < forms_signed < forms_total``.
-      - ``funding_pending`` — every form signed but tuition still locked.
-
-    A family that has progressed (tuition unlocked) is not stalled.
-
-    Args:
-        family_inputs: The family's source rows plus `stalled_since`.
-        params: Loaded params; supplies ``work_queue.stall_window_days``.
-        now: Reference time for the window comparison; defaults to UTC now.
-            Injectable so the rule is deterministic under test.
-
-    Returns:
-        The assigned `StallReason`, or ``None`` when the family is not stalled.
-    """
-    reference = now if now is not None else datetime.now(UTC)
-    window_days = params.work_queue.stall_window_days
-    if not _is_stalled(family_inputs.stalled_since, window_days, reference):
-        return None
-
-    # Application started but never submitted.
-    if not _application_submitted(family_inputs):
-        return StallReason.APP_INCOMPLETE
-
-    enrollment = family_inputs.enrollment_forms
-    if enrollment is None or enrollment.forms_signed == 0:
-        # Submitted, enrollment not started: still moving, no enroll-stage stall.
-        return None
-
-    if enrollment.forms_signed < enrollment.forms_total:
-        return StallReason.FORMS_PARTIAL
-
-    # Every form signed: stalled only if the funding gate has not unlocked tuition.
-    if not enrollment.tuition_step_unlocked:
-        return StallReason.FUNDING_PENDING
-
-    return None

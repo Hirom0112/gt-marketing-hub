@@ -25,7 +25,7 @@ from app.ai.schemas.content import (
 )
 from app.api.deps import get_content_library_dep
 from app.main import app
-from app.marketing.library import InMemoryContentLibrary
+from tests.support.content_library import InMemoryContentLibrary
 
 client = TestClient(app)
 

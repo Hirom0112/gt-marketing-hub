@@ -60,63 +60,6 @@ class ContentLibrary(ABC):
         """
 
 
-class InMemoryContentLibrary(ContentLibrary):
-    """In-memory :class:`ContentLibrary` (v1; ASSUMPTIONS A-3).
-
-    Storage is an insertion-ordered dict keyed by asset id. Production swaps a
-    Supabase-backed impl behind the same interface with zero caller changes.
-    """
-
-    def __init__(self) -> None:
-        self._assets: dict[str, LibraryAsset] = {}
-
-    def add(self, asset: LibraryAsset) -> LibraryAsset:
-        self._assets[asset.id] = asset
-        return asset
-
-    def get(self, asset_id: str) -> LibraryAsset | None:
-        return self._assets.get(asset_id)
-
-    def search(
-        self, *, search_text: str | None = None, tags: list[str] | None = None
-    ) -> list[LibraryAsset]:
-        text = search_text.lower().strip() if search_text else None
-        wanted_tags = {t.lower() for t in tags} if tags else set()
-        results: list[LibraryAsset] = []
-        for asset in self._assets.values():
-            # Only kept + validated assets are ever surfaced (FR-3.4 / §5).
-            if asset.lifecycle is not LifecycleStage.KEPT or not asset.validation:
-                continue
-            if text is not None and text not in asset.search_text.lower():
-                continue
-            if wanted_tags and not wanted_tags.issubset({t.lower() for t in asset.tags}):
-                continue
-            results.append(asset)
-        return results
-
-    @classmethod
-    def seeded(cls) -> InMemoryContentLibrary:
-        """Hydrate the library, preferring distilled real assets (Phase-1 marketing).
-
-        Prefers the IMPORT-provenance assets distilled from GT's OWN public
-        marketing (`app.data.library_ingest.load_library_assets`) — each is
-        gate-routed at load, so it carries a real passing `ValidationResult` id
-        and `lifecycle=kept`, surfacing in search immediately. Falls back to the
-        §11.4 synthetic seed inventory when the committed seed JSON is absent
-        (default dev / fresh checkout), keeping existing tests green and the
-        store always non-empty (NFR-1). Imported lazily to keep the import graph
-        thin.
-        """
-        from app.data.library_ingest import load_library_assets
-        from app.data.synthetic import generate_library_assets
-
-        library = cls()
-        imported = load_library_assets()
-        for asset in imported if imported else generate_library_assets():
-            library.add(asset)
-        return library
-
-
 class SqliteContentLibrary(ContentLibrary):
     """Persistent :class:`ContentLibrary` backed by stdlib ``sqlite3`` (D-8, A-11).
 
@@ -244,9 +187,10 @@ class SqliteContentLibrary(ContentLibrary):
     def seeded(cls, db_path: str | Path) -> SqliteContentLibrary:
         """Hydrate a persistent library, preferring distilled real assets (Phase-1).
 
-        Same seed contract as :meth:`InMemoryContentLibrary.seeded` (imported
-        IMPORT-provenance assets, falling back to the §11.4 synthetic inventory),
-        but persisted to ``db_path`` so the seed survives a restart. ``add`` is
+        Prefers IMPORT-provenance assets distilled from GT's OWN public marketing
+        (``app.data.library_ingest.load_library_assets``), falling back to the
+        §11.4 synthetic inventory when the committed seed JSON is absent, but
+        persisted to ``db_path`` so the seed survives a restart. ``add`` is
         idempotent on ``id``, so re-seeding an existing file is a no-op in shape.
         """
         from app.data.library_ingest import load_library_assets

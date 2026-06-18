@@ -28,8 +28,6 @@ from uuid import UUID, uuid4
 
 from pydantic import BaseModel, Field
 
-from app.data.models import FundingState, Stage
-
 # ---------------------------------------------------------------------------
 # Note provenance enumerations (StrEnum — §4.8 style; serialize to exact tokens).
 # ---------------------------------------------------------------------------
@@ -85,29 +83,6 @@ class Note(BaseModel):
 # ---------------------------------------------------------------------------
 
 
-def summarize_stage_change(
-    *,
-    family_id: UUID,
-    from_stage: Stage,
-    to_stage: Stage,
-    at: datetime,
-) -> Note:
-    """Build a deterministic auto-note for a stage transition (FR-2.3; A-8).
-
-    The body factually names the known ``from`` → ``to`` stage tokens (e.g.
-    ``"Stage advanced: apply → enroll"``). Same inputs ⇒ identical body — no
-    randomness, no clock leakage. System-authored, ``state_change`` kind.
-    """
-    body = f"Stage advanced: {from_stage.value} → {to_stage.value}"
-    return Note(
-        family_id=family_id,
-        author=NoteAuthor.SYSTEM,
-        kind=NoteKind.STATE_CHANGE,
-        body=body,
-        created_at=at,
-    )
-
-
 # The channel → human label map for the follow-up note (email/sms are the two
 # §5.2 draft channels; everything else falls back to the raw channel token).
 _FOLLOWUP_CHANNEL_LABELS = {"email": "Email", "sms": "Nudge"}
@@ -142,26 +117,3 @@ def summarize_followup(channel: str, body_excerpt: str) -> str:
     if len(body_excerpt) > _FOLLOWUP_EXCERPT_CHARS:
         excerpt += "…"
     return f"{label} sent (simulated): {excerpt}"
-
-
-def summarize_funding_change(
-    *,
-    family_id: UUID,
-    from_state: FundingState,
-    to_state: FundingState,
-    at: datetime,
-) -> Note:
-    """Build a deterministic auto-note for a funding-state transition (FR-2.3; A-8).
-
-    The body factually names the known ``from`` → ``to`` funding-state tokens
-    (e.g. ``"Funding: awarded_selfreport → gt_confirmed"``). Deterministic,
-    system-authored, ``state_change`` kind — not a proposal.
-    """
-    body = f"Funding: {from_state.value} → {to_state.value}"
-    return Note(
-        family_id=family_id,
-        author=NoteAuthor.SYSTEM,
-        kind=NoteKind.STATE_CHANGE,
-        body=body,
-        created_at=at,
-    )
