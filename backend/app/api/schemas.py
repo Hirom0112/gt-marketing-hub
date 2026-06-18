@@ -672,6 +672,52 @@ class AutoAssignResponse(BaseModel):
     results: list[AutoAssignResult] = Field(default_factory=list)
 
 
+class SlaSweepRequest(BaseModel):
+    """`POST /enrollment/leads/sla-sweep` body (LEAD_ASSIGNMENT.md §9).
+
+    ``as_of`` overrides "now" (the deterministic demo clock / a test clock); when
+    omitted the server uses the wall clock. The sweep reads ``params.assignment.sla``
+    for the timer + the ``owned_breach`` policy (``alert`` vs ``auto_reassign``).
+    """
+
+    as_of: datetime | None = None
+
+
+class SlaSweepResult(BaseModel):
+    """One breached lead's SLA outcome (LEAD_ASSIGNMENT.md §9).
+
+    ``action`` ∈ ``alerted`` (owned_breach=alert — flagged, not moved),
+    ``reassigned`` (rerouted away from the breached rep), ``escalated`` (reassign
+    cap reached → returned to intake). ``reason`` is the human-readable trace.
+    """
+
+    family_id: UUID
+    action: str
+    from_rep_id: UUID | None
+    to_rep_id: UUID | None
+    reason: str
+
+
+class SlaSweepCounts(BaseModel):
+    """The SLA-sweep tally — alerted / reassigned / escalated breached leads."""
+
+    alerted: int
+    reassigned: int
+    escalated: int
+
+
+class SlaSweepResponse(BaseModel):
+    """The `POST /enrollment/leads/sla-sweep` result (LEAD_ASSIGNMENT.md §9; NFR-6).
+
+    Every breached lead is logged with WHY it breached and what happened; a
+    reassignment appends a from→to history row and re-stamps the SLA timer.
+    """
+
+    batch_id: str
+    counts: SlaSweepCounts
+    results: list[SlaSweepResult] = Field(default_factory=list)
+
+
 class AuditResponse(BaseModel):
     """The §10 audit view for one proposal — proposal + its evals + decisions (NFR-6)."""
 

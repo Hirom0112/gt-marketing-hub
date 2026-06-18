@@ -27,7 +27,11 @@ from app.observability.log_store import DecisionAction, ObservabilityLog
 
 
 def last_contact_at(
-    log: ObservabilityLog, family_id: UUID, *, student_id: UUID | None = None
+    log: ObservabilityLog,
+    family_id: UUID,
+    *,
+    student_id: UUID | None = None,
+    exclude_flow: str | None = None,
 ) -> datetime | None:
     """Latest approved-outbound timestamp for a family/child, from the audit log (A-14).
 
@@ -59,6 +63,11 @@ def last_contact_at(
     latest: datetime | None = None
     for proposal in log.list_proposals():
         if proposal.family_id != family_id or proposal.student_id != student_id:
+            continue
+        # Skip a flow that is NOT an outbound contact (e.g. the 'assignment' flow):
+        # an assignment decision must not read as "the lead was worked" (the SLA
+        # sweep's unworked check, LEAD_ASSIGNMENT.md §9).
+        if exclude_flow is not None and proposal.flow == exclude_flow:
             continue
         audit = log.get_audit(proposal.proposal_id)
         if audit is None:

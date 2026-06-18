@@ -272,14 +272,19 @@ def test_cap_beats_weight_overflows_to_next_agent() -> None:
         assert d.agent_id == a2
 
 
-def test_all_capped_is_held_not_overassigned() -> None:
+def test_all_capped_routes_over_cap_never_unassigned() -> None:
+    # A lead is NEVER left unrouted by a full pool: the cap is a SOFT preference
+    # (A-32), so when EVERY agent is capped the lead still routes (over cap),
+    # logged as a load-governance breach — not held (the user's "everyone who
+    # comes in should be routed").
     a1, a2 = UUID(int=54), UUID(int=55)
     agents, params = _with_registry(
         {a1: _pol(["FL"], "closer", weight=2, cap=5), a2: _pol(["FL"], "closer", weight=1, cap=5)}
     )
     sig = LeadSignals(family_id=UUID(int=56), state="FL", current_stage=Stage.ENROLL)
     d = route_lead(sig, agents, params, cursors={}, loads={a1: 5, a2: 5})
-    assert d.agent_id is None and d.rule == "held-all-capped"
+    assert d.agent_id in {a1, a2}  # routed, not held
+    assert "over cap" in d.reason and "load-governance breach" in d.reason
 
 
 # ---------------------------------------------------------------------------

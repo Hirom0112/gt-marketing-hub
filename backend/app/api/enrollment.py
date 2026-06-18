@@ -54,9 +54,14 @@ from app.api.schemas import (
     BulkSeedRequest,
     BulkSeedResponse,
     SeedResponse,
+    SlaSweepCounts,
+    SlaSweepRequest,
+    SlaSweepResponse,
+    SlaSweepResult,
 )
 from app.core import sales_agents
-from app.core.lead_routing import LeadSignals, route_lead
+from app.core.contact_log import last_contact_at
+from app.core.lead_routing import LeadSignals, is_sla_breached, route_lead
 from app.core.params import Params
 from app.core.seam import MirrorState, derive_seam_status
 from app.data.repository import UNASSIGNED, FamilyRepository, JoinedFamily
@@ -398,5 +403,197 @@ def auto_assign_leads(
     return AutoAssignResponse(
         batch_id=batch_id,
         counts=AutoAssignCounts(assigned=n_assigned, held=len(results) - n_assigned),
+        results=results,
+    )
+
+
+@router.post("/enrollment/leads/sla-sweep", response_model=SlaSweepResponse)
+def sla_sweep(
+    request: SlaSweepRequest,
+    repository: RepositoryDep,
+    params: ParamsDep,
+    log: LogDep,
+) -> SlaSweepResponse:
+    """Reassign leads left unworked past the SLA timer (LEAD_ASSIGNMENT.md §9).
+
+    For each ASSIGNED family, a lead is breached when it was assigned past
+    ``params.assignment.sla.unworked_reassign_days`` ago AND has no logged outbound
+    contact since (the assignment decision itself is excluded — it is not contact).
+    The ``owned_breach`` policy governs the action: ``alert`` flags it for an admin
+    without moving it (the "one source of truth" default); ``auto_reassign`` reroutes
+    it AWAY from the breached rep (``exclude=``) to a different agent, appends a
+    from→to history row, re-stamps the timer, and logs the reason (NFR-6).
+    Anti-ping-pong: after ``max_reassignments`` SLA hops the lead is ESCALATED to
+    the intake pool rather than rotated forever. ``as_of`` overrides "now" (a
+    deterministic clock); deterministic core owns every write (INV-2).
+    """
+    now = request.as_of or datetime.now(UTC)
+    sla = params.assignment.sla
+    families = [f for f in repository.list_families() if f.assigned_rep_id is not None]
+    batch_id = _batch_id("sla-sweep", [f.family_id for f in families])
+
+    loads: dict[UUID, int] = {}
+    for f in families:
+        assert f.assigned_rep_id is not None
+        loads[f.assigned_rep_id] = loads.get(f.assigned_rep_id, 0) + 1
+    cursors = repository.read_cursors()
+    results: list[SlaSweepResult] = []
+
+    for fam in families:
+        contacted = last_contact_at(log, fam.family_id, exclude_flow=_ASSIGN_FLOW)
+        if not is_sla_breached(fam.assigned_at, contacted, now, params):
+            continue
+        old_owner = fam.assigned_rep_id
+        assert old_owner is not None
+
+        # owned_breach = alert (default): flag it, do NOT silently move it (§9).
+        if sla.owned_breach == "alert":
+            reason = (
+                f"sla-alert: lead unworked past {sla.unworked_reassign_days}d since "
+                f"{fam.assigned_at} — owner {old_owner} alerted, not reassigned"
+            )
+            log.log_proposal(
+                proposal_id=uuid4(),
+                flow=_ASSIGN_FLOW,
+                schema_version=_ASSIGN_SCHEMA_VERSION,
+                payload={"rule": "sla-alert", "reason": reason, "agent_id": str(old_owner)},
+                family_id=fam.family_id,
+                created_at=now,
+            )
+            results.append(
+                SlaSweepResult(
+                    family_id=fam.family_id,
+                    action="alerted",
+                    from_rep_id=old_owner,
+                    to_rep_id=old_owner,
+                    reason=reason,
+                )
+            )
+            continue
+
+        # owned_breach = auto_reassign. Anti-ping-pong: after max_reassignments SLA
+        # hops, escalate to the intake pool rather than rotate forever.
+        prior_hops = sum(
+            1 for h in repository.list_assignments(fam.family_id) if h.reason.startswith("sla-")
+        )
+        if prior_hops >= sla.max_reassignments:
+            repository.unassign_families([fam.family_id], now)
+            reason = (
+                f"sla-reassign cap reached ({prior_hops} hops ≥ {sla.max_reassignments}) "
+                f"→ escalated to intake pool"
+            )
+            repository.append_assignment_event(
+                family_id=fam.family_id,
+                from_rep_id=old_owner,
+                to_rep_id=None,
+                routed_role=None,
+                assigned_by="sla-sweep",
+                reason=reason,
+                batch_id=batch_id,
+            )
+            loads[old_owner] = max(0, loads.get(old_owner, 0) - 1)
+            results.append(
+                SlaSweepResult(
+                    family_id=fam.family_id,
+                    action="escalated",
+                    from_rep_id=old_owner,
+                    to_rep_id=None,
+                    reason=reason,
+                )
+            )
+            continue
+
+        # Reroute AWAY from the breached rep: route as a NEW lead (drop the sticky
+        # owner) with the breached agent excluded, so it lands on a different agent.
+        joined = repository.get_family(fam.family_id)
+        if joined is None:
+            continue
+        signals = _lead_signals(joined).model_copy(
+            update={"assigned_rep_id": None, "reported_rep_id": None}
+        )
+        decision = route_lead(
+            signals,
+            sales_agents.SALES_AGENTS,
+            params,
+            cursors=cursors,
+            loads=loads,
+            exclude=frozenset({old_owner}),
+        )
+        if decision.agent_id is None:
+            # No other agent could take it → escalate to intake rather than hold.
+            repository.unassign_families([fam.family_id], now)
+            reason = f"sla-reassign: no alternate agent ({decision.reason}) → escalated to intake"
+            repository.append_assignment_event(
+                family_id=fam.family_id,
+                from_rep_id=old_owner,
+                to_rep_id=None,
+                routed_role=None,
+                assigned_by="sla-sweep",
+                reason=reason,
+                batch_id=batch_id,
+            )
+            results.append(
+                SlaSweepResult(
+                    family_id=fam.family_id,
+                    action="escalated",
+                    from_rep_id=old_owner,
+                    to_rep_id=None,
+                    reason=reason,
+                )
+            )
+            continue
+
+        new_owner = decision.agent_id
+        reason = (
+            f"sla-reassign: unworked past {sla.unworked_reassign_days}d since "
+            f"{fam.assigned_at}; rerouted from {old_owner} → {decision.reason}"
+        )
+        repository.assign_families([fam.family_id], new_owner, now)
+        repository.append_assignment_event(
+            family_id=fam.family_id,
+            from_rep_id=old_owner,
+            to_rep_id=new_owner,
+            routed_role=decision.routed_role,
+            assigned_by="sla-sweep",
+            reason=reason,
+            batch_id=batch_id,
+        )
+        if decision.cursor_advanced_to is not None and decision.pool_key:
+            cursors[decision.pool_key] = decision.cursor_advanced_to
+            repository.write_cursor(decision.pool_key, decision.cursor_advanced_to)
+        loads[old_owner] = max(0, loads.get(old_owner, 0) - 1)
+        loads[new_owner] = loads.get(new_owner, 0) + 1
+        proposal_id = uuid4()
+        log.log_proposal(
+            proposal_id=proposal_id,
+            flow=_ASSIGN_FLOW,
+            schema_version=_ASSIGN_SCHEMA_VERSION,
+            payload={"rule": "sla-reassign", "reason": reason, "agent_id": str(new_owner)},
+            family_id=fam.family_id,
+            created_at=now,
+        )
+        log.log_decision(
+            proposal_id=proposal_id,
+            human="sla-sweep",
+            action=DecisionAction.APPROVE,
+            created_at=now,
+        )
+        results.append(
+            SlaSweepResult(
+                family_id=fam.family_id,
+                action="reassigned",
+                from_rep_id=old_owner,
+                to_rep_id=new_owner,
+                reason=reason,
+            )
+        )
+
+    return SlaSweepResponse(
+        batch_id=batch_id,
+        counts=SlaSweepCounts(
+            alerted=sum(1 for r in results if r.action == "alerted"),
+            reassigned=sum(1 for r in results if r.action == "reassigned"),
+            escalated=sum(1 for r in results if r.action == "escalated"),
+        ),
         results=results,
     )

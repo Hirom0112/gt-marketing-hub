@@ -419,20 +419,23 @@ def route_lead(
     pool_key = "|".join(sorted(str(a.agent_id) for a in pool))
     start = cursors.get(pool_key, 0)
     picked = _weighted_pick(pool, params, loads, start)
+    over_cap = False
     if picked is None:
-        return _held(
-            fid,
-            "held-all-capped",
-            prefix
-            + territory_reason
-            + "; "
-            + readiness_reason
-            + "; every eligible agent is at capacity — held for intake",
-        )
+        # Every eligible agent is at capacity. The cap is a SOFT load-governance
+        # preference, NOT a hard reject — a lead is NEVER left unrouted by a full
+        # pool (A-32; the user's "everyone who comes in should be routed"). Route
+        # over cap via the same weighted round-robin with caps ignored (empty loads
+        # ⇒ every agent has headroom), logged as a load-governance breach so the
+        # over-assignment is visible.
+        picked = _weighted_pick(pool, params, {}, start)
+        over_cap = True
+    assert picked is not None  # pool is non-empty ⇒ the cap-ignoring pass always picks
     chosen, new_cursor = picked
     mode = params.assignment.round_robin.mode
     weights = {a.synthetic_name: params.assignment.agents[str(a.agent_id)].weight for a in pool}
     rr_reason = f"{mode} round-robin (w={weights}, cursor={start}) → {chosen.synthetic_name}"
+    if over_cap:
+        rr_reason += " [ALL at capacity — routed over cap; load-governance breach]"
 
     reason = prefix + "; ".join([territory_reason, readiness_reason, income_reason, rr_reason])
     return RoutingDecision(
