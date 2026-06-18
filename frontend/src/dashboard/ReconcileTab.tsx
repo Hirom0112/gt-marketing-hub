@@ -48,11 +48,13 @@ function shortId(id: string): string {
   return id.slice(0, 8);
 }
 
+// A row is "active" when the shell's `selectedIssueKey` equals `${kind}:${family_id}`
+// (the stable key the shell builds from the issue it last received). Highlighting
+// works across both the seam and SIS lists from that single key.
+
 interface ReconcileTabProps {
-  selectedIssue: ReconcileIssue | null;
   onSelectIssue: (issue: ReconcileIssue) => void;
-  // Bumped after a resolve so the lists re-pull the latest seam status.
-  refreshKey: number;
+  selectedIssueKey?: string | null;
 }
 
 type LoadState<T> =
@@ -61,9 +63,8 @@ type LoadState<T> =
   | { status: 'ready'; rows: T[] };
 
 export default function ReconcileTab({
-  selectedIssue,
   onSelectIssue,
-  refreshKey,
+  selectedIssueKey = null,
 }: ReconcileTabProps): JSX.Element {
   const [mode, setMode] = useState<Mode>('seam');
   const [seam, setSeam] = useState<LoadState<SeamRow>>({ status: 'loading' });
@@ -91,7 +92,7 @@ export default function ReconcileTab({
     return () => {
       cancelled = true;
     };
-  }, [refreshKey]);
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -118,7 +119,7 @@ export default function ReconcileTab({
     return () => {
       cancelled = true;
     };
-  }, [refreshKey]);
+  }, []);
 
   return (
     <section aria-label="Reconcile" data-testid="admin-tab-reconcile">
@@ -156,9 +157,7 @@ export default function ReconcileTab({
         ) : (
           <div data-testid="reconcile-seam-rows">
             {seam.rows.map((r) => {
-              const active =
-                selectedIssue?.kind === 'seam' &&
-                selectedIssue.family_id === r.family_id;
+              const active = selectedIssueKey === `seam:${r.family_id}`;
               return (
                 <button
                   key={r.family_id}
@@ -208,9 +207,7 @@ export default function ReconcileTab({
       ) : (
         <div data-testid="reconcile-sis-rows">
           {sis.rows.map((r) => {
-            const active =
-              selectedIssue?.kind === 'sis' &&
-              selectedIssue.family_id === r.family_id;
+            const active = selectedIssueKey === `sis:${r.family_id}`;
             return (
               <button
                 key={r.family_id}

@@ -38,7 +38,7 @@ function dotFor(status: string): SeamStatus {
 interface ReconcileDetailProps {
   issue: ReconcileIssue;
   // Notified after a resolve so the tab list re-pulls the latest status.
-  onResolved: () => void;
+  onResolved?: () => void;
 }
 
 export default function ReconcileDetail({
@@ -48,6 +48,9 @@ export default function ReconcileDetail({
   const [status, setStatus] = useState<string>(issue.seam_status ?? issue.status);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // SIS issues have no write route (there is no SIS write — we never invent one),
+  // so escalate is a local "flag for human review" gesture (INV-2: no state write).
+  const [escalated, setEscalated] = useState(false);
 
   function reconcile(): void {
     setBusy(true);
@@ -62,7 +65,7 @@ export default function ReconcileDetail({
       })
       .then((data) => {
         setStatus(data.seam_status);
-        onResolved();
+        onResolved?.();
       })
       .catch((err: unknown) => {
         setError(err instanceof Error ? err.message : 'unknown error');
@@ -156,6 +159,27 @@ export default function ReconcileDetail({
               item — confirm the enrollment in the SIS, then it clears on the next
               reconcile. No automated write is made from here.
             </p>
+            <div style={{ display: 'flex', gap: 'var(--s-2)', flexWrap: 'wrap' }}>
+              <Button
+                icon={Flag}
+                variant="signal"
+                data-testid="reconcile-sis-escalate"
+                disabled={escalated}
+                onClick={() => setEscalated(true)}
+              >
+                {escalated ? 'Flagged for review' : 'Review · escalate'}
+              </Button>
+            </div>
+            {escalated && (
+              <p
+                className="admin-kv-sub"
+                role="status"
+                data-testid="reconcile-sis-escalated"
+              >
+                Flagged for a human SIS review — confirm the enrollment in the SIS,
+                then it clears on the next reconcile.
+              </p>
+            )}
           </section>
         )}
       </div>
