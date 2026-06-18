@@ -42,7 +42,11 @@ from app.adapters.hubspot.crm_adapter import CRMAdapter
 from app.ai.client import LLMClient
 from app.ai.cost import run_budget_for_today
 from app.ai.graphs.close_tips import generate_close_tips
-from app.ai.graphs.enrollment_draft import draft_enrollment_message
+from app.ai.graphs.enrollment_draft import (
+    draft_enrollment_message,
+    draft_enrollment_message_ungated,
+)
+from app.ai.schemas.enrollment_draft import DraftAction
 from app.api.deps import (
     get_brand_judge,
     get_crm_adapter_dep,
@@ -68,6 +72,8 @@ from app.api.schemas import (
     DecisionResponse,
     DraftRequest,
     DraftResponse,
+    UngatedDraftRequest,
+    UngatedDraftResponse,
 )
 from app.core.eval_gate import BrandJudge, action_enabled
 from app.core.notes import Note, NoteAuthor, NoteKind, summarize_followup
@@ -84,6 +90,20 @@ router = APIRouter(tags=["ai-actions"])
 # The §5.2 draft schema version surfaced on each logged proposal (the audit head).
 DRAFT_FLOW = "enrollment_draft"
 DRAFT_SCHEMA_VERSION = "1"
+
+# D-1 — the UNGATED detail-panel draft (no eval gate; the human is the final gate).
+# A distinct audit head so the observability log keeps the ungated proposals apart
+# from the eval-gated ``enrollment_draft`` ones (NFR-6).
+DRAFT_UNGATED_FLOW = "enrollment_draft_ungated"
+DRAFT_UNGATED_SCHEMA_VERSION = "1"
+
+# D-1 channel → shared DraftAction map. The panel speaks email/sms; the shared
+# enum is NOT extended (the eval suite iterates it). sms ⇒ NUDGE (the short-message
+# form). The requested channel string is echoed back so the UI labels the draft.
+_UNGATED_CHANNEL_TO_ACTION: dict[str, DraftAction] = {
+    "email": DraftAction.EMAIL,
+    "sms": DraftAction.NUDGE,
+}
 # The audited reviewer identity. v1 has no auth; the operator is a fixed seam (A-3).
 DEFAULT_HUMAN = "operator"
 
@@ -205,6 +225,76 @@ def draft_enrollment(
         # UI offers the deterministic template.
         proposal=outcome.proposal if surfaced else None,
         validation=validation,
+    )
+
+
+@router.post("/ai/enrollment/draft-ungated", response_model=UngatedDraftResponse)
+def draft_enrollment_ungated(
+    request: UngatedDraftRequest,
+    repository: RepositoryDep,
+    params: ParamsDep,
+    settings: SettingsDep,
+    log: LogDep,
+    client: LLMClientDep,
+) -> UngatedDraftResponse:
+    """Draft an email/SMS for the detail panel WITHOUT the eval gate (D-1; INV-2).
+
+    The redesigned panel wants a real LLM draft the operator edits + sends MANUALLY
+    — the human is the hard final gate (DECISIONS.md D-1, a brief override of
+    INV-3/INV-4 for this surface only). INV-2 still holds: the result is a logged
+    `proposal`, never an auto-send (no CRM send happens here). This is a NEW path
+    ALONGSIDE the eval-gated ``/ai/enrollment/draft`` — that route is untouched.
+
+    Loads the grounded family (404 if unknown), builds the per-today INV-8 budget
+    (a tripped daily cap degrades the edge to the operator template with no live
+    call), runs the ungated pipeline, and LOGS the proposal for the audit (NFR-6)
+    under :data:`DRAFT_UNGATED_FLOW`. NO eval is run or logged — this path is
+    ungated by design (D-1). ``degraded`` mirrors the edge: True iff the LLM was
+    unavailable (no key / kill switch) or the budget tripped (INV-8).
+    """
+    joined = repository.get_family(request.family_id)
+    if joined is None:
+        raise HTTPException(status_code=404, detail="family not found")
+
+    action = _UNGATED_CHANNEL_TO_ACTION[request.channel]
+
+    # Per-run budget (INV-8), PRE-TRIPPED if today's logged spend hit the cross-run
+    # DAILY cap (NFR-5): a tripped budget degrades the edge to the deterministic
+    # template with NO live call — the same fail-closed path as the gated route.
+    budget = run_budget_for_today(
+        settings=settings, params=params, log=log, today=datetime.now(UTC).date()
+    )
+    proposal = draft_enrollment_message_ungated(
+        joined,
+        action,
+        client=client,
+        budget=budget,
+        settings=settings,
+    )
+    # The edge degraded iff the LLM was unavailable (no key / kill switch) or the
+    # budget tripped (pre-tripped daily cap OR a mid-run per-run breach, which
+    # leaves the shared budget tripped) — the same condition the client used to
+    # return the template. Read here at the composition root (core stays clock-free).
+    degraded = (not settings.llm_available) or budget.tripped
+
+    # LOG before a human sees anything (ARCH §10; NFR-6) — a new id per attempt.
+    # Stamp the run's USD so the cross-run daily accumulator can sum it. No eval is
+    # logged: this path is ungated by design (D-1), and no send happens here.
+    proposal_id = uuid4()
+    log.log_proposal(
+        proposal_id=proposal_id,
+        flow=DRAFT_UNGATED_FLOW,
+        schema_version=DRAFT_UNGATED_SCHEMA_VERSION,
+        payload=proposal.model_dump(mode="json"),
+        family_id=request.family_id,
+        usd_spent=budget.usd_spent,
+    )
+    return UngatedDraftResponse(
+        proposal_id=proposal_id,
+        channel=request.channel,
+        degraded=degraded,
+        body=proposal.body,
+        claims=list(proposal.claims),
     )
 
 

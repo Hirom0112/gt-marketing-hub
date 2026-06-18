@@ -387,3 +387,105 @@ def test_draft_unknown_family_404() -> None:
 def test_get_unknown_proposal_404() -> None:
     """GET /proposals/{id} ⇒ 404 for a never-logged id."""
     assert client.get(f"/proposals/{uuid4()}").status_code == 404
+
+
+# --------------------------------------------------------------------------- #
+# 7. The UNGATED detail-panel draft (DECISIONS.md D-1): a real draft with NO eval
+#    gate. The body is ALWAYS surfaced (the human is the final gate; INV-2 still
+#    holds — nothing is auto-sent), the proposal is LOGGED for the audit, and the
+#    requested channel is echoed back. A degraded edge yields the operator template.
+# --------------------------------------------------------------------------- #
+def _settings_no_key() -> Settings:
+    """A settings snapshot with NO key ⇒ ``llm_available`` False (degraded edge)."""
+    return Settings(anthropic_api_key=None)
+
+
+def test_ungated_draft_surfaces_body_and_logs() -> None:
+    """A valid live reply ⇒ 200, body present, degraded False, channel echoed + logged.
+
+    No eval runs (D-1): the body surfaces regardless of brand/grounding, and the
+    proposal is recorded in the observability log for the audit (NFR-6).
+    """
+    family_id = _a_family_id()
+    body = "Hi! A quick note about your enrollment and next steps."
+    app.dependency_overrides[deps.get_llm_client] = lambda: _llm_client_returning(
+        _proposal_json(family_id, body=body)
+    )
+
+    resp = client.post(
+        "/ai/enrollment/draft-ungated",
+        json={"family_id": str(family_id), "channel": "email"},
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["degraded"] is False
+    assert data["channel"] == "email"
+    assert data["body"] == body
+    # The grounding claims ride along (no gate, but the proposal still carries them).
+    assert any(c["source_ref"] == "kb:tefa-standard" for c in data["claims"])
+
+    # The proposal is LOGGED for the audit (NFR-6) — under the ungated flow head.
+    proposal_id = data["proposal_id"]
+    audit = client.get(f"/proposals/{proposal_id}")
+    assert audit.status_code == 200
+    audit_body = audit.json()
+    assert audit_body["proposal"]["flow"] == "enrollment_draft_ungated"
+    # Ungated by design: NO eval is logged on this path (D-1).
+    assert audit_body["evals"] == []
+
+
+def test_ungated_draft_sms_channel_echoes_and_works() -> None:
+    """The sms channel maps to NUDGE internally yet echoes ``sms`` back to the UI."""
+    family_id = _a_family_id()
+    # A non-JSON live reply is still a usable human-edited draft (wrapped raw text).
+    app.dependency_overrides[deps.get_llm_client] = lambda: _llm_client_returning(
+        "Quick text: ready to finish enrolling?"
+    )
+
+    resp = client.post(
+        "/ai/enrollment/draft-ungated",
+        json={"family_id": str(family_id), "channel": "sms"},
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["channel"] == "sms"
+    assert data["degraded"] is False
+    assert data["body"] == "Quick text: ready to finish enrolling?"
+    assert data["claims"] == []  # wrapped raw text carries no claims
+
+
+def test_ungated_draft_degraded_returns_operator_template() -> None:
+    """No key ⇒ degraded True and the body is the deterministic operator template.
+
+    INV-8 fail-closed: with the LLM unavailable the edge never calls out; the
+    panel still gets a usable template the operator fills in by hand.
+    """
+    family_id = _a_family_id()
+    # Pin a key-less settings snapshot so the client degrades (no live call).
+    app.dependency_overrides[deps.get_settings_dep] = _settings_no_key
+    app.dependency_overrides[deps.get_llm_client] = lambda: AnthropicLLMClient(
+        settings=_settings_no_key(), transport=_fake_transport("unused")
+    )
+
+    resp = client.post(
+        "/ai/enrollment/draft-ungated",
+        json={"family_id": str(family_id), "channel": "email"},
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["degraded"] is True
+    assert data["channel"] == "email"
+    assert "[DEGRADED" in data["body"]  # the marked operator template (NFR-3)
+    assert data["claims"] == []
+
+
+def test_ungated_draft_unknown_family_404() -> None:
+    """Drafting (ungated) for an unknown family ⇒ 404 (it must exist to be grounded)."""
+    app.dependency_overrides[deps.get_llm_client] = lambda: _llm_client_returning(
+        _proposal_json(uuid4(), body="x")
+    )
+    resp = client.post(
+        "/ai/enrollment/draft-ungated",
+        json={"family_id": str(uuid4()), "channel": "email"},
+    )
+    assert resp.status_code == 404

@@ -249,6 +249,25 @@ _TARGETED_FUNDING_WEIGHTS: dict[FundingType, float] = {
 # enrolls more, capped at the form's "5+".
 _CHILD_COUNT_WEIGHTS: dict[int, float] = {1: 0.55, 2: 0.28, 3: 0.11, 4: 0.04, 5: 0.02}
 
+# A-36 — guardian-relationship picks: a CLOSED option set on the apply form (never
+# free text), household-grained (never keyed to a child — INV-6). Synthetic only
+# (INV-1); used for both the primary and the optional second guardian.
+_GUARDIAN_RELATIONSHIPS: tuple[str, ...] = (
+    "mother",
+    "father",
+    "guardian",
+    "grandparent",
+    "other",
+)
+
+# D-6 — the share of generated households that list a SECOND guardian (a synthetic
+# name + an @example.invalid email + a 555-01xx phone + a relationship). A
+# MEANINGFUL subset, not all, so the detail panel exercises both the "two parents"
+# and the "single contact" layouts. A module shape constant (like _FRESH_WEIGHT /
+# _SIBLING_AHEAD_PROB), drawn from the family-id-seeded rng so the shared stream
+# stays byte-identical and every pre-existing fixture is unchanged.
+_SECONDARY_GUARDIAN_SHARE = 0.6
+
 _PRODUCT_WEIGHTS: dict[ProductInterest, float] = {
     ProductInterest.CAMPUS: 0.50,
     ProductInterest.ANYWHERE: 0.35,
@@ -422,6 +441,23 @@ def _build_family(
     _attr_rng = random.Random(family_id.int)
     state = _attr_rng.choice(_STATES)
     income_tier = _weighted_choice(_attr_rng, _INCOME_TIER_WEIGHTS)
+    # A-36 / D-6 household guardians — drawn from the SAME family-id-seeded rng,
+    # AFTER state/income (so those draws stay byte-identical) and WITHOUT touching
+    # the shared `rng` stream (so every other field + every pre-existing fixture is
+    # unchanged — CLAUDE §4.1 determinism). The primary relationship is always
+    # present; a _SECONDARY_GUARDIAN_SHARE subset also carries a full second guardian.
+    guardian_1_relationship = _attr_rng.choice(_GUARDIAN_RELATIONSHIPS)
+    secondary_contact_name: str | None = None
+    secondary_contact_synthetic_email: str | None = None
+    secondary_contact_synthetic_phone: str | None = None
+    guardian_2_relationship: str | None = None
+    if _attr_rng.random() < _SECONDARY_GUARDIAN_SHARE:
+        secondary_given = _attr_rng.choice(_GIVEN_NAMES)
+        secondary_contact_name = f"{secondary_given} {surname}"
+        # MUST end @example.invalid (the 0022 CHECK) — built via the synthetic sink.
+        secondary_contact_synthetic_email = _synthetic_email(_attr_rng, surname)
+        secondary_contact_synthetic_phone = _synthetic_phone(_attr_rng)
+        guardian_2_relationship = _attr_rng.choice(_GUARDIAN_RELATIONSHIPS)
     stage = _weighted_choice(rng, _STAGE_WEIGHTS)
     funding_type = _weighted_choice(rng, _FUNDING_TYPE_WEIGHTS)
     product = _weighted_choice(rng, _PRODUCT_WEIGHTS)
@@ -454,6 +490,11 @@ def _build_family(
         funding_state=funding_state,
         state=state,
         income_tier=income_tier,
+        guardian_1_relationship=guardian_1_relationship,
+        secondary_contact_name=secondary_contact_name,
+        secondary_contact_synthetic_email=secondary_contact_synthetic_email,
+        secondary_contact_synthetic_phone=secondary_contact_synthetic_phone,
+        guardian_2_relationship=guardian_2_relationship,
         attribution_source=attribution_source,
         attribution_utm=utm,
         crm_seam_status=_seam_status(rng),

@@ -156,3 +156,77 @@ def draft_enrollment_message(
         brand_judge=brand_judge,
     )
     return DraftOutcome(proposal=proposal, validation=validation, degraded=result.degraded)
+
+
+def draft_enrollment_message_ungated(
+    joined: JoinedFamily,
+    action: DraftAction,
+    *,
+    client: LLMClient,
+    budget: RunBudget,
+    settings: Settings,
+) -> EnrollmentDraftProposal:
+    """Draft an enrollment message WITHOUT the eval gate (DECISIONS.md D-1).
+
+    The redesigned detail panel generates a real LLM draft the operator then
+    edits and sends MANUALLY — the human is the hard final gate (D-1, a brief
+    override of INV-3/INV-4 for this surface only). INV-2 still holds: the result
+    is a `proposal`, never an auto-sent state write; nothing leaves the system
+    here. The EXISTING eval-gated :func:`draft_enrollment_message` is untouched —
+    this is a NEW path alongside it, not a weakening of the old one.
+
+    Runs §5.2 steps 2–3 only (build the grounded context pack → render the prompt
+    → call the LLM edge), then parses the result — but never runs the eval gate:
+
+    * a degraded edge (INV-8: no key / kill switch / cost cap ⇒ ``result.degraded``)
+      yields the deterministic operator-template proposal (the SAME NFR-3 fallback
+      :func:`_template_proposal` the gated path uses);
+    * a successful live call is parsed into an :class:`EnrollmentDraftProposal`;
+      if parsing fails (an ungated human-edited draft does not need strict JSON)
+      the raw model text is wrapped into a proposal with no claims. An EMPTY raw
+      body cannot stand in (the schema requires ``body`` non-empty), so it falls
+      back to the operator template.
+
+    Args:
+        joined: the spine row joined to its four source rows (the grounded source).
+        action: the channel mapped from the request (email ⇒ EMAIL, sms ⇒ NUDGE).
+        client: the LLM edge seam (a fake transport is injected under test).
+        budget: the per-run token/USD governor (INV-8).
+        settings: the env seam; ``anthropic_max_tokens`` bounds the call.
+
+    Returns:
+        The drafted :class:`EnrollmentDraftProposal` (a model draft, the wrapped
+        raw text, or the deterministic template fallback).
+    """
+    deal_view = assemble_deal_view(joined)
+    context = build_context_pack(deal_view)
+    prompt = build_prompt(context, action)
+
+    result = client.complete(prompt, max_tokens=settings.anthropic_max_tokens, budget=budget)
+    if result.degraded:
+        return _template_proposal(
+            family_id=joined.family.family_id,
+            action=action,
+            prompt=prompt,
+        )
+
+    try:
+        return EnrollmentDraftProposal.model_validate_json(strip_code_fence(result.text))
+    except ValidationError:
+        # Ungated path (D-1): a non-JSON live reply is still a usable human-edited
+        # draft — wrap the raw text verbatim with no claims. A truly empty reply
+        # has no body to surface (schema requires body ≥ 1 char), so fall back to
+        # the operator template rather than raise.
+        raw = strip_code_fence(result.text).strip()
+        if not raw:
+            return _template_proposal(
+                family_id=joined.family.family_id,
+                action=action,
+                prompt=prompt,
+            )
+        return EnrollmentDraftProposal(
+            action=action,
+            family_id=joined.family.family_id,
+            body=raw,
+            claims=[],
+        )

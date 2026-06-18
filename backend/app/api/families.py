@@ -36,6 +36,9 @@ from app.api.schemas import (
     DropOffResponse,
     FamilyDetailResponse,
     HouseholdGroup,
+    LeadsCalendarAgentCount,
+    LeadsCalendarDay,
+    LeadsCalendarResponse,
     PipelineResponse,
     SisBucketGroup,
     SisBucketsResponse,
@@ -61,6 +64,7 @@ from app.core.recovery_state import (
     recovered_outcome,
 )
 from app.core.sales_agents import SALES_AGENTS
+from app.core.sales_agents import lookup as lookup_sales_agent
 from app.core.sis_reconcile import SisBucket, SisVerdict
 from app.core.work_queue import (
     WorkQueueFamily,
@@ -1152,6 +1156,115 @@ def get_enrollment_calendar(
         for wqf in (_work_queue_family(joined, params),)
     ]
     return CalendarResponse(month=resolved_month, entries=entries)
+
+
+def _intake_date(joined: JoinedFamily) -> datetime | None:
+    """A family's INTAKE instant for the leads calendar — lead else spine created_at.
+
+    The Leads tab groups by when a lead arrived: ``lead.created_at`` when the lead
+    row is present, else the spine ``family.created_at`` (a lead-less marketing
+    row). Mirrors the ``_apply_date`` precedence style so the two surfaces agree on
+    where a created_at comes from.
+    """
+    if joined.lead is not None and joined.lead.created_at is not None:
+        return joined.lead.created_at
+    return joined.family.created_at
+
+
+@router.get("/enrollment/leads-calendar", response_model=LeadsCalendarResponse)
+def get_leads_calendar(
+    repository: RepositoryDep,
+    principal: PrincipalDep,
+    owner: Annotated[str | None, Query(description=_OWNER_QUERY_DESC)] = None,
+    month: Annotated[
+        str | None,
+        Query(
+            pattern=_MONTH_PATTERN,
+            description=(
+                "Target month in YYYY-MM form (01-12); 422 on a bad format. Optional — "
+                "when omitted, resolves to the month of the most-recent intake date so "
+                "the surface opens non-empty."
+            ),
+        ),
+    ] = None,
+) -> LeadsCalendarResponse:
+    """Per-day NEW-lead counts split by owning sales agent (DECISIONS.md D-3; §6).
+
+    The Leads-tab calendar: within the resolved month, each populated day carries
+    one chip per agent (the count of NEW leads assigned to that agent that day,
+    identity off the static :data:`SALES_AGENTS` registry) plus an ``unowned_count``
+    for the unassigned intake pool (``assigned_rep_id IS NULL``). Leads are grouped
+    by INTAKE day — :func:`_intake_date` (``lead.created_at`` else spine
+    ``created_at``). The ``month`` query param is **optional**: omitted ⇒ resolves
+    to the YYYY-MM of the most-recent intake date across the owner-scoped cohort
+    (so the surface opens non-empty), falling back to the month of ``now`` when
+    there are zero families — the same resolution pattern as ``/enrollment/calendar``.
+
+    Owner-scoped through the SAME :func:`resolve_owner_scope` IDOR clamp every
+    owner-scoped read uses: an agent sees only its own book; an admin may slice.
+    Days with zero leads are omitted; days ascend by day-of-month and agents within
+    a day ascend by ``synthetic_name``. Read-only, no AI (INV-2).
+    """
+    now = datetime.now(UTC)
+
+    owner_scope = resolve_owner_scope(principal, owner)
+
+    # One intake date per owner-scoped family (the grouping key). A family with no
+    # resolvable created_at is skipped — it has no day to land on.
+    dated: list[tuple[datetime, JoinedFamily]] = [
+        (intake, joined)
+        for joined in repository.list_joined(owner=owner_scope)
+        if (intake := _intake_date(joined)) is not None
+    ]
+
+    if month is None:
+        anchor = max((d for d, _ in dated), default=now)
+        resolved_month = f"{anchor.year:04d}-{anchor.month:02d}"
+    else:
+        resolved_month = month
+    year_s, month_s = resolved_month.split("-")
+    year, mon = int(year_s), int(month_s)
+
+    # Accumulate per day: {day -> {agent_id|None -> count}}. None keys the
+    # unassigned pool; an assigned_rep_id not in the registry is folded into the
+    # pool too (deny-unknown) so ``total`` always equals agents + unowned.
+    per_day: dict[int, dict[UUID | None, int]] = {}
+    for intake, joined in dated:
+        if intake.year != year or intake.month != mon:
+            continue
+        rep_id = joined.family.assigned_rep_id
+        key: UUID | None = rep_id if (rep_id is not None and lookup_sales_agent(rep_id)) else None
+        bucket = per_day.setdefault(intake.day, {})
+        bucket[key] = bucket.get(key, 0) + 1
+
+    days: list[LeadsCalendarDay] = []
+    for day in sorted(per_day):
+        counts = per_day[day]
+        unowned_count = counts.get(None, 0)
+        agents = sorted(
+            (
+                LeadsCalendarAgentCount(
+                    agent_id=agent_id,
+                    synthetic_name=agent.synthetic_name,
+                    count=count,
+                )
+                for agent_id, count in counts.items()
+                if agent_id is not None
+                for agent in (lookup_sales_agent(agent_id),)
+                if agent is not None
+            ),
+            key=lambda a: a.synthetic_name,
+        )
+        total = sum(c for c in counts.values())
+        days.append(
+            LeadsCalendarDay(
+                day=day,
+                agents=agents,
+                unowned_count=unowned_count,
+                total=total,
+            )
+        )
+    return LeadsCalendarResponse(month=resolved_month, days=days)
 
 
 # ===========================================================================

@@ -8,6 +8,7 @@ deal view (FR-2.2 — the full deal view lands in S1).
 from __future__ import annotations
 
 from datetime import datetime
+from typing import Literal
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
@@ -15,7 +16,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 from app.ai.schemas.brand import LibraryAsset
 from app.ai.schemas.close_tips import CloseTipsProposal
 from app.ai.schemas.content import AudienceTag, Channel, Decision
-from app.ai.schemas.enrollment_draft import DraftAction, EnrollmentDraftProposal
+from app.ai.schemas.enrollment_draft import Claim, DraftAction, EnrollmentDraftProposal
 from app.core.contact_status import ContactStatus
 from app.core.eval_gate import ValidationResult
 from app.core.family_record import DealView
@@ -341,6 +342,48 @@ class CalendarResponse(BaseModel):
     entries: list[CalendarEntry] = Field(default_factory=list)
 
 
+class LeadsCalendarAgentCount(BaseModel):
+    """One agent's NEW-lead count on one calendar day (DECISIONS.md D-3).
+
+    The per-day chip the Leads-tab calendar renders: the owning agent's identity
+    (read off the static :data:`app.core.sales_agents.SALES_AGENTS` registry —
+    synthetic name only, INV-1) plus how many of that day's intake leads are
+    assigned to them. Read-only aggregation (INV-2).
+    """
+
+    agent_id: UUID
+    synthetic_name: str
+    count: int
+
+
+class LeadsCalendarDay(BaseModel):
+    """One populated day on the Leads calendar — per-agent chips + the unowned pool.
+
+    ``agents`` is one :class:`LeadsCalendarAgentCount` per agent with ≥1 lead that
+    day (sorted by synthetic_name); ``unowned_count`` is the day's intake leads
+    with a NULL ``assigned_rep_id`` (the unassigned pool); ``total`` is the day's
+    whole intake count (the agents' counts + ``unowned_count``).
+    """
+
+    day: int
+    agents: list[LeadsCalendarAgentCount] = Field(default_factory=list)
+    unowned_count: int
+    total: int
+
+
+class LeadsCalendarResponse(BaseModel):
+    """The `GET /enrollment/leads-calendar?month=YYYY-MM` payload (D-3; INV-2).
+
+    ``month`` echoes the **resolved** YYYY-MM (when the caller omits ``month`` it
+    resolves to the month of the most-recent intake date so the surface opens
+    non-empty); ``days`` are the populated days (zero-lead days omitted) ascending
+    by day-of-month. Read-only.
+    """
+
+    month: str
+    days: list[LeadsCalendarDay] = Field(default_factory=list)
+
+
 class AgentRollup(BaseModel):
     """One agent's roster row on the admin lens (M3 R1; MULTI_AGENT_COCKPIT §5).
 
@@ -410,6 +453,38 @@ class DraftResponse(BaseModel):
     failed_rules: list[str] = Field(default_factory=list)
     proposal: EnrollmentDraftProposal | None = None
     validation: ValidationResult | None = None
+
+
+class UngatedDraftRequest(BaseModel):
+    """`POST /ai/enrollment/draft-ungated` body — which family + which channel (D-1).
+
+    ``channel`` is the panel's own vocabulary (``email`` / ``sms``); the endpoint
+    maps it to the shared :class:`DraftAction` internally (email ⇒ EMAIL, sms ⇒
+    NUDGE — a nudge is the short-message form) and echoes ``channel`` back so the
+    UI labels the draft correctly. The DraftAction enum is NOT extended (the eval
+    suite iterates it) — the channel lives only on this request/response pair.
+    """
+
+    family_id: UUID
+    channel: Literal["email", "sms"]
+
+
+class UngatedDraftResponse(BaseModel):
+    """The ungated detail-panel draft (DECISIONS.md D-1; INV-2 — a proposal, not a send).
+
+    No eval gate runs on this surface (D-1): the human edits and sends manually,
+    so the body is ALWAYS surfaced (there is no fail-closed suppression here). The
+    proposal is still LOGGED for the audit (NFR-6). ``degraded`` is True when the
+    metered edge was unavailable / capped (INV-8) and the operator template stands
+    in; ``channel`` echoes the requested channel; ``claims`` carries the proposal's
+    grounding claims (empty for a wrapped raw-text or template draft).
+    """
+
+    proposal_id: UUID
+    channel: str
+    degraded: bool
+    body: str
+    claims: list[Claim] = Field(default_factory=list)
 
 
 class CloseTipsRequest(BaseModel):

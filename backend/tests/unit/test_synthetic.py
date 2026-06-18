@@ -227,6 +227,77 @@ def test_no_pii_shaped_values_in_output() -> None:
             assert "household_income" not in text.lower(), text
 
 
+def test_default_seed_enriches_household_guardians() -> None:
+    """The default-seed cohort carries a secondary guardian on a meaningful subset (D-6).
+
+    A subset of households list a SECOND guardian — a synthetic name + an
+    @example.invalid email (the 0022 CHECK) + a 555-01xx phone (INV-1) + a
+    relationship — while every household has a primary ``guardian_1_relationship``.
+    The detail panel needs both the "two parents" and the "single contact" layouts.
+    """
+    ds = generate(n=24, seed=42)  # DEFAULT_FAMILY_COUNT / DEFAULT_SEED.
+
+    # Every household has a primary guardian relationship (a closed-set pick).
+    assert all(f.guardian_1_relationship is not None for f in ds.families)
+
+    secondary = [f for f in ds.families if f.secondary_contact_name is not None]
+    # A MEANINGFUL subset (not all, not none) carries a second guardian.
+    assert 0 < len(secondary) < len(ds.families)
+
+    for fam in secondary:
+        # The full secondary guardian block is populated together.
+        assert fam.secondary_contact_synthetic_email is not None
+        assert fam.secondary_contact_synthetic_email.endswith("@example.invalid")
+        assert fam.secondary_contact_synthetic_phone is not None
+        assert "555-01" in fam.secondary_contact_synthetic_phone
+        assert fam.guardian_2_relationship is not None
+
+
+def test_default_seed_has_multi_child_and_paid_not_in_sis_signal() -> None:
+    """The default seed carries multi-child households + ≥3 paid families (D-3 / M5).
+
+    Multi-child households let the deal view show "N children"; ≥3 paid families
+    is what the SIS-roster generator needs to seed a 🔴 ``paid_not_in_sis`` row
+    (it omits the first paid family), so ``/enrollment/sis-buckets`` is non-empty.
+    """
+    from app.core.sis_reconcile import PAID_FUNDING_STATES
+
+    ds = generate(n=24, seed=42)
+    multi_child = [lead for lead in ds.leads if lead.num_children > 1]
+    assert multi_child, "expected at least one multi-child household"
+
+    paid = [f for f in ds.families if f.funding_state in PAID_FUNDING_STATES]
+    # ≥3 paid is the roster generator's `enough` threshold for a paid_not_in_sis row.
+    assert len(paid) >= 3
+
+
+def test_default_seed_guardian_fields_do_not_perturb_other_fields() -> None:
+    """Adding the family-id-seeded guardian draws leaves every OTHER field unchanged.
+
+    The guardian fields are drawn from an INDEPENDENT ``random.Random(family_id)``
+    (never the shared stream), so the rest of each FamilyRecord is byte-identical
+    across runs and the determinism the other fixtures depend on holds (CLAUDE §4.1).
+    """
+    a = generate(n=24, seed=42)
+    b = generate(n=24, seed=42)
+    # Reproducible in full, including the new guardian fields.
+    assert [f.model_dump() for f in a.families] == [f.model_dump() for f in b.families]
+    # The non-guardian fields are independent of the guardian draws: stable stage /
+    # funding / created_at across the cohort (the stream order is unchanged).
+    guardian_keys = {
+        "guardian_1_relationship",
+        "secondary_contact_name",
+        "secondary_contact_synthetic_email",
+        "secondary_contact_synthetic_phone",
+        "guardian_2_relationship",
+    }
+    for fam in a.families:
+        dumped = fam.model_dump()
+        assert dumped["current_stage"] is not None
+        # Sanity: the guardian keys exist on the model (the enrichment is wired).
+        assert guardian_keys <= set(dumped)
+
+
 def test_scale_5000_families() -> None:
     """`generate(n=5000)` returns 5,000 joined families (NFR-9), no manual pagination."""
     ds: SyntheticDataset = generate(n=5000, seed=2026)
