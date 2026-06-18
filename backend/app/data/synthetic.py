@@ -1136,6 +1136,99 @@ _DEMO_HOUSEHOLDS: tuple[_DemoHousehold, ...] = (
         state="CA",
         income_tier=None,
     ),
+    # --- The +6 households that grow the cohort to 12 (all created this week). ---
+    # Closed FL voucher household — the closer's book (territory-consistent: FL).
+    _DemoHousehold(
+        surname="Johnson",
+        stage=Stage.TUITION,
+        funding_type=FundingType.TEFA_STANDARD,
+        funding_state=FundingState.FUNDED,
+        num_children=1,
+        assigned_rep_id=_DEMO_CLOSER_ID,
+        stall_reason=None,
+        note="closed FL voucher enrollment, awaiting SIS — closer's book",
+        neighborhood=_DEMO_NB_HIGH,
+        self_reported_income=215_000,
+        state="FL",
+        income_tier=IncomeTier.GT_160K,
+    ),
+    # Mid-enroll FL household, GT-confirmed funding — closer's active book.
+    _DemoHousehold(
+        surname="Garcia",
+        stage=Stage.ENROLL,
+        funding_type=FundingType.TEFA_STANDARD,
+        funding_state=FundingState.GT_CONFIRMED,
+        num_children=1,
+        assigned_rep_id=_DEMO_CLOSER_ID,
+        stall_reason=StallReason.FORMS_PARTIAL,
+        note="FL voucher household mid-enroll, forms partial — closer's book",
+        neighborhood=_DEMO_NB_MID,
+        self_reported_income=120_000,
+        state="FL",
+        income_tier=IncomeTier.MID_65K_160K,
+    ),
+    # Mid-funnel CA disability application — the qualifier's book (CA).
+    _DemoHousehold(
+        surname="Ahmed",
+        stage=Stage.APPLY,
+        funding_type=FundingType.TEFA_DISABILITY,
+        funding_state=FundingState.APPLIED,
+        num_children=1,
+        assigned_rep_id=_DEMO_SETTER_ID,
+        stall_reason=StallReason.APP_INCOMPLETE,
+        note="CA disability-IEP application in progress — qualifier's book",
+        neighborhood=_DEMO_NB_MODEST,
+        self_reported_income=48_000,
+        state="CA",
+        income_tier=IncomeTier.LT_65K,
+    ),
+    # UNASSIGNED in an UNCOVERED state (TX) — demos the territory FALLBACK path
+    # live (no agent covers TX ⇒ round-robin across all available, logged).
+    _DemoHousehold(
+        surname="Brooks",
+        stage=Stage.INTEREST,
+        funding_type=FundingType.SELF_PAY,
+        funding_state=FundingState.NONE,
+        num_children=1,
+        assigned_rep_id=None,
+        stall_reason=StallReason.INFO_SESSION_NO_SHOW,
+        note="fresh TX lead — UNASSIGNED, the territory-FALLBACK live-route case",
+        neighborhood=_DEMO_NB_HIGH,
+        self_reported_income=250_000,
+        state="TX",
+        income_tier=IncomeTier.GT_160K,
+    ),
+    # Closed CA self-pay household — qualifier's book (territory-consistent: CA).
+    _DemoHousehold(
+        surname="Tran",
+        stage=Stage.TUITION,
+        funding_type=FundingType.SELF_PAY,
+        funding_state=FundingState.FUNDED,
+        num_children=1,
+        assigned_rep_id=_DEMO_SETTER_ID,
+        stall_reason=None,
+        note="closed CA self-pay enrollment, awaiting SIS — qualifier's book",
+        neighborhood=_DEMO_NB_MIXED,
+        self_reported_income=110_000,
+        state="CA",
+        income_tier=IncomeTier.MID_65K_160K,
+    ),
+    # UNASSIGNED FL lead — a second live-route case (FL ⇒ territory routes to the
+    # closer pool), income not yet provided (fresh top-of-funnel).
+    _DemoHousehold(
+        surname="Reyes",
+        stage=Stage.INTEREST,
+        funding_type=FundingType.TEFA_STANDARD,
+        funding_state=FundingState.NONE,
+        num_children=1,
+        assigned_rep_id=None,
+        stall_reason=StallReason.NO_RESPONSE,
+        note="fresh FL voucher lead — UNASSIGNED, FL territory live-route case",
+        neighborhood=_DEMO_NB_MODEST,
+        self_reported_income=None,
+        state="FL",
+        income_tier=IncomeTier.LT_65K,
+    ),
 )
 
 
@@ -1202,14 +1295,17 @@ def _build_demo_household(
     email = _synthetic_email(rng, spec.surname)
     utm = _synthetic_utm(rng, attribution_source)
 
-    # Closed ("went all the way") families have run the whole funnel ⇒ anchor them
-    # older; active/intake families are fresher. Deterministic (drawn from rng).
+    # All demo households are created THIS WEEK (within the last 7 days of the demo
+    # epoch) — a tight, recent on-camera cohort (user-directed). Closed ("went all
+    # the way") families are nudged to the earlier part of the week so they still
+    # read as "ran the funnel first", but everyone stays inside the week.
     closed = spec.stage is Stage.TUITION
     if closed:
-        created = _timestamp_between(rng, min_days_ago=60, max_days_ago=150)
+        created = _timestamp_between(rng, min_days_ago=4, max_days_ago=6)
     else:
-        created = _timestamp_between(rng, min_days_ago=0, max_days_ago=30)
-    stalled_since = _timestamp(rng, max_days_ago=21) if spec.stall_reason is not None else None
+        created = _timestamp_between(rng, min_days_ago=0, max_days_ago=3)
+    # A stall that happened this week too (kept inside the 7-day window).
+    stalled_since = _timestamp(rng, max_days_ago=5) if spec.stall_reason is not None else None
     assigned_at = (
         min(created + timedelta(days=rng.randint(0, 7)), _EPOCH)
         if spec.assigned_rep_id is not None

@@ -1,8 +1,9 @@
 """MD — the curated `COCKPIT_SCENARIO=demo` cohort has the on-camera demo shape.
 
 The demo cohort (``generate_demo_cohort``) is a SEPARATE deterministic fixture —
-exactly 6 synthetic households with controlled, legible state for the demo
-(MULTI_AGENT_COCKPIT §10.1): exactly one two-child household, a stage spread
+exactly 12 synthetic households with controlled, legible state for the demo
+(MULTI_AGENT_COCKPIT §10.1), all created THIS WEEK: exactly one two-child
+household, a stage spread
 (≥1 mid-funnel, ≥1 enrollment-done "went all the way"), a funding/voucher spread,
 seeded SIS divergence, and an assignment split across the two demo agents with
 ≥1 left unassigned (the intake pool the admin routes live).
@@ -54,16 +55,32 @@ def test_demo_scenario_shape() -> None:
     params = load_params(EXAMPLE_PARAMS)
     ds = generate_demo_cohort(params=params)
 
-    # --- EXACTLY 6 households, the deliberate on-camera cohort (DH-2) ---------
-    assert len(ds.families) == 6
+    # --- EXACTLY 12 households, the deliberate on-camera cohort (grown 6→12) ---
+    assert len(ds.families) == 12
     # parallel one-row-per-family source tables (the spine join holds).
     assert len(ds.leads) == len(ds.families)
     assert len(ds.app_forms) == len(ds.families)
     assert len(ds.enrollment_forms) == len(ds.families)
 
-    # the deliberate 6 surnames (Johnson, Garcia, Ahmed dropped in DH-2).
+    # the deliberate 12 surnames.
     surnames = {lead.synthetic_last_name for lead in ds.leads}
-    assert surnames == {"Rivera", "Okafor", "Nguyen", "Patel", "Kim", "Silva"}
+    assert surnames == {
+        "Rivera", "Okafor", "Nguyen", "Patel", "Kim", "Silva",
+        "Johnson", "Garcia", "Ahmed", "Brooks", "Tran", "Reyes",
+    }
+
+    # --- every household was created THIS WEEK (within 7 days of the demo epoch) -
+    from datetime import timedelta
+
+    from app.data.synthetic import _EPOCH
+
+    week_start = _EPOCH - timedelta(days=7)
+    for f in ds.families:
+        assert f.created_at is not None
+        assert week_start <= f.created_at <= _EPOCH, (
+            f"{f.display_name} created {f.created_at} outside this week "
+            f"({week_start}..{_EPOCH})"
+        )
 
     # --- EXACTLY one two-child household, the rest single-child --------------
     child_counts = _children_by_family(ds)
@@ -188,14 +205,18 @@ def test_demo_cohort_territory_and_income_tier() -> None:
     territory = {_CLOSER_ID: "FL", _SETTER_ID: "CA"}
 
     states = {f.state for f in ds.families}
-    assert states <= {"FL", "CA"}, "demo families live in the two covered territories"
     assert {"FL", "CA"} <= states, "both covered territories are represented"
+    # ≥1 UNASSIGNED family sits in an UNCOVERED state (the territory-fallback case
+    # the admin routes live on camera).
+    uncovered = {f.state for f in ds.families if f.assigned_rep_id is None} - {"FL", "CA"}
+    assert uncovered, "≥1 unassigned family in an uncovered state (fallback demo)"
 
     for f in ds.families:
         # every household has a synthetic state + a typed income_tier (or None).
-        assert f.state in {"FL", "CA"}
+        assert isinstance(f.state, str) and f.state
         assert f.income_tier is None or isinstance(f.income_tier, IncomeTier)
-        # owner-territory consistency: an owned family is in its owner's state.
+        # owner-territory consistency: an OWNED family lives in its owner's state
+        # (the closer covers FL, the qualifier covers CA).
         if f.assigned_rep_id is not None:
             assert f.state == territory[f.assigned_rep_id], (
                 f"owned family {f.display_name} in {f.state} but owner covers "
