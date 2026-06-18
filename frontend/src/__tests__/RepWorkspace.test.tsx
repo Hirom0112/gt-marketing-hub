@@ -1,4 +1,10 @@
-import { render, screen, fireEvent, waitFor, within } from '@testing-library/react';
+import {
+  render,
+  screen,
+  fireEvent,
+  waitFor,
+  within,
+} from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import App from '../App';
 import { DEMO_AGENTS } from '../LoginPage';
@@ -84,7 +90,8 @@ function installFetch(): void {
     vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
       calls.push({ url, init });
-      if (url.includes('/work-queue')) return Promise.resolve(jsonResponse(QUEUE_ROWS));
+      if (url.includes('/work-queue'))
+        return Promise.resolve(jsonResponse(QUEUE_ROWS));
       // The admin EnrollmentCalendar reads /enrollment/calendar → { entries }.
       if (url.includes('/enrollment/calendar'))
         return Promise.resolve(jsonResponse({ month: '2026-06', entries: [] }));
@@ -188,8 +195,12 @@ describe('RepWorkspace (M2 — the rep gets ONE subset view)', () => {
     const bar = await screen.findByTestId('rep-situation-bar');
     expect(bar).toBeInTheDocument();
     // The three figures derive from the SAME owner-scoped /work-queue read.
-    expect(within(bar).getByTestId('rep-situation-tocontact')).toBeInTheDocument();
-    expect(within(bar).getByTestId('rep-situation-overdue')).toBeInTheDocument();
+    expect(
+      within(bar).getByTestId('rep-situation-tocontact'),
+    ).toBeInTheDocument();
+    expect(
+      within(bar).getByTestId('rep-situation-overdue'),
+    ).toBeInTheDocument();
     expect(within(bar).getByTestId('rep-situation-atrisk')).toBeInTheDocument();
   });
 
@@ -250,8 +261,40 @@ describe('RepWorkspace (M2 — the rep gets ONE subset view)', () => {
   it('regression: an ADMIN seat still gets the FULL EnrollmentWorkspace (only the rep was gated)', async () => {
     enterAsAdmin();
     // The admin keeps the calendar + the left-view toggle; the rep workspace is absent.
-    expect(await screen.findByTestId('enrollment-calendar')).toBeInTheDocument();
+    expect(
+      await screen.findByTestId('enrollment-calendar'),
+    ).toBeInTheDocument();
     expect(screen.getByTestId('enrollment-view-toggle')).toBeInTheDocument();
     expect(screen.queryByTestId('rep-workspace')).toBeNull();
+  });
+
+  // The founder's ask: "a calendar so they can see the people to contact and when
+  // they were assigned … calendar view and they can switch to list view." The rep
+  // gets their OWN list/calendar toggle (its own testid — NOT the admin one), and
+  // the calendar is the owner-scoped recovery flavor (anchor=stall, no ?anchor=intake).
+  it('toggles My Queue between the ranked list and an owner-scoped calendar', async () => {
+    enterAsRep();
+    // Opens on the ranked list (the calendar is not the default).
+    await screen.findByTestId('triage-list');
+    expect(screen.queryByTestId('enrollment-calendar')).toBeNull();
+
+    // Flip to the calendar via the rep's OWN toggle.
+    const toggle = screen.getByTestId('rep-view-toggle');
+    fireEvent.click(within(toggle).getByText('Calendar'));
+    expect(
+      await screen.findByTestId('enrollment-calendar'),
+    ).toBeInTheDocument();
+    expect(screen.queryByTestId('triage-list')).toBeNull();
+    // It read the owner-scoped calendar route (recovery flavor — no admin attribution).
+    await waitFor(() =>
+      expect(calls.some((c) => c.url.includes('/enrollment/calendar'))).toBe(
+        true,
+      ),
+    );
+    expect(calls.some((c) => c.url.includes('anchor=intake'))).toBe(false);
+
+    // Flip back to the list.
+    fireEvent.click(within(toggle).getByText('List'));
+    expect(await screen.findByTestId('triage-list')).toBeInTheDocument();
   });
 });
