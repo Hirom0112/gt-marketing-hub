@@ -249,6 +249,33 @@ def test_multiple_enrollment_rows_derive_from_most_advanced() -> None:
     assert repo.list_families(stage=Stage.ENROLL) == []
 
 
+def test_family_grain_ignores_a_childs_enrollment_packet() -> None:
+    """A multi-child family's HOUSEHOLD deal grain reads the household packet
+    (student_id NULL), never a CHILD's. Both packets share family_id, so the family
+    embed returns them together; a child whose 6/6 packet is the most-advanced would
+    otherwise make the household derive `tuition`/forms-cleared — the Rivera bug
+    (the one 2-child demo family derived `recovered` and vanished from active triage).
+    """
+    household = _enrollment(_FID_TUITION, signed=1, unlocked=False)  # 1/6 partial
+    child = _enrollment(_FID_TUITION, signed=6, unlocked=True)  # a child: 6/6 cleared
+    child["enrollment_form_id"] = "00000000-0000-0000-0000-0000000000e9"
+    child["student_id"] = "00000000-0000-0000-0000-0000000000f1"  # student grain
+    row = _spine(
+        _FID_TUITION,
+        current_stage="enroll",
+        leads_new=[_lead(_FID_TUITION)],
+        app_form=[_app_form(_FID_TUITION, submitted=True)],
+        enrollment_forms=[child, household],  # child (most-advanced) FIRST — the trap.
+    )
+    repo = _make_repo(_family_record_handler([row]))
+    # The HOUSEHOLD grain reads its OWN 1/6 packet ⇒ derives ENROLL, not TUITION.
+    assert [f.family_id for f in repo.list_families(stage=Stage.ENROLL)] == [UUID(_FID_TUITION)]
+    assert repo.list_families(stage=Stage.TUITION) == []
+    jf = repo.get_family(UUID(_FID_TUITION))
+    assert jf is not None and jf.enrollment_forms is not None
+    assert jf.enrollment_forms.forms_signed == 1  # the household packet, not the child's 6
+
+
 def test_partial_family_without_lead_is_excluded() -> None:
     """A family_record with no leads_new is invisible (the INNER-join rule)."""
     partial = _spine("00000000-0000-0000-0000-0000000000ff")  # no leads_new embed

@@ -289,6 +289,25 @@ class SupabaseFamilyRepository(FamilyRepository):
         return None
 
     @staticmethod
+    def _household_only(rows: object) -> list[dict[str, Any]]:
+        """Keep only HOUSEHOLD-grain rows (``student_id`` NULL) from an embedded list.
+
+        The ``app_form`` / ``enrollment_forms`` tables hold BOTH the household packet
+        (``student_id`` NULL) and one packet per CHILD (``student_id`` set) — all
+        sharing ``family_id`` — so a PostgREST FAMILY embed returns them together.
+        The household (deal) grain must read ONLY the household packet; the per-child
+        packets are read by the student joins via the student embed, not here. Without
+        this, a multi-child family picks up a child's (possibly fully-signed) packet
+        and misderives the HOUSEHOLD as forms-cleared / ``tuition`` / ``recovered`` —
+        the bug that dropped the one 2-child demo family out of the active triage.
+        A row with no ``student_id`` key (pre-student cloud data) counts as household,
+        so this is backward-compatible.
+        """
+        if not isinstance(rows, list):
+            return []
+        return [r for r in rows if isinstance(r, dict) and r.get("student_id") is None]
+
+    @staticmethod
     def _best_enrollment(rows: object) -> dict[str, Any] | None:
         """The MOST-ADVANCED ``enrollment_forms`` row when several exist.
 
@@ -324,10 +343,15 @@ class SupabaseFamilyRepository(FamilyRepository):
         """
         family = FamilyRecord.model_validate(row)
         lead_row = self._first(row.get("leads_new"))
-        app_row = self._first(row.get("app_form"))
-        # enrollment_forms can have >1 row under the insert-only flow; take the
-        # most-advanced so a completed family derives `tuition`, not `enroll`.
-        enroll_row = self._best_enrollment(row.get("enrollment_forms"))
+        # app_form / enrollment_forms hold BOTH the household packet and the per-child
+        # packets (all share family_id); the HOUSEHOLD grain reads only its own
+        # (student_id NULL) — never a child's — so a multi-child family doesn't borrow
+        # a child's progress (the Rivera forms-cleared/recovered bug).
+        app_row = self._first(self._household_only(row.get("app_form")))
+        # enrollment_forms can also have >1 HOUSEHOLD row under the insert-only flow;
+        # take the most-advanced household packet so a completed family derives
+        # `tuition`, not `enroll`.
+        enroll_row = self._best_enrollment(self._household_only(row.get("enrollment_forms")))
         community_row = self._first(row.get("community_profiles"))
         return JoinedFamily(
             family=family,
