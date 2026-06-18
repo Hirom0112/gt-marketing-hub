@@ -59,6 +59,9 @@ import {
   REGION,
   RELATIONSHIP,
   RELATIONSHIP_LABEL,
+  REPORTED_REP,
+  REPORTED_REP_LABEL,
+  type ReportedRep,
   SCHOOL_SITUATION,
   SCHOOL_SITUATION_LABEL,
   US_STATE,
@@ -589,6 +592,9 @@ function ApplyStep({
   const [tuitionAware, setTuitionAware] = useState(false);
   // Attribution
   const [heardAbout, setHeardAbout] = useState<AttributionSource | ''>('');
+  // Self-reported prior agent (LEAD_ASSIGNMENT.md §3). Optional — defaults to
+  // 'not_sure', never added to the validation block (skipping never blocks submit).
+  const [reportedRep, setReportedRep] = useState<ReportedRep>('not_sure');
 
   const [errors, setErrors] = useState<Record<string, boolean>>({});
   const [busy, setBusy] = useState(false);
@@ -619,7 +625,7 @@ function ApplyStep({
     }
     setBusy(true);
     try {
-      await submitApply(supabase, session);
+      await submitApply(supabase, session, reportedRep === 'not_sure' ? null : reportedRep);
       t.stepCompleted();
       onNext();
     } catch (e) {
@@ -860,6 +866,15 @@ function ApplyStep({
           onChange={setHeardAbout}
           telemetry={t}
           error={errors.attribution_source}
+        />
+        <Dropdown
+          label="Have you already spoken with someone on our admissions team?"
+          fieldKey="reported_rep"
+          value={reportedRep}
+          options={REPORTED_REP}
+          labelFor={(o) => REPORTED_REP_LABEL[o]}
+          onChange={setReportedRep}
+          telemetry={t}
         />
       </Section>
 

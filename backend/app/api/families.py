@@ -739,6 +739,8 @@ def get_work_queue(
                 value=value(family, params),
                 num_children=family.num_children,
                 funding_type=family.funding_type,
+                assigned_rep_id=joined.family.assigned_rep_id,
+                assigned_at=joined.family.assigned_at,
                 stall_date=_stall_date(joined, log=log, now=now, params=params),
                 recoverable_now=recoverable_now(family, params, now=now),
                 freshness=freshness(family, params, now=now),

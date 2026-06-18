@@ -133,3 +133,17 @@ def test_duplicate_lead_does_not_double_assign() -> None:
     (result,) = resp.json()["results"]
     assert result["owner_match"] is True and result["agent_id"] == str(_A)
     assert len(repo.list_assignments(fl_lead.family_id)) == 1  # only the first write
+
+
+def test_work_queue_row_exposes_assignment_contract() -> None:
+    """The triage/work-queue row carries the assignment contract (assigned_rep_id +
+    assigned_at) the rep-calendar workstream reads (LEAD_ASSIGNMENT.md §10a)."""
+    rows = client.get(
+        "/work-queue", params={"scope": "all"}, headers={"X-Demo-Role": "admin"}
+    ).json()
+    assert rows, "the demo cohort produces work-queue rows"
+    for row in rows:
+        assert "assigned_rep_id" in row and "assigned_at" in row
+    # ≥1 assigned demo family surfaces a non-null owner + assignment date.
+    owned = [r for r in rows if r["assigned_rep_id"] is not None]
+    assert owned and all(r["assigned_at"] is not None for r in owned)

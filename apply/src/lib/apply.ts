@@ -293,10 +293,21 @@ export async function submitInterest(
   if (error) throw new Error(`leads_new insert: ${error.message}`);
 }
 
-/** Step 2 (Apply) — INSERT app_form, submitted + complete. Derives stage `apply`. */
+/**
+ * Step 2 (Apply) — INSERT app_form, submitted + complete. Derives stage `apply`.
+ *
+ * Optionally persists `reported_rep_id` — the SELF-REPORTED prior agent the
+ * applicant named ("which of our team have you already spoken with?"). It is
+ * written onto the applicant's OWN `family_record` row (anon+RLS, the same
+ * owner-scoped UPDATE path as `funding_type`); the cockpit's deterministic router
+ * then PROMOTES a resolved value to `assigned_rep_id` server-side (the client
+ * never writes deal ownership — INV-5). A stable agent_id (or `null` for
+ * "not sure") — never free text, so a mistype is structurally impossible.
+ */
 export async function submitApply(
   sb: MinimalSupabase,
   session: ApplySession,
+  reportedRepId?: string | null,
 ): Promise<void> {
   const { error } = await sb.from('app_form').insert({
     app_form_id: uuid(),
@@ -305,6 +316,14 @@ export async function submitApply(
     completion_pct: 100,
   });
   if (error) throw new Error(`app_form insert: ${error.message}`);
+
+  if (reportedRepId) {
+    const { error: repErr } = await sb
+      .from('family_record')
+      .update({ reported_rep_id: reportedRepId })
+      .eq('family_id', session.familyId);
+    if (repErr) throw new Error(`family_record reported_rep_id update: ${repErr.message}`);
+  }
 }
 
 /**

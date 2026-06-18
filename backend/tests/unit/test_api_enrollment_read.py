@@ -492,6 +492,9 @@ def test_work_queue_active_contract_unchanged_by_history_detail() -> None:
                 # A-23 value drivers — always present (child count + funding label).
                 "num_children",
                 "funding_type",
+                # Assignment contract (LEAD_ASSIGNMENT.md §10a) — the rep calendar reads these.
+                "assigned_rep_id",
+                "assigned_at",
                 "stall_date",
                 "recoverable_now",
                 "freshness",

@@ -140,6 +140,13 @@ class WorkQueueItem(BaseModel):
     # targeted family is full-pay so ``funding_type`` is voucher/self-pay.
     num_children: int
     funding_type: FundingType | None = None
+    # Assignment contract (LEAD_ASSIGNMENT.md §10a) — the deal owner + WHEN they
+    # were assigned, surfaced on the triage/work-queue row so the rep calendar can
+    # key families by assignment date. Owner-scoped server-side (the resolve_owner_scope
+    # IDOR clamp — an agent only ever sees its own book). NULL ⇒ the unassigned
+    # intake pool. STABLE field names — a parallel calendar workstream reads these.
+    assigned_rep_id: UUID | None = None
+    assigned_at: datetime | None = None
     # The family's stall-anchor instant (the same derivation the calendar groups
     # on — :func:`app.api.families._stall_date`), composed at the API layer (it
     # needs ``now`` + the audit log, INV-2). Lets the Show-all list group rows

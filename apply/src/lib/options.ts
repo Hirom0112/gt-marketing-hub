@@ -42,6 +42,26 @@ export const ATTRIBUTION_SOURCE_LABEL: Record<AttributionSource, string> = {
   direct: 'Came here directly',
 };
 
+// family_record.reported_rep_id — the SELF-REPORTED prior agent (a closed list of
+// our synthetic sales staff, NEVER free text, so a mistype is impossible). The
+// VALUE is the stable sales_agent.agent_id (mirrors core/sales_agents.py + the
+// 0013 seed) or 'not_sure'. The cockpit router PROMOTES a resolved value to
+// assigned_rep_id server-side (the client never writes ownership — INV-5). Default
+// 'not_sure' so skipping is a first-class, zero-cost answer (a wrong/blank pick
+// can do no more harm than the round-robin already does — LEAD_ASSIGNMENT.md §3).
+export const REPORTED_REP = [
+  'not_sure',
+  'a0000000-0000-4000-8000-000000000001', // Riley Carter (rank 1, FL closer)
+  'a0000000-0000-4000-8000-000000000002', // Jordan Avery (rank 2, CA qualifier)
+] as const;
+export type ReportedRep = (typeof REPORTED_REP)[number];
+
+export const REPORTED_REP_LABEL: Record<ReportedRep, string> = {
+  not_sure: "Not sure / I haven't spoken with anyone yet",
+  'a0000000-0000-4000-8000-000000000001': 'Riley Carter',
+  'a0000000-0000-4000-8000-000000000002': 'Jordan Avery',
+};
+
 // leads_new.region — aggregate region label only (INV-6 / P-4: no precise geo).
 export const REGION = [
   'Northeast',
