@@ -498,6 +498,115 @@ describe('DealView — S12 W4 work-panel', () => {
 });
 
 // --------------------------------------------------------------------------- #
+// Rep close-loop WRITE UI (A-35) — "log a call outcome" + confirm-presumed-lost.
+// The deal panel POSTs the close-loop spine events directly (like Seed-to-HubSpot),
+// re-fetches its own deal_view, and notifies the parent (onChanged) to refresh the
+// board. The confirm-lost affordance appears ONLY for a presumed_lost family (the
+// human-confirm gate); the whole block is hidden once a family is closed out.
+// --------------------------------------------------------------------------- #
+
+// A fetch stub that serves the deal_view on GET and a 201/200 on the write POSTs.
+function closeLoopFetch(state: string): ReturnType<typeof vi.fn> {
+  return vi.fn(async (url: string, init?: RequestInit) => {
+    const method = init?.method ?? 'GET';
+    if (method === 'POST' && /contact-outcome$/.test(url)) {
+      return {
+        ok: true,
+        status: 201,
+        json: async () => ({ family_id: 'fam-123' }),
+      };
+    }
+    if (method === 'POST' && /presumed-lost-confirm$/.test(url)) {
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({ family_id: 'fam-123', recovery_state: 'lost' }),
+      };
+    }
+    return {
+      ok: true,
+      status: 200,
+      json: async () => ({
+        deal_view: { ...STALLED_PAYLOAD.deal_view, recovery_state: state },
+        family: {},
+        lead: {},
+        app_form: {},
+      }),
+    };
+  });
+}
+
+describe('DealView — rep close-loop write UI', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+
+  it('logs a contact outcome (POST) and re-fetches + notifies the parent', async () => {
+    vi.stubGlobal('fetch', closeLoopFetch('cold'));
+    const onChanged = vi.fn();
+    render(<DealView familyId="fam-123" onChanged={onChanged} />);
+
+    fireEvent.change(await screen.findByTestId('deal-outcome-disposition'), {
+      target: { value: 'no_answer' },
+    });
+    fireEvent.click(screen.getByTestId('deal-outcome-submit'));
+
+    await waitFor(() => {
+      const fetchMock = fetch as unknown as ReturnType<typeof vi.fn>;
+      const post = fetchMock.mock.calls.find(
+        ([u, i]) =>
+          /\/families\/fam-123\/contact-outcome$/.test(u as string) &&
+          (i as RequestInit | undefined)?.method === 'POST',
+      );
+      expect(post).toBeTruthy();
+      const body = JSON.parse((post![1] as RequestInit).body as string);
+      expect(body.disposition).toBe('no_answer');
+      expect(body.channel).toBeTruthy();
+    });
+    // The write notifies the parent so the board can refresh.
+    await waitFor(() => expect(onChanged).toHaveBeenCalled());
+  });
+
+  it('shows confirm-lost ONLY for a presumed_lost family and POSTs the reason', async () => {
+    vi.stubGlobal('fetch', closeLoopFetch('presumed_lost'));
+    render(<DealView familyId="fam-123" />);
+
+    fireEvent.click(await screen.findByTestId('deal-confirm-lost-start'));
+    fireEvent.change(await screen.findByTestId('deal-confirm-lost-reason'), {
+      target: { value: 'family enrolled elsewhere' },
+    });
+    fireEvent.click(screen.getByTestId('deal-confirm-lost-submit'));
+
+    await waitFor(() => {
+      const fetchMock = fetch as unknown as ReturnType<typeof vi.fn>;
+      const post = fetchMock.mock.calls.find(
+        ([u, i]) =>
+          /\/families\/fam-123\/presumed-lost-confirm$/.test(u as string) &&
+          (i as RequestInit | undefined)?.method === 'POST',
+      );
+      expect(post).toBeTruthy();
+      const body = JSON.parse((post![1] as RequestInit).body as string);
+      expect(body.reason).toBe('family enrolled elsewhere');
+    });
+  });
+
+  it('hides confirm-lost for a non-presumed-lost family', async () => {
+    vi.stubGlobal('fetch', closeLoopFetch('cold'));
+    render(<DealView familyId="fam-123" />);
+    await screen.findByTestId('deal-outcome-submit');
+    expect(screen.queryByTestId('deal-confirm-lost-start')).toBeNull();
+  });
+
+  it('hides the whole log-outcome block once a family is closed out (lost)', async () => {
+    vi.stubGlobal('fetch', closeLoopFetch('lost'));
+    render(<DealView familyId="fam-123" />);
+    await screen.findByTestId('deal-recovery-state');
+    expect(screen.queryByTestId('deal-outcome-submit')).toBeNull();
+  });
+});
+
+// --------------------------------------------------------------------------- #
 // S14 W4 — CRM seam badge + live-push kill switch. The deal view reads GET
 // /crm/status and FAILS CLOSED (INV-3 pattern; INV-8): a positive kill_switch
 // disables the "Seed to HubSpot" live-push and shows the operator a reason. An

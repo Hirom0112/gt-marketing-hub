@@ -200,7 +200,32 @@ interface DealViewProps {
   // offers the reason and calls back; it never writes (INV-2).
   dismissReasons?: readonly string[];
   onDismiss?: (familyId: string, reason: string) => void;
+  // Rep close-loop (A-35): notified after a contact-outcome / confirm-lost WRITE so
+  // the parent can refresh the board (a family may flip presumed_lost → lost and
+  // leave the active board). DealView POSTs the event itself and re-fetches its own
+  // deal_view; this is purely the board-refresh signal. Optional (standalone-safe).
+  onChanged?: () => void;
 }
+
+// The structured 'log a call outcome' taxonomy (mirrors the backend
+// ContactChannel / ContactDisposition enums). SMS-first per the funnel data.
+const OUTCOME_CHANNELS: readonly { value: string; label: string }[] = [
+  { value: 'sms', label: 'Text' },
+  { value: 'email', label: 'Email' },
+  { value: 'call', label: 'Call' },
+];
+const OUTCOME_DISPOSITIONS: readonly { value: string; label: string }[] = [
+  { value: 'no_answer', label: 'No answer' },
+  { value: 'no_reply', label: 'No reply' },
+  { value: 'voicemail', label: 'Left voicemail' },
+  { value: 'reached', label: 'Reached' },
+  { value: 'committed_to_pay', label: 'Committed to pay' },
+  { value: 'wrong_number', label: 'Wrong number' },
+  { value: 'declined', label: 'Declined' },
+];
+// recovery_states that are closed out / parked — the log-outcome block hides for
+// these (no point logging a call on a won/dismissed/lost/dormant family).
+const _CLOSED_OUT = new Set(['recovered', 'dismissed', 'lost', 'dormant']);
 
 type LoadState =
   | { status: 'loading' }
@@ -567,11 +592,23 @@ export default function DealView({
   refreshKey,
   dismissReasons,
   onDismiss,
+  onChanged,
 }: DealViewProps): JSX.Element {
   const [state, setState] = useState<LoadState>({ status: 'loading' });
   const [seed, setSeed] = useState<SeedState>({ status: 'idle' });
   // The "Dismiss this family" reason picker (closed by default).
   const [dismissing, setDismissing] = useState(false);
+  // Rep close-loop (A-35): the "log a call outcome" form + the confirm-lost gate.
+  // A local refresh counter re-fetches THIS deal_view after a write (the parent's
+  // board refresh rides on onChanged); the writes are direct POSTs, like seed.
+  const [outcomeChannel, setOutcomeChannel] = useState('sms');
+  const [outcomeDisposition, setOutcomeDisposition] = useState('no_answer');
+  const [outcomeNote, setOutcomeNote] = useState('');
+  const [outcomeBusy, setOutcomeBusy] = useState(false);
+  const [outcomeError, setOutcomeError] = useState<string | null>(null);
+  const [confirmingLost, setConfirmingLost] = useState(false);
+  const [lostReason, setLostReason] = useState('');
+  const [localRefresh, setLocalRefresh] = useState(0);
   // The CRM seam state (S14 W4) — null until /crm/status resolves (or if it is
   // unavailable / an unknown shape, in which case we fail OPEN: no banner, the
   // live-push stays enabled; the kill switch only blocks on a positive true).
@@ -606,10 +643,73 @@ export default function DealView({
       });
   }
 
+  // Rep close-loop WRITE (A-35) — log a contact outcome. A direct POST of the
+  // append-only spine event (like seed); on success re-fetch this deal_view (the
+  // state may flip, e.g. the 5th no-answer → presumed_lost) and notify the parent
+  // (onChanged) so the board refreshes. INV-2: the backend owns the write.
+  function logOutcome(): void {
+    setOutcomeBusy(true);
+    setOutcomeError(null);
+    apiFetch(`/families/${familyId}/contact-outcome`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        channel: outcomeChannel,
+        disposition: outcomeDisposition,
+        note: outcomeNote,
+      }),
+    })
+      .then((res) => {
+        if (!res.ok) throw new Error(`log outcome failed: ${res.status}`);
+        return res.json() as Promise<unknown>;
+      })
+      .then(() => {
+        setOutcomeNote('');
+        setLocalRefresh((n) => n + 1);
+        onChanged?.();
+      })
+      .catch((err: unknown) => {
+        setOutcomeError(err instanceof Error ? err.message : 'unknown error');
+      })
+      .finally(() => setOutcomeBusy(false));
+  }
+
+  // Confirm a SURFACED presumed-lost family as LOST (the human-confirm gate). The
+  // backend refuses (409) any family not currently presumed_lost — fail-closed, so
+  // a warm lead is never auto-dropped. On success re-fetch + notify the parent.
+  function confirmLost(): void {
+    if (!lostReason.trim()) return;
+    setOutcomeBusy(true);
+    setOutcomeError(null);
+    apiFetch(`/families/${familyId}/presumed-lost-confirm`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ reason: lostReason }),
+    })
+      .then((res) => {
+        if (!res.ok) throw new Error(`confirm lost failed: ${res.status}`);
+        return res.json() as Promise<unknown>;
+      })
+      .then(() => {
+        setConfirmingLost(false);
+        setLostReason('');
+        setLocalRefresh((n) => n + 1);
+        onChanged?.();
+      })
+      .catch((err: unknown) => {
+        setOutcomeError(err instanceof Error ? err.message : 'unknown error');
+      })
+      .finally(() => setOutcomeBusy(false));
+  }
+
   useEffect(() => {
-    // A new family resets the capture state (no stale ids across selections).
+    // A new family resets the capture + close-loop form state (no stale carryover).
     setSeed({ status: 'idle' });
     setDismissing(false);
+    setConfirmingLost(false);
+    setLostReason('');
+    setOutcomeNote('');
+    setOutcomeError(null);
   }, [familyId]);
 
   useEffect(() => {
@@ -650,7 +750,9 @@ export default function DealView({
     return () => {
       cancelled = true;
     };
-  }, [familyId, refreshKey]);
+    // localRefresh re-fetches the deal_view after a close-loop WRITE (A-35) so the
+    // recovery_state reflects the new event (e.g. the 5th no-answer → presumed_lost).
+  }, [familyId, refreshKey, localRefresh]);
 
   useEffect(() => {
     // DH-5 — fetch the per-child board (the SAME source StudentBoard reads, A-24)
@@ -1072,6 +1174,165 @@ export default function DealView({
         )}
 
       {seed.status === 'captured' && <CapturePanel data={seed.data} />}
+
+      {/* Rep close-loop (A-35) — "log a call outcome" + the confirm-presumed-lost
+          gate. Hidden once a family is closed out (won/dismissed/lost/dormant): no
+          point logging a call on a parked family. The writes are direct POSTs of
+          append-only spine events (INV-2); confirm-lost only shows for a
+          presumed_lost family (the human-confirm gate, fail-closed server-side). */}
+      {!_CLOSED_OUT.has(deal.recovery_state ?? '') && (
+        <div
+          data-testid="deal-log-outcome"
+          style={{
+            marginTop: 'var(--s-3)',
+            padding: 'var(--s-2) var(--s-3)',
+            background: 'var(--surface-2)',
+            border: '1px solid var(--line)',
+            borderRadius: 'var(--r-md)',
+          }}
+        >
+          <div className="lab" style={{ marginBottom: 'var(--s-2)' }}>
+            Log a call outcome
+          </div>
+          <div
+            style={{
+              display: 'flex',
+              gap: 'var(--s-2)',
+              flexWrap: 'wrap',
+              alignItems: 'center',
+            }}
+          >
+            <select
+              aria-label="Channel"
+              data-testid="deal-outcome-channel"
+              value={outcomeChannel}
+              onChange={(e) => setOutcomeChannel(e.target.value)}
+              style={{ fontFamily: 'inherit', fontSize: 'var(--fs-sm)' }}
+            >
+              {OUTCOME_CHANNELS.map((c) => (
+                <option key={c.value} value={c.value}>
+                  {c.label}
+                </option>
+              ))}
+            </select>
+            <select
+              aria-label="Outcome"
+              data-testid="deal-outcome-disposition"
+              value={outcomeDisposition}
+              onChange={(e) => setOutcomeDisposition(e.target.value)}
+              style={{ fontFamily: 'inherit', fontSize: 'var(--fs-sm)' }}
+            >
+              {OUTCOME_DISPOSITIONS.map((d) => (
+                <option key={d.value} value={d.value}>
+                  {d.label}
+                </option>
+              ))}
+            </select>
+            <input
+              aria-label="Note"
+              data-testid="deal-outcome-note"
+              placeholder="note (optional)"
+              value={outcomeNote}
+              onChange={(e) => setOutcomeNote(e.target.value)}
+              style={{
+                flex: '1 1 140px',
+                fontFamily: 'inherit',
+                fontSize: 'var(--fs-sm)',
+                padding: '4px 8px',
+                border: '1px solid var(--line)',
+                borderRadius: 'var(--r-sm)',
+              }}
+            />
+            <Button
+              data-testid="deal-outcome-submit"
+              onClick={logOutcome}
+              disabled={outcomeBusy}
+            >
+              {outcomeBusy ? 'Logging…' : 'Log'}
+            </Button>
+          </div>
+
+          {/* The human-confirm gate — only for a SURFACED presumed-lost family. */}
+          {deal.recovery_state === 'presumed_lost' && (
+            <div style={{ marginTop: 'var(--s-2)' }}>
+              {!confirmingLost ? (
+                <Button
+                  icon={AlertTriangle}
+                  data-testid="deal-confirm-lost-start"
+                  onClick={() => setConfirmingLost(true)}
+                >
+                  Confirm lost…
+                </Button>
+              ) : (
+                <div
+                  style={{
+                    display: 'flex',
+                    gap: 'var(--s-2)',
+                    flexWrap: 'wrap',
+                    alignItems: 'center',
+                  }}
+                >
+                  <input
+                    aria-label="Lost reason"
+                    data-testid="deal-confirm-lost-reason"
+                    placeholder="why lost? (required)"
+                    value={lostReason}
+                    onChange={(e) => setLostReason(e.target.value)}
+                    style={{
+                      flex: '1 1 160px',
+                      fontFamily: 'inherit',
+                      fontSize: 'var(--fs-sm)',
+                      padding: '4px 8px',
+                      border: '1px solid var(--line)',
+                      borderRadius: 'var(--r-sm)',
+                    }}
+                  />
+                  <Button
+                    variant="primary"
+                    data-testid="deal-confirm-lost-submit"
+                    onClick={confirmLost}
+                    disabled={outcomeBusy || !lostReason.trim()}
+                  >
+                    Confirm lost
+                  </Button>
+                  <button
+                    type="button"
+                    data-testid="deal-confirm-lost-cancel"
+                    onClick={() => setConfirmingLost(false)}
+                    style={{
+                      border: '1px solid transparent',
+                      background: 'transparent',
+                      color: 'var(--muted)',
+                      fontSize: 11.5,
+                      fontWeight: 600,
+                      padding: '5px 10px',
+                      cursor: 'pointer',
+                      fontFamily: 'inherit',
+                    }}
+                  >
+                    cancel
+                  </button>
+                </div>
+              )}
+            </div>
+          )}
+
+          {outcomeError !== null && (
+            <span
+              data-testid="deal-outcome-error"
+              role="alert"
+              style={{
+                display: 'block',
+                marginTop: 'var(--s-2)',
+                fontSize: 'var(--fs-sm)',
+                color: 'var(--signal-ink)',
+              }}
+            >
+              {outcomeError}
+            </span>
+          )}
+        </div>
+      )}
     </section>
   );
 }

@@ -84,8 +84,12 @@ export default function RepWorkspace(): JSX.Element {
   // "My Queue" lives at ALL scope (the rep works their whole book ranked by
   // recoverable_now; the recency facets surface overdue/fresh/working — §4).
   const [triageScope, setTriageScope] = useState<TriageScope>('all');
-  const [triageAnchor, setTriageAnchor] = useState<string | undefined>(undefined);
-  const [recoveryRows, setRecoveryRows] = useState<RecoverableRow[] | null>(null);
+  const [triageAnchor, setTriageAnchor] = useState<string | undefined>(
+    undefined,
+  );
+  const [recoveryRows, setRecoveryRows] = useState<RecoverableRow[] | null>(
+    null,
+  );
   const [dealRefresh, setDealRefresh] = useState(0);
   const [queueRefresh, setQueueRefresh] = useState(0);
   const [sort, setSort] = useState<SortKey>('likely');
@@ -108,7 +112,8 @@ export default function RepWorkspace(): JSX.Element {
   const reloadRows = useCallback((): void => {
     apiFetch(`/work-queue`)
       .then((res) => {
-        if (!res.ok) throw new Error(`work-queue request failed: ${res.status}`);
+        if (!res.ok)
+          throw new Error(`work-queue request failed: ${res.status}`);
         return res.json() as Promise<RecoverableRow[]>;
       })
       .then((rows) => setRecoveryRows(rows))
@@ -126,7 +131,10 @@ export default function RepWorkspace(): JSX.Element {
         if (cancelled) return;
         const first = families[0]?.family_id ?? null;
         if (first === null) {
-          setFamiliesState({ status: 'error', message: 'no families returned' });
+          setFamiliesState({
+            status: 'error',
+            message: 'no families returned',
+          });
           return;
         }
         setSelectedFamilyId(first);
@@ -351,6 +359,7 @@ export default function RepWorkspace(): JSX.Element {
           refreshKey={dealRefresh}
           dismissReasons={DISMISS_REASONS}
           onDismiss={dismissOne}
+          onChanged={handleActionApproved}
         />
         <div className="work-panel-rule" aria-hidden />
         <ActionPanel
@@ -373,7 +382,9 @@ export default function RepWorkspace(): JSX.Element {
       className="enrollment-workspace"
       data-testid="rep-workspace"
     >
-      {recoveryRows !== null && <SituationBar rows={recoveryRows} variant="rep" />}
+      {recoveryRows !== null && (
+        <SituationBar rows={recoveryRows} variant="rep" />
+      )}
 
       <div className="operator-grid">
         <div className="operator-find">

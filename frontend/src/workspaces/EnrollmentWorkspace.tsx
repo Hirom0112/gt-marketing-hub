@@ -400,6 +400,7 @@ export default function EnrollmentWorkspace(): JSX.Element {
           refreshKey={dealRefresh}
           dismissReasons={DISMISS_REASONS}
           onDismiss={dismissOne}
+          onChanged={handleActionApproved}
         />
         {/* Apply-flow drop-off telemetry (S15 W2) — the last step before exit,
             metadata only (INV-1/INV-6). Degrades cleanly on 204 / no telemetry. */}
