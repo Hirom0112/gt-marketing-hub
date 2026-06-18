@@ -3,13 +3,13 @@ import { Mail, MessageSquare, Sparkles } from 'lucide-react';
 import { apiFetch } from '../config';
 import { Button } from '../ui';
 
-// AI drafts (admin-dashboard redesign §10; D-1). Generates an EMAIL and an SMS
-// draft via POST /ai/enrollment/draft-ungated {family_id, channel}. There is NO
-// eval gate and NO auto-send on this surface (brief + D-1): the body is always
-// surfaced into an editable textarea and the human copies/sends manually. A small
-// note appears when the response is `degraded` (the metered LLM was unavailable /
-// capped and an operator template stands in). The proposal is still logged
-// server-side for the audit (NFR-6); the panel never writes state itself (INV-2).
+// AI drafts (admin + sales-agent dashboard redesign; D-1). Generates an EMAIL and
+// an SMS draft via POST /ai/enrollment/draft-ungated {family_id, channel}. There is
+// NO eval gate, NO approve/blocked/degraded banner, and NO send button on this
+// surface (both briefs + D-1): the body is always surfaced into an EDITABLE textarea
+// and the human copies/sends manually — the human is the hard final gate. The
+// proposal is still logged server-side for the audit (NFR-6); the panel never
+// writes state itself (INV-2). Kept deliberately simple.
 
 interface UngatedDraftResponse {
   proposal_id: string;
@@ -24,11 +24,10 @@ type DraftStatus = 'idle' | 'loading' | 'error';
 interface DraftState {
   status: DraftStatus;
   body: string;
-  degraded: boolean;
   error?: string;
 }
 
-const EMPTY: DraftState = { status: 'idle', body: '', degraded: false };
+const EMPTY: DraftState = { status: 'idle', body: '' };
 
 interface DraftBlockProps {
   familyId: string;
@@ -52,11 +51,7 @@ function DraftBlock({ familyId, channel, label, icon: Icon }: DraftBlockProps): 
         return res.json() as Promise<UngatedDraftResponse>;
       })
       .then((data) => {
-        setState({
-          status: 'idle',
-          body: data.body,
-          degraded: data.degraded === true,
-        });
+        setState({ status: 'idle', body: data.body });
       })
       .catch((err: unknown) => {
         setState((s) => ({
@@ -86,15 +81,6 @@ function DraftBlock({ familyId, channel, label, icon: Icon }: DraftBlockProps): 
           {state.status === 'loading' ? 'Drafting…' : 'Draft'}
         </Button>
       </div>
-      {state.degraded && (
-        <span
-          data-testid={`ai-draft-degraded-${channel}`}
-          className="lab"
-          style={{ color: 'var(--gate-ink)' }}
-        >
-          LLM unavailable — operator template stands in. Edit before you send.
-        </span>
-      )}
       {state.status === 'error' && (
         <span
           data-testid={`ai-draft-error-${channel}`}

@@ -13,6 +13,7 @@ import { Button, Chip } from './ui';
 import RecencyChip from './enrollment/RecencyChip';
 import CompletionRing from './enrollment/CompletionRing';
 import SeamDot, { type SeamStatus } from './enrollment/SeamDot';
+import LogCallForm from './enrollment/LogCallForm';
 import { fmtDay, fundingLabel, humanizeSegment } from './enrollment/format';
 
 // Deal view (FR-2.2). Fetches GET /families/{id} and surfaces the deal_view
@@ -228,22 +229,8 @@ interface DealViewProps {
   variant?: 'admin' | 'rep';
 }
 
-// The structured 'log a call outcome' taxonomy (mirrors the backend
-// ContactChannel / ContactDisposition enums). SMS-first per the funnel data.
-const OUTCOME_CHANNELS: readonly { value: string; label: string }[] = [
-  { value: 'sms', label: 'Text' },
-  { value: 'email', label: 'Email' },
-  { value: 'call', label: 'Call' },
-];
-const OUTCOME_DISPOSITIONS: readonly { value: string; label: string }[] = [
-  { value: 'no_answer', label: 'No answer' },
-  { value: 'no_reply', label: 'No reply' },
-  { value: 'voicemail', label: 'Left voicemail' },
-  { value: 'reached', label: 'Reached' },
-  { value: 'committed_to_pay', label: 'Committed to pay' },
-  { value: 'wrong_number', label: 'Wrong number' },
-  { value: 'declined', label: 'Declined' },
-];
+// The structured 'log a call outcome' taxonomy now lives in the shared
+// enrollment/LogCallForm (consumed by both DealView and the dashboard DetailPanel).
 // recovery_states that are closed out / parked — the log-outcome block hides for
 // these (no point logging a call on a won/dismissed/lost/dormant family).
 const _CLOSED_OUT = new Set(['recovered', 'dismissed', 'lost', 'dormant']);
@@ -704,12 +691,10 @@ export default function DealView({
   const [seed, setSeed] = useState<SeedState>({ status: 'idle' });
   // The "Dismiss this family" reason picker (closed by default).
   const [dismissing, setDismissing] = useState(false);
-  // Rep close-loop (A-35): the "log a call outcome" form + the confirm-lost gate.
-  // A local refresh counter re-fetches THIS deal_view after a write (the parent's
-  // board refresh rides on onChanged); the writes are direct POSTs, like seed.
-  const [outcomeChannel, setOutcomeChannel] = useState('sms');
-  const [outcomeDisposition, setOutcomeDisposition] = useState('no_answer');
-  const [outcomeNote, setOutcomeNote] = useState('');
+  // Rep close-loop (A-35): the "log a call outcome" form (now the shared
+  // LogCallForm) + the confirm-lost gate. A local refresh counter re-fetches THIS
+  // deal_view after a write (the parent's board refresh rides on onChanged); the
+  // confirm-lost write is a direct POST, like seed.
   const [outcomeBusy, setOutcomeBusy] = useState(false);
   const [outcomeError, setOutcomeError] = useState<string | null>(null);
   const [confirmingLost, setConfirmingLost] = useState(false);
@@ -749,35 +734,14 @@ export default function DealView({
       });
   }
 
-  // Rep close-loop WRITE (A-35) — log a contact outcome. A direct POST of the
-  // append-only spine event (like seed); on success re-fetch this deal_view (the
-  // state may flip, e.g. the 5th no-answer → presumed_lost) and notify the parent
-  // (onChanged) so the board refreshes. INV-2: the backend owns the write.
-  function logOutcome(): void {
-    setOutcomeBusy(true);
-    setOutcomeError(null);
-    apiFetch(`/families/${familyId}/contact-outcome`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        channel: outcomeChannel,
-        disposition: outcomeDisposition,
-        note: outcomeNote,
-      }),
-    })
-      .then((res) => {
-        if (!res.ok) throw new Error(`log outcome failed: ${res.status}`);
-        return res.json() as Promise<unknown>;
-      })
-      .then(() => {
-        setOutcomeNote('');
-        setLocalRefresh((n) => n + 1);
-        onChanged?.();
-      })
-      .catch((err: unknown) => {
-        setOutcomeError(err instanceof Error ? err.message : 'unknown error');
-      })
-      .finally(() => setOutcomeBusy(false));
+  // Rep close-loop WRITE (A-35) — log a contact outcome. The form itself is the
+  // shared LogCallForm (it owns the POST of the append-only spine event); on its
+  // success callback we re-fetch this deal_view (the state may flip, e.g. the 5th
+  // no-answer → presumed_lost) and notify the parent (onChanged) so the board
+  // refreshes. INV-2: the backend owns the write.
+  function onOutcomeLogged(): void {
+    setLocalRefresh((n) => n + 1);
+    onChanged?.();
   }
 
   // Confirm a SURFACED presumed-lost family as LOST (the human-confirm gate). The
@@ -814,7 +778,6 @@ export default function DealView({
     setDismissing(false);
     setConfirmingLost(false);
     setLostReason('');
-    setOutcomeNote('');
     setOutcomeError(null);
   }, [familyId]);
 
@@ -1324,63 +1287,10 @@ export default function DealView({
           <div className="lab" style={{ marginBottom: 'var(--s-2)' }}>
             Log a call outcome
           </div>
-          <div
-            style={{
-              display: 'flex',
-              gap: 'var(--s-2)',
-              flexWrap: 'wrap',
-              alignItems: 'center',
-            }}
-          >
-            <select
-              aria-label="Channel"
-              data-testid="deal-outcome-channel"
-              value={outcomeChannel}
-              onChange={(e) => setOutcomeChannel(e.target.value)}
-              style={{ fontFamily: 'inherit', fontSize: 'var(--fs-sm)' }}
-            >
-              {OUTCOME_CHANNELS.map((c) => (
-                <option key={c.value} value={c.value}>
-                  {c.label}
-                </option>
-              ))}
-            </select>
-            <select
-              aria-label="Outcome"
-              data-testid="deal-outcome-disposition"
-              value={outcomeDisposition}
-              onChange={(e) => setOutcomeDisposition(e.target.value)}
-              style={{ fontFamily: 'inherit', fontSize: 'var(--fs-sm)' }}
-            >
-              {OUTCOME_DISPOSITIONS.map((d) => (
-                <option key={d.value} value={d.value}>
-                  {d.label}
-                </option>
-              ))}
-            </select>
-            <input
-              aria-label="Note"
-              data-testid="deal-outcome-note"
-              placeholder="note (optional)"
-              value={outcomeNote}
-              onChange={(e) => setOutcomeNote(e.target.value)}
-              style={{
-                flex: '1 1 140px',
-                fontFamily: 'inherit',
-                fontSize: 'var(--fs-sm)',
-                padding: '4px 8px',
-                border: '1px solid var(--line)',
-                borderRadius: 'var(--r-sm)',
-              }}
-            />
-            <Button
-              data-testid="deal-outcome-submit"
-              onClick={logOutcome}
-              disabled={outcomeBusy}
-            >
-              {outcomeBusy ? 'Logging…' : 'Log'}
-            </Button>
-          </div>
+          {/* The shared contact-outcome form (enrollment/LogCallForm) — the SAME
+              implementation the dashboard DetailPanel mounts. On a successful write
+              it re-fetches this deal_view + notifies the parent (onChanged). */}
+          <LogCallForm familyId={familyId} onLogged={onOutcomeLogged} />
 
           {/* The human-confirm gate — only for a SURFACED presumed-lost family. */}
           {deal.recovery_state === 'presumed_lost' && (
@@ -1449,7 +1359,7 @@ export default function DealView({
 
           {outcomeError !== null && (
             <span
-              data-testid="deal-outcome-error"
+              data-testid="deal-confirm-lost-error"
               role="alert"
               style={{
                 display: 'block',

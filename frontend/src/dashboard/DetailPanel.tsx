@@ -17,14 +17,15 @@ import CompletionRing from '../enrollment/CompletionRing';
 import SeamDot, { type SeamStatus } from '../enrollment/SeamDot';
 import CloseTipsPanel from '../enrollment/CloseTipsPanel';
 import NotesTimeline from '../enrollment/NotesTimeline';
+import LogCallForm from '../enrollment/LogCallForm';
 import AiDrafts from './AiDrafts';
-import LogCallPanel from './LogCallPanel';
+import EmptyState from './EmptyState';
 
 // The right-column CONTEXTUAL DETAIL PANEL (admin-dashboard redesign). For a
 // selected family it fetches GET /families/{id} (deal_view + lead) and GET
 // /students, then renders the twelve sections in the exact brief order. It REUSES
 // the existing primitives + sub-panels (CloseTipsPanel, NotesTimeline, SeamDot,
-// CompletionRing) and the contact-outcome flow (LogCallPanel). It deliberately
+// CompletionRing) and the shared contact-outcome form (LogCallForm). It deliberately
 // does NOT mount FundingTracker — the funding/TEFA gate block is removed; only the
 // small inline funding TYPE field (§5) remains. Read-only fetches (INV-2).
 
@@ -93,7 +94,8 @@ type LoadState =
   | { status: 'ready'; deal: DealView };
 
 interface DetailPanelProps {
-  familyId: string;
+  // null ⇒ nothing selected on the left; the panel shows the shared empty state.
+  familyId: string | null;
 }
 
 // A titled section wrapper — a small mono label + the section body.
@@ -142,6 +144,7 @@ export default function DetailPanel({ familyId }: DetailPanelProps): JSX.Element
   const [, setRefresh] = useState(0);
 
   useEffect(() => {
+    if (familyId === null) return;
     let cancelled = false;
     setState({ status: 'loading' });
     apiFetch(`/families/${familyId}`)
@@ -164,6 +167,7 @@ export default function DetailPanel({ familyId }: DetailPanelProps): JSX.Element
   }, [familyId]);
 
   useEffect(() => {
+    if (familyId === null) return;
     let cancelled = false;
     setChildren(null);
     apiFetch(`/students?scope=all`)
@@ -186,6 +190,19 @@ export default function DetailPanel({ familyId }: DetailPanelProps): JSX.Element
       cancelled = true;
     };
   }, [familyId]);
+
+  // Nothing selected ⇒ the shared clean empty state (both briefs require it).
+  if (familyId === null) {
+    return (
+      <Card>
+        <EmptyState
+          icon={<Users size={20} aria-hidden />}
+          title="No family selected"
+          body="Pick a lead or family on the left to see the full detail here."
+        />
+      </Card>
+    );
+  }
 
   if (state.status === 'loading') {
     return (
@@ -397,9 +414,9 @@ export default function DetailPanel({ familyId }: DetailPanelProps): JSX.Element
 
         <div className="admin-panel-rule" />
 
-        {/* 12 — Log a call */}
+        {/* 12 — Log a call (the shared enrollment/LogCallForm) */}
         <Section title="Log a call" icon={Phone} testId="detail-log-call">
-          <LogCallPanel
+          <LogCallForm
             familyId={familyId}
             onLogged={() => setRefresh((n) => n + 1)}
           />
