@@ -111,11 +111,13 @@ export default function LeadsCalendar({
   }, [month, owner]);
 
   const shownMonth =
-    month ?? (state.status === 'ready' ? state.data.month : null);
+    month ?? (state.status === 'ready' ? (state.data.month ?? null) : null);
 
   const byDay = new Map<number, LeadsCalendarResponse['days'][number]>();
   if (state.status === 'ready') {
-    for (const d of state.data.days) byDay.set(d.day, d);
+    // Tolerate a partial/slow upstream that omits `days` — never crash the
+    // calendar render (brief: stay trustworthy when the upstream is degraded).
+    for (const d of state.data.days ?? []) byDay.set(d.day, d);
   }
 
   return (

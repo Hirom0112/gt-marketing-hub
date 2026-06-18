@@ -1,74 +1,48 @@
-import {
-  render,
-  screen,
-  fireEvent,
-  waitFor,
-  within,
-} from '@testing-library/react';
+import { render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import App from '../App';
 import { DEMO_AGENTS } from '../LoginPage';
 
-// M2 acceptance (MULTI_AGENT_COCKPIT.md §4/§5, PLAN.md M2 R1/R2). The founder's
-// requirement, verbatim: "make sure the sales agent has only 1 dashboard where
-// they can see everything needed … they do not need all that" (the admin view).
-//
-// A logged-in REP gets ONE simple view: the owner-scoped "My Queue" (the EXISTING
-// TriageList, with its recency facets) + the close-panel stack, fronted by a
-// rep-scoped SituationBar (their book). The ADMIN-ONLY surfaces — Calendar,
-// Students board, Reconcile board, MergeQueue, the Intake/view toggle, Security —
-// are ABSENT. There is NO parallel write path: acting rides the SAME gated
-// POST /proposals/{id}/decision the admin ActionPanel already uses.
-//
-// Data is owner-scoped SERVER-SIDE: apiFetch attaches X-Demo-Role: agent +
-// X-Demo-Agent-Id from the session, and the backend clamps the agent to its own
-// assigned_rep_id (the IDOR defense, M1). This test does NOT assert the clamp
-// (that's the backend's contract) — it asserts the rep reads /work-queue THROUGH
-// apiFetch (so the headers ride) and renders the subset composition.
+// Redesign acceptance (briefs/gt-pulse-sales-agent-dashboard-redesign.md). This
+// SUPERSEDES the old M2 "RepWorkspace subset" test: an agent seat now lands on the
+// redesigned AgentDashboard (4-metric KPI strip + daily-motivation banner + the
+// Leads/Triage/Students/Reconcile/KPI-Dashboard tabs), and an admin seat on the
+// AdminDashboard. The enduring contract this still pins:
+//   · the agent gets the AGENT surface, the admin gets the ADMIN surface (role gate);
+//   · the agent's /work-queue read rides THROUGH apiFetch carrying X-Demo-Agent-Id
+//     (owner-scoped server-side — the IDOR defense, M1 — no client-side filter).
+// The deep close-panel/draft flows moved into the shared DetailPanel/AiDrafts and
+// are covered by their own unit tests; this file asserts the shell landing only.
 
 const AGENT = DEMO_AGENTS[0]!; // Riley Carter — closer seat
 
-// One synthetic family on the rep's owner-scoped queue (no PII, INV-1).
 const QUEUE_ROWS = [
   {
     family_id: 'f-rep-1',
     display_name: 'Rivera Household',
-    current_stage: 'application',
-    score: 0.7,
-    recoverability: 0.82,
     value: 10474,
-    num_children: 1,
-    funding_type: 'tefa_standard',
-    stall_date: '2026-06-10T00:00:00Z',
-    recoverable_now: 8000,
-    freshness: 0.5,
     contact_status: 'overdue',
     recovery_state: 'stalled',
+    current_stage: 'application',
+    assigned_rep_id: AGENT.id,
+    stall_date: '2026-06-10T00:00:00Z',
+    num_children: 1,
+    funding_type: 'tefa_standard',
+    recoverable_now: 8000,
     last_contact_at: null,
   },
 ];
 
-const FAMILIES = [{ family_id: 'f-rep-1', display_name: 'Rivera Household' }];
-
-// A deal_view payload shaped to DealViewData so DealView renders its root section.
-const DEAL = {
-  display_name: 'Rivera Household',
-  stall_reason: 'No response',
-  funding_type: 'tefa_standard',
-  map_score: null,
-  attribution_source: 'organic',
-  crm_seam_status: 'in_sync',
-  completion_pct: 0.4,
-  forms_signed: 2,
-  forms_total: 6,
-  next_unsigned_form: 'enrollment_agreement',
-  contact_status: 'overdue',
-  recovery_state: 'stalled',
+const AGENT_KPIS = {
+  leads_assigned: 4,
+  contacts_made: 5,
+  follow_ups_completed: 2,
+  appointments_booked: 2,
+  applications_started: 3,
+  applications_completed: 1,
+  conversion_rate: 0.25,
 };
 
-// Route the cockpit's mount-time fetches to synthetic payloads. We capture every
-// (url, init) so we can assert the rep's reads carried the X-Demo-Agent-Id header
-// (owner-scoped via apiFetch — no client-side filtering, no unscoped read).
 interface Call {
   url: string;
   init?: RequestInit;
@@ -92,64 +66,24 @@ function installFetch(): void {
       calls.push({ url, init });
       if (url.includes('/work-queue'))
         return Promise.resolve(jsonResponse(QUEUE_ROWS));
-      // The admin EnrollmentCalendar reads /enrollment/calendar → { entries }.
+      if (url.includes('/enrollment/agent-kpis'))
+        return Promise.resolve(jsonResponse(AGENT_KPIS));
+      if (url.includes('/enrollment/leads-calendar'))
+        return Promise.resolve(jsonResponse({ month: '2026-06', days: [] }));
       if (url.includes('/enrollment/calendar'))
         return Promise.resolve(jsonResponse({ month: '2026-06', entries: [] }));
-      // The family roster (RepWorkspace + EnrollmentWorkspace mount fetch).
+      if (url.includes('/students'))
+        return Promise.resolve(jsonResponse([]));
       if (url.match(/\/families(\?|$)/))
-        return Promise.resolve(jsonResponse(FAMILIES));
-      // DealView reads /families/{id} → { deal_view }.
-      if (url.match(/\/families\/[^/]+$/))
-        return Promise.resolve(jsonResponse({ deal_view: DEAL }));
-      // Any other GET the panel makes (notes, funding, close-tips, drop-off,
-      // crm/status) → an empty-but-OK shape so the components reach a render.
-      if (url.includes('/notes')) return Promise.resolve(jsonResponse([]));
-      if (url.includes('/funding'))
         return Promise.resolve(
-          jsonResponse({
-            family_id: 'f-rep-1',
-            funding_state: 'self_pay',
-            funding_type: 'self_pay',
-            installments: null, // self-pay → no TEFA schedule (no .map crash)
-            tuition_unlocked: true,
-            program: 'Self-pay',
-            next_action: 'None',
-            due_by: null,
-            days_remaining: null,
-            at_risk: false,
-            award_full_vs_prorated: 'full',
-          }),
+          jsonResponse([{ family_id: 'f-rep-1', display_name: 'Rivera Household' }]),
         );
-      // The eval scoreboard CloseTipsPanel reads to drive its fail-closed UI.
-      if (url.includes('/evals'))
-        return Promise.resolve(jsonResponse({ disabled: {} }));
-      // The AI draft route — a surfaced, eval-passed proposal so ActionPanel
-      // renders the approvable body (the approve POSTs /proposals/{id}/decision).
-      if (url.includes('/ai/enrollment/draft'))
-        return Promise.resolve(
-          jsonResponse({
-            proposal_id: 'p-rep-1',
-            surfaced: true,
-            degraded: false,
-            failed_rules: [],
-            proposal: {
-              action: 'email',
-              family_id: 'f-rep-1',
-              body: 'Hi — following up on your application.',
-              claims: [],
-            },
-          }),
-        );
-      // The gated decision route — the ONLY write path (same as the admin).
-      if (url.match(/\/proposals\/[^/]+\/decision$/))
-        return Promise.resolve(jsonResponse({ action: 'approve' }));
       return Promise.resolve(jsonResponse({}));
     }),
   );
 }
 
 function enterAsRep(): void {
-  // Seed the agent seat the same way the gate persists it (one storage key).
   localStorage.setItem(
     'gt_demo_session',
     JSON.stringify({
@@ -168,7 +102,7 @@ function enterAsAdmin(): void {
   render(<App />);
 }
 
-describe('RepWorkspace (M2 — the rep gets ONE subset view)', () => {
+describe('Agent seat lands on the redesigned AgentDashboard', () => {
   beforeEach(() => {
     localStorage.clear();
     installFetch();
@@ -177,36 +111,38 @@ describe('RepWorkspace (M2 — the rep gets ONE subset view)', () => {
     vi.unstubAllGlobals();
   });
 
-  it('shows the rep workspace (not the admin EnrollmentWorkspace) for an agent seat', async () => {
+  it('shows the AgentDashboard (not the AdminDashboard) for an agent seat', async () => {
     enterAsRep();
-    expect(await screen.findByTestId('rep-workspace')).toBeInTheDocument();
+    expect(await screen.findByTestId('agent-dashboard')).toBeInTheDocument();
+    expect(screen.queryByTestId('admin-dashboard')).toBeNull();
   });
 
-  it('renders "My Queue" — the owner-scoped TriageList with its recency facets', async () => {
+  it('renders the 4-metric KPI strip + the daily-motivation banner', async () => {
     enterAsRep();
-    expect(await screen.findByTestId('triage-list')).toBeInTheDocument();
-    // The EXISTING recency facets/dial are present (no new list — §4).
-    expect(screen.getByTestId('triage-recency')).toBeInTheDocument();
-    expect(screen.getByTestId('triage-scope')).toBeInTheDocument();
+    await screen.findByTestId('agent-dashboard');
+    for (const label of ['BOOKED', 'CONTACTED', 'OVERDUE', 'ACTIVE']) {
+      expect(screen.getByText(label)).toBeInTheDocument();
+    }
+    expect(screen.getByTestId('dashboard-banner')).toBeInTheDocument();
   });
 
-  it('renders the rep SituationBar (my book: to-contact / overdue / $ at risk)', async () => {
+  it('renders the 5 work-area tabs', async () => {
     enterAsRep();
-    const bar = await screen.findByTestId('rep-situation-bar');
-    expect(bar).toBeInTheDocument();
-    // The three figures derive from the SAME owner-scoped /work-queue read.
-    expect(
-      within(bar).getByTestId('rep-situation-tocontact'),
-    ).toBeInTheDocument();
-    expect(
-      within(bar).getByTestId('rep-situation-overdue'),
-    ).toBeInTheDocument();
-    expect(within(bar).getByTestId('rep-situation-atrisk')).toBeInTheDocument();
+    await screen.findByTestId('agent-dashboard');
+    for (const label of [
+      'Leads',
+      'Triage',
+      'Students',
+      'Reconcile',
+      'KPI Dashboard',
+    ]) {
+      expect(screen.getByRole('tab', { name: label })).toBeInTheDocument();
+    }
   });
 
-  it('the rep reads /work-queue THROUGH apiFetch carrying the agent header (server-scoped, no client filter)', async () => {
+  it('reads /work-queue THROUGH apiFetch carrying the agent header (owner-scoped, no client filter)', async () => {
     enterAsRep();
-    await screen.findByTestId('triage-list');
+    await screen.findByTestId('agent-dashboard');
     await waitFor(() => {
       expect(calls.some((c) => c.url.includes('/work-queue'))).toBe(true);
     });
@@ -216,85 +152,11 @@ describe('RepWorkspace (M2 — the rep gets ONE subset view)', () => {
     expect(headers?.['X-Demo-Agent-Id']).toBe(AGENT.id);
   });
 
-  it('ABSENT: the admin Calendar / Students / Reconcile / MergeQueue / view-toggle surfaces', async () => {
-    enterAsRep();
-    await screen.findByTestId('triage-list');
-    // Calendar (the heat find surface) — rep sees their list, not the calendar.
-    expect(screen.queryByTestId('enrollment-calendar')).toBeNull();
-    // Per-child Students board.
-    expect(screen.queryByTestId('student-board')).toBeNull();
-    // The truth-layer Reconcile board + the human-review merge queue.
-    expect(screen.queryByTestId('household-reconcile-board')).toBeNull();
-    expect(screen.queryByTestId('reconcile-merge-queue')).toBeNull();
-    // The admin left-view toggle (Calendar/Students/Reconcile/History switch).
-    expect(screen.queryByTestId('enrollment-view-toggle')).toBeNull();
-  });
-
-  it('the close panel is reachable — selecting a family shows DealView + the gated ActionPanel', async () => {
-    enterAsRep();
-    await screen.findByTestId('triage-list');
-    // A family row from the owner-scoped queue.
-    const row = await screen.findByTestId('drill-row-f-rep-1');
-    fireEvent.click(row);
-    expect(await screen.findByTestId('deal-view')).toBeInTheDocument();
-    // The SAME eval-gated ActionPanel the admin uses — the ONLY write path.
-    expect(screen.getByTestId('action-panel')).toBeInTheDocument();
-  });
-
-  it('the acting write goes through POST /proposals/{id}/decision (no parallel write path)', async () => {
-    enterAsRep();
-    await screen.findByTestId('triage-list');
-    fireEvent.click(await screen.findByTestId('drill-row-f-rep-1'));
-    await screen.findByTestId('action-panel');
-    // Request a draft, then approve — the approve must POST the gated decision route.
-    fireEvent.click(screen.getByTestId('draft-email'));
-    fireEvent.click(await screen.findByTestId('approve-action'));
-    await waitFor(() => {
-      const decisionCall = calls.find((c) =>
-        /\/proposals\/[^/]+\/decision$/.test(c.url),
-      );
-      expect(decisionCall).toBeDefined();
-      expect(decisionCall?.init?.method).toBe('POST');
-    });
-  });
-
-  it('regression: an ADMIN seat still gets the FULL EnrollmentWorkspace (only the rep was gated)', async () => {
+  it('regression: an ADMIN seat lands on the AdminDashboard (3-metric strip), not the agent one', async () => {
     enterAsAdmin();
-    // The admin keeps the calendar + the left-view toggle; the rep workspace is absent.
-    expect(
-      await screen.findByTestId('enrollment-calendar'),
-    ).toBeInTheDocument();
-    expect(screen.getByTestId('enrollment-view-toggle')).toBeInTheDocument();
-    expect(screen.queryByTestId('rep-workspace')).toBeNull();
-  });
-
-  // The founder's ask: "a calendar so they can see the people to contact and when
-  // they were assigned … calendar view and they can switch to list view." The rep
-  // gets their OWN list/calendar toggle (its own testid — NOT the admin one), and
-  // the calendar is the owner-scoped recovery flavor (anchor=stall, no ?anchor=intake).
-  it('toggles My Queue between the ranked list and an owner-scoped calendar', async () => {
-    enterAsRep();
-    // Opens on the ranked list (the calendar is not the default).
-    await screen.findByTestId('triage-list');
-    expect(screen.queryByTestId('enrollment-calendar')).toBeNull();
-
-    // Flip to the calendar via the rep's OWN toggle.
-    const toggle = screen.getByTestId('rep-view-toggle');
-    fireEvent.click(within(toggle).getByText('Calendar'));
-    expect(
-      await screen.findByTestId('enrollment-calendar'),
-    ).toBeInTheDocument();
-    expect(screen.queryByTestId('triage-list')).toBeNull();
-    // It read the owner-scoped calendar route (recovery flavor — no admin attribution).
-    await waitFor(() =>
-      expect(calls.some((c) => c.url.includes('/enrollment/calendar'))).toBe(
-        true,
-      ),
-    );
-    expect(calls.some((c) => c.url.includes('anchor=intake'))).toBe(false);
-
-    // Flip back to the list.
-    fireEvent.click(within(toggle).getByText('List'));
-    expect(await screen.findByTestId('triage-list')).toBeInTheDocument();
+    expect(await screen.findByTestId('admin-dashboard')).toBeInTheDocument();
+    const strip = screen.getByTestId('dashboard-kpi-strip');
+    expect(within(strip).getByText('ACTIVE STALLS')).toBeInTheDocument();
+    expect(screen.queryByTestId('agent-dashboard')).toBeNull();
   });
 });
