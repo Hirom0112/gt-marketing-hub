@@ -3,7 +3,7 @@
 // live switcher's restore path against the existing DemoSupabase contract —
 // anon-only, no service_role (INV-5), synthetic-only (INV-1).
 
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   asDemoSupabase,
   isDemoSupabase,
@@ -104,6 +104,12 @@ describe('asDemoSupabase — production demo session swap', () => {
 });
 
 describe('loadDemoSessions — VITE_DEMO_SESSIONS loader', () => {
+  beforeEach(() => {
+    // Hermetic baseline: clear any ambient VITE_DEMO_SESSIONS (a local apply/.env
+    // sets it after a cloud re-seed) so the "unset" case is deterministic. Tests
+    // that need a value stub their own below.
+    vi.stubEnv('VITE_DEMO_SESSIONS', undefined as unknown as string);
+  });
   afterEach(() => {
     vi.unstubAllEnvs();
   });
