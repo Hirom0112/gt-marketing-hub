@@ -721,3 +721,53 @@ describe('DealView — LA-23 assignment history', () => {
     expect(screen.queryByTestId('deal-assignment-history')).toBeNull();
   });
 });
+
+// --------------------------------------------------------------------------- #
+// Contact bar — the household's primary contact PERSON + click-to-dial, so the
+// deal view is callable (the display_name "The Rivera Family" is not actionable).
+// --------------------------------------------------------------------------- #
+
+const CONTACT_PAYLOAD = {
+  deal_view: ENROLLED_PAYLOAD.deal_view,
+  lead: {
+    synthetic_first_name: 'Quinn',
+    synthetic_last_name: 'Rivera',
+    synthetic_email: 'rivera.753@example.invalid',
+    synthetic_phone: '555-0185',
+    region: 'West Coast',
+    grade_interest: '3',
+    num_children: 2,
+  },
+};
+
+describe('DealView — contact bar (who to call)', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+
+  it('surfaces the contact name + click-to-dial phone + email from the lead', async () => {
+    mockFetch(CONTACT_PAYLOAD);
+    render(<DealView familyId="fam-123" />);
+
+    const bar = await screen.findByTestId('deal-contact');
+    expect(bar).toBeInTheDocument();
+    expect(screen.getByTestId('deal-contact-name')).toHaveTextContent('Quinn Rivera');
+    const phone = screen.getByTestId('deal-contact-phone');
+    expect(phone).toHaveTextContent('555-0185');
+    expect(phone).toHaveAttribute('href', 'tel:555-0185');
+    const email = screen.getByTestId('deal-contact-email');
+    expect(email).toHaveAttribute('href', 'mailto:rivera.753@example.invalid');
+    // The at-a-glance meta (children count + grade + region) rides along.
+    expect(screen.getByTestId('deal-contact-meta')).toHaveTextContent('2 children');
+  });
+
+  it('renders no contact bar when the lead has no contact fields (fail safe)', async () => {
+    // ENROLLED_PAYLOAD carries `lead: {}` (empty) — no name/phone/email ⇒ no bar.
+    mockFetch(ENROLLED_PAYLOAD);
+    render(<DealView familyId="fam-123" />);
+
+    expect(await screen.findByText('The Rivera Family')).toBeInTheDocument();
+    expect(screen.queryByTestId('deal-contact')).toBeNull();
+  });
+});

@@ -1,5 +1,13 @@
 import { useEffect, useState } from 'react';
-import { AlertTriangle, CheckCircle2, ExternalLink, UploadCloud, XCircle } from 'lucide-react';
+import {
+  AlertTriangle,
+  CheckCircle2,
+  ExternalLink,
+  Mail,
+  Phone,
+  UploadCloud,
+  XCircle,
+} from 'lucide-react';
 import { hubspotContactUrl, hubspotDealUrl, apiFetch } from './config';
 import { Button, Chip } from './ui';
 import RecencyChip from './enrollment/RecencyChip';
@@ -41,9 +49,23 @@ interface DealViewData {
   recovery_state?: 'stalled' | 'working' | 'recovered' | 'dismissed' | null;
 }
 
-// We only read deal_view; the rest of the family response is ignored here.
+// The household's primary CONTACT — the person a rep actually calls (synthetic,
+// INV-1). Sourced from the lead row already in the /families/{id} response; the
+// household display_name ("The Rivera Family") is not callable on its own.
+interface LeadContact {
+  synthetic_first_name?: string | null;
+  synthetic_last_name?: string | null;
+  synthetic_email?: string | null;
+  synthetic_phone?: string | null;
+  region?: string | null;
+  grade_interest?: string | null;
+  num_children?: number | null;
+}
+
+// We read deal_view + the lead contact; the rest of the family response is ignored.
 interface FamilyResponse {
   deal_view: DealViewData;
+  lead?: LeadContact | null;
 }
 
 // DH-5 — the per-child grain for the selected family. Each child runs its own
@@ -187,7 +209,7 @@ interface DealViewProps {
 type LoadState =
   | { status: 'loading' }
   | { status: 'error'; message: string }
-  | { status: 'ready'; data: DealViewData };
+  | { status: 'ready'; data: DealViewData; contact: LeadContact | null };
 
 const PLACEHOLDER = '—';
 
@@ -330,6 +352,88 @@ function SeamField({ status }: { status: string }): JSX.Element {
         <SeamDot status={dotStatus} />
         <Chip tone={tone}>{status}</Chip>
       </span>
+    </div>
+  );
+}
+
+// The household's primary CONTACT bar — who to call, with click-to-dial / email.
+// The household label ("The Rivera Family") is not actionable on a call; this
+// surfaces the synthetic contact person + phone + email already in the lead row
+// (INV-1 — all synthetic). Renders nothing if no lead/contact resolved (fail safe).
+function ContactBar({ contact }: { contact: LeadContact | null }): JSX.Element | null {
+  if (contact === null) return null;
+  const name = [contact.synthetic_first_name, contact.synthetic_last_name]
+    .filter(Boolean)
+    .join(' ')
+    .trim();
+  const phone = contact.synthetic_phone ?? null;
+  const email = contact.synthetic_email ?? null;
+  // Nothing to show ⇒ omit (never an empty bar).
+  if (!name && !phone && !email) return null;
+  const meta = [
+    contact.num_children != null
+      ? `${contact.num_children} ${contact.num_children === 1 ? 'child' : 'children'}`
+      : null,
+    contact.grade_interest ? `Grade ${contact.grade_interest}` : null,
+    contact.region ?? null,
+  ].filter(Boolean);
+  return (
+    <div
+      data-testid="deal-contact"
+      style={{
+        marginTop: 'var(--s-2)',
+        padding: 'var(--s-2) var(--s-3)',
+        background: 'var(--surface-2)',
+        border: '1px solid var(--line)',
+        borderRadius: 'var(--r-md)',
+        display: 'flex',
+        flexWrap: 'wrap',
+        alignItems: 'center',
+        gap: 'var(--s-3)',
+      }}
+    >
+      <span
+        data-testid="deal-contact-name"
+        style={{ fontWeight: 700, fontSize: 'var(--fs-sm)', color: 'var(--ink)' }}
+      >
+        {name || PLACEHOLDER}
+      </span>
+      {phone != null && (
+        <a
+          href={`tel:${phone}`}
+          data-testid="deal-contact-phone"
+          className="mono"
+          style={{
+            display: 'inline-flex',
+            alignItems: 'center',
+            gap: 'var(--s-1)',
+            fontSize: 'var(--fs-sm)',
+            color: 'var(--flow-ink, #0b6)',
+          }}
+        >
+          <Phone size={12} aria-hidden /> {phone}
+        </a>
+      )}
+      {email != null && (
+        <a
+          href={`mailto:${email}`}
+          data-testid="deal-contact-email"
+          style={{
+            display: 'inline-flex',
+            alignItems: 'center',
+            gap: 'var(--s-1)',
+            fontSize: 'var(--fs-sm)',
+            color: 'var(--flow-ink, #0b6)',
+          }}
+        >
+          <Mail size={12} aria-hidden /> {email}
+        </a>
+      )}
+      {meta.length > 0 && (
+        <span className="lab" data-testid="deal-contact-meta">
+          {meta.join(' · ')}
+        </span>
+      )}
     </div>
   );
 }
@@ -607,7 +711,12 @@ export default function DealView({
         return res.json() as Promise<FamilyResponse>;
       })
       .then((data) => {
-        if (!cancelled) setState({ status: 'ready', data: data.deal_view });
+        if (!cancelled)
+          setState({
+            status: 'ready',
+            data: data.deal_view,
+            contact: data.lead ?? null,
+          });
       })
       .catch((err: unknown) => {
         if (!cancelled) {
@@ -770,6 +879,10 @@ export default function DealView({
           <Chip tone={isTefa ? 'gate' : 'flow'}>{fundingDisplay}</Chip>
         </div>
       </div>
+
+      {/* Who to call — the household's primary contact person + click-to-dial,
+          so "The Rivera Family" becomes an actionable lead on the phone. */}
+      <ContactBar contact={state.contact} />
 
       <div
         style={{
