@@ -31,7 +31,7 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from collections import defaultdict
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from enum import StrEnum
 from uuid import UUID
 
@@ -154,6 +154,67 @@ class DismissRecord(BaseModel):
     student_id: UUID | None = None
     human: str
     reason: str = Field(min_length=1)
+    created_at: datetime
+
+
+class ContactChannel(StrEnum):
+    """How a rep reached (or tried to reach) a family. SMS-first per the funnel data."""
+
+    SMS = "sms"
+    EMAIL = "email"
+    CALL = "call"
+
+
+class ContactDisposition(StrEnum):
+    """The outcome of a contact attempt — the structured 'log a call outcome' taxonomy.
+
+    ``NO_ANSWER``/``NO_REPLY``/``VOICEMAIL`` are the no-response dispositions that
+    accrue toward the presumed-lost rule (the family went silent). The rest record a
+    live result (``REACHED``, a payment commitment, or an explicit decline).
+    """
+
+    REACHED = "reached"
+    NO_ANSWER = "no_answer"
+    NO_REPLY = "no_reply"
+    VOICEMAIL = "voicemail"
+    WRONG_NUMBER = "wrong_number"
+    COMMITTED_TO_PAY = "committed_to_pay"
+    DECLINED = "declined"
+
+
+# The dispositions that count as "no live response" — the silence the presumed-lost
+# rule accumulates (a left voicemail is still no answer back). Named here so the
+# policy (core/nurture.py) reads ONE canonical set, never a scattered literal.
+NO_RESPONSE_DISPOSITIONS: frozenset[ContactDisposition] = frozenset(
+    {
+        ContactDisposition.NO_ANSWER,
+        ContactDisposition.NO_REPLY,
+        ContactDisposition.VOICEMAIL,
+    }
+)
+
+
+class ContactOutcomeRecord(BaseModel):
+    """A rep's logged contact attempt — an append-only spine event (NFR-6, INV-2).
+
+    Mirrors :class:`DismissRecord`: family-keyed (optionally per-child), carries who
+    acted and when, and is never mutated — the record IS the audit. ``promised_by``
+    captures a commitment ("paying next week") so a follow-up can be scheduled and a
+    premature nudge suppressed. A logged event, never a silent state write — the
+    deterministic core derives lifecycle/recency FROM these (INV-2).
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    family_id: UUID
+    student_id: UUID | None = None
+    channel: ContactChannel
+    disposition: ContactDisposition
+    human: str
+    # A future-dated commitment captured from the call ("paying next week"); drives
+    # the follow-up surface and suppresses a premature nudge. None = no promise.
+    promised_by: date | None = None
+    note: str = ""
     created_at: datetime
 
 
@@ -299,6 +360,31 @@ class ObservabilityLog(ABC):
         """
         raise NotImplementedError
 
+    @abstractmethod
+    def log_contact_outcome(
+        self,
+        *,
+        family_id: UUID,
+        channel: ContactChannel,
+        disposition: ContactDisposition,
+        human: str,
+        student_id: UUID | None = None,
+        promised_by: date | None = None,
+        note: str = "",
+        created_at: datetime | None = None,
+    ) -> ContactOutcomeRecord:
+        """Append a rep's contact-attempt outcome (the 'log a call outcome' event).
+
+        Append-only (INV-2): a logged event the core derives recency/lifecycle from,
+        never a direct state write. ``promised_by`` captures a commitment date.
+        """
+        raise NotImplementedError
+
+    @abstractmethod
+    def list_contact_outcomes(self, family_id: UUID) -> list[ContactOutcomeRecord]:
+        """This family's contact outcomes, in append order (owner-scoped at the API)."""
+        raise NotImplementedError
+
 
 class InMemoryObservabilityLog(ObservabilityLog):
     """In-memory append-only audit log (v1; ASSUMPTIONS A-3).
@@ -317,6 +403,8 @@ class InMemoryObservabilityLog(ObservabilityLog):
         self._decisions: dict[UUID, list[DecisionRecord]] = defaultdict(list)
         # Append-only family-keyed dismiss events (A-19) — the one new write.
         self._dismissals: list[DismissRecord] = []
+        # Append-only family-keyed contact-attempt outcomes (the close-loop event).
+        self._contact_outcomes: list[ContactOutcomeRecord] = []
 
     def log_proposal(
         self,
@@ -452,6 +540,34 @@ class InMemoryObservabilityLog(ObservabilityLog):
         if restalled_after is not None and restalled_after > latest:
             return False
         return True
+
+    def log_contact_outcome(
+        self,
+        *,
+        family_id: UUID,
+        channel: ContactChannel,
+        disposition: ContactDisposition,
+        human: str,
+        student_id: UUID | None = None,
+        promised_by: date | None = None,
+        note: str = "",
+        created_at: datetime | None = None,
+    ) -> ContactOutcomeRecord:
+        record = ContactOutcomeRecord(
+            family_id=family_id,
+            student_id=student_id,
+            channel=channel,
+            disposition=disposition,
+            human=human,
+            promised_by=promised_by,
+            note=note,
+            created_at=created_at if created_at is not None else _now(),
+        )
+        self._contact_outcomes.append(record)
+        return record
+
+    def list_contact_outcomes(self, family_id: UUID) -> list[ContactOutcomeRecord]:
+        return [r for r in self._contact_outcomes if r.family_id == family_id]
 
     def _require_proposal(self, proposal_id: UUID) -> None:
         """Enforce ARCH §10 causality: no eval/decision before the proposal."""
