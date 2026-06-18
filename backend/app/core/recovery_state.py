@@ -38,6 +38,7 @@ from app.core.funding_gate import _LEGAL_PATH
 from app.core.params import Params
 from app.data.models import EnrollmentForms, FundingState, Stage
 from app.data.repository import JoinedFamily
+from app.observability.log_store import NO_RESPONSE_DISPOSITIONS, ContactDisposition
 
 # §4.8 funnel order — index comparison decides "advanced past the stall stage".
 _STAGE_ORDER: tuple[Stage, ...] = (Stage.INTEREST, Stage.APPLY, Stage.ENROLL, Stage.TUITION)
@@ -80,6 +81,60 @@ class RecoveryState(StrEnum):
     PRESUMED_LOST = "presumed_lost"
     LOST = "lost"
     DORMANT = "dormant"
+
+
+class DispositionClass(StrEnum):
+    """How the recovery deriver reads a logged contact disposition (D-16).
+
+    A contact-outcome event records *what happened on the attempt*; this is the
+    deriver's view of it, the bridge between the agent dropdown's labels and the
+    recovery state machine:
+
+    - ``ENGAGED`` — a positive LIVE contact (``REACHED``, ``COMMITTED_TO_PAY``, and
+      the D-16 additions ``APPOINTMENT_SCHEDULED`` / ``INTERESTED`` /
+      ``FOLLOW_UP_NEEDED``). The family is being worked and is NOT silent — it never
+      accrues toward presumed-lost and keeps the family active.
+    - ``DECLINED`` — an explicit decline (``DECLINED`` and the D-16 ``NOT_INTERESTED``):
+      the family is trending out of the funnel.
+    - ``SILENT`` — no live response (``NO_ANSWER`` / ``NO_REPLY`` / ``VOICEMAIL`` — the
+      :data:`~app.observability.log_store.NO_RESPONSE_DISPOSITIONS` that accrue toward
+      presumed-lost — plus ``WRONG_NUMBER``, which reached no one either).
+
+    The classification is the single source of truth for "is this disposition
+    engagement / decline / silence" (INV-11 — one home), so the no-response accrual
+    set and the deriver never disagree.
+    """
+
+    ENGAGED = "engaged"
+    DECLINED = "declined"
+    SILENT = "silent"
+
+
+# The explicit-decline dispositions — the family is trending out of the funnel.
+# Named here (next to the classifier) as the ONE canonical decline set (INV-11).
+_DECLINE_DISPOSITIONS: frozenset[ContactDisposition] = frozenset(
+    {
+        ContactDisposition.DECLINED,
+        ContactDisposition.NOT_INTERESTED,
+    }
+)
+
+
+def classify_disposition(disposition: ContactDisposition) -> DispositionClass:
+    """Classify one contact disposition for the recovery deriver (D-16) — total + pure.
+
+    Decline first (``DECLINED`` / ``NOT_INTERESTED``), then silence (the
+    :data:`~app.observability.log_store.NO_RESPONSE_DISPOSITIONS` no-response set,
+    which never gains a D-16 value), then ENGAGEMENT as the default — every other
+    live result (``REACHED``, ``COMMITTED_TO_PAY``, and the D-16 ``APPOINTMENT_SCHEDULED``
+    / ``INTERESTED`` / ``FOLLOW_UP_NEEDED``) is a positive contact that keeps the
+    family active and out of the silence accrual.
+    """
+    if disposition in _DECLINE_DISPOSITIONS:
+        return DispositionClass.DECLINED
+    if disposition in NO_RESPONSE_DISPOSITIONS or disposition is ContactDisposition.WRONG_NUMBER:
+        return DispositionClass.SILENT
+    return DispositionClass.ENGAGED
 
 
 def _forms_cleared(joined: JoinedFamily) -> bool:

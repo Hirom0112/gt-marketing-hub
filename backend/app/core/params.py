@@ -796,11 +796,28 @@ class KpiLever(_StrictModel):
     target: float
 
 
+class KpiWindows(_StrictModel):
+    """kpi.windows — the agent-KPI time-window day-counts (D-14/D-15; INV-11).
+
+    The agent dashboard's Day/Week/Month/All filter narrows the personal-KPI and
+    roster aggregations by a trailing window. ``day``/``week``/``month`` are the
+    whole-day spans of those windows (``all`` is unbounded and carries no day-count).
+    Homed here — the aggregation reads these, never a hardcoded 1/7/30 literal.
+    """
+
+    day: int
+    week: int
+    month: int
+
+
 class Kpi(_StrictModel):
-    """FR-3.11 per-channel KPI rollup vs baseline/target."""
+    """FR-3.11 per-channel KPI rollup vs baseline/target (+ D-14 agent-KPI windows)."""
 
     # Channel-name keyed (keys are the `Channel` tokens).
     levers: dict[str, KpiLever]
+    # Agent-dashboard time-window day-counts (D-14/D-15). Optional with the canonical
+    # day/week/month defaults so a params file predating the field still loads.
+    windows: KpiWindows = KpiWindows(day=1, week=7, month=30)
 
 
 class Scheduler(_StrictModel):

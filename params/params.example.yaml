@@ -286,6 +286,10 @@ creator_scoring:            # FR-3.8 / CONTENT_SPEC §8.1 — creator-discovery 
   surface_threshold: 0.6            # min fit score for a creator to surface in the discovery list
 
 kpi:                        # FR-3.11 — per-channel KPI rollup vs baseline/target
+  windows:                  # D-14/D-15 — agent-dashboard Day/Week/Month time-window day-counts (All = unbounded)
+    day: 1
+    week: 7
+    month: 30
   levers:                   # per-channel baseline (current) + target; lever delta = metric - baseline
     instagram: { baseline: 0.0, target: 0.05 }
     tiktok:    { baseline: 0.0, target: 0.05 }

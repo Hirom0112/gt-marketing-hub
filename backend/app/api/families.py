@@ -27,6 +27,7 @@ from app.api.deps import (
     resolve_owner_scope,
 )
 from app.api.schemas import (
+    AgentKpisResponse,
     AgentRollup,
     AgentsResponse,
     CalendarEntry,
@@ -49,6 +50,7 @@ from app.api.schemas import (
     StudentRow,
     WorkQueueItem,
 )
+from app.core.agent_kpis import agent_kpis
 from app.core.contact_log import last_contact_at
 from app.core.contact_status import ContactStatus, derive_contact_status
 from app.core.conversion import ConversionScore, ConversionSignals, conversion_likelihood
@@ -1350,6 +1352,39 @@ def get_households(repository: RepositoryDep) -> HouseholdsResponse:
 # ===========================================================================
 
 
+# The agent-dashboard window selector (D-14/D-15) — shared by the personal-KPI
+# endpoint and the roster window. ``all`` is unbounded; the bounded windows narrow
+# by a trailing day-count homed in ``params.kpi.windows`` (INV-11, never a literal).
+KpiWindow = Literal["day", "week", "month", "all"]
+
+
+def _window_cutoff(window: KpiWindow, *, now: datetime, params: Params) -> datetime | None:
+    """The trailing-window lower bound for a window selector (D-14/D-15).
+
+    ``all`` ⇒ ``None`` (unbounded). The bounded windows subtract their day-count
+    (``params.kpi.windows`` — INV-11, never a hardcoded 1/7/30) from ``now``. A fact
+    at or after the returned cutoff is in the window.
+    """
+    if window == "all":
+        return None
+    windows = params.kpi.windows
+    days = {"day": windows.day, "week": windows.week, "month": windows.month}[window]
+    return now - timedelta(days=days)
+
+
+def _assigned_in_window(joined: JoinedFamily, *, cutoff: datetime | None) -> bool:
+    """Whether a family's assignment falls in the window (``cutoff`` = None ⇒ all).
+
+    For a bounded window an unassigned-in-time family (``assigned_at is None``) is
+    OUT — it cannot be placed in the window; the unbounded ``all`` keeps every row,
+    which is exactly the pre-window (back-compat) behavior.
+    """
+    if cutoff is None:
+        return True
+    assigned_at = joined.family.assigned_at
+    return assigned_at is not None and assigned_at >= cutoff
+
+
 def _agent_metrics(
     repository: FamilyRepository,
     owner: OwnerScope,
@@ -1357,6 +1392,7 @@ def _agent_metrics(
     log: ObservabilityLog,
     now: datetime,
     params: Params,
+    cutoff: datetime | None = None,
 ) -> tuple[int, float, float, float]:
     """Aggregate one owner's (queue_size, stall_rate, close_rate, load) — no new math.
 
@@ -1364,7 +1400,9 @@ def _agent_metrics(
 
     - candidate set = the agent's families that were ever stalled
       (``stalled_since is not None``) — the SAME ``scope=active`` pre-filter
-      :func:`get_work_queue` applies before the per-family derive.
+      :func:`get_work_queue` applies before the per-family derive — optionally
+      narrowed to those ASSIGNED within ``cutoff`` (the D-15 window; ``None`` ⇒ the
+      unbounded all-time set, the back-compat default).
     - each candidate's recovery_state via :func:`_recovery_state_for` (the SAME
       deriver the work-queue route uses, not a new rule).
     - ``queue_size`` = count whose state is :func:`is_active` (the active set —
@@ -1382,7 +1420,9 @@ def _agent_metrics(
     count or ratio over the existing helpers' outputs (PLAN M3 R1).
     """
     candidates = [
-        j for j in repository.list_joined(owner=owner) if j.family.stalled_since is not None
+        j
+        for j in repository.list_joined(owner=owner)
+        if j.family.stalled_since is not None and _assigned_in_window(j, cutoff=cutoff)
     ]
     states = [_recovery_state_for(j, log=log, now=now, params=params) for j in candidates]
     active = [s for s in states if is_active(s)]
@@ -1407,6 +1447,10 @@ def get_agent_rollup(
     repository: RepositoryDep,
     params: ParamsDep,
     log: LogDep,
+    window: Annotated[
+        KpiWindow,
+        Query(description="Time window: day | week | month | all (default all; D-15)"),
+    ] = "all",
 ) -> AgentsResponse:
     """The admin-lens per-agent roster (M3 R1; MULTI_AGENT_COCKPIT §5).
 
@@ -1422,10 +1466,14 @@ def get_agent_rollup(
 
     Admin lens: it aggregates EVERY book (it iterates the registry and the pool),
     so no ``owner`` query param is taken — the cross-agent roster is the whole
-    point. ``now`` is read once so the roster is internally consistent. Read-only,
-    no AI (INV-2 — no writes).
+    point. The optional ``window`` (D-15) narrows each rollup to families ASSIGNED
+    within the trailing window (``params.kpi.windows``); it defaults to ``all``, so
+    an omitted param is byte-identical to the pre-window all-time behavior (existing
+    callers unaffected). ``now`` is read once so the roster is internally consistent.
+    Read-only, no AI (INV-2 — no writes).
     """
     now = datetime.now(UTC)
+    cutoff = _window_cutoff(window, now=now, params=params)
     agents = [
         AgentRollup(
             agent_id=agent.agent_id,
@@ -1438,10 +1486,14 @@ def get_agent_rollup(
         )
         for agent in SALES_AGENTS
         for qs, sr, cr, ld in (
-            _agent_metrics(repository, agent.agent_id, log=log, now=now, params=params),
+            _agent_metrics(
+                repository, agent.agent_id, log=log, now=now, params=params, cutoff=cutoff
+            ),
         )
     ]
-    uqs, usr, ucr, uld = _agent_metrics(repository, UNASSIGNED, log=log, now=now, params=params)
+    uqs, usr, ucr, uld = _agent_metrics(
+        repository, UNASSIGNED, log=log, now=now, params=params, cutoff=cutoff
+    )
     unowned = AgentRollup(
         agent_id=None,
         synthetic_name=None,
@@ -1452,6 +1504,62 @@ def get_agent_rollup(
         load=round(uld, _ROLLUP_DP),
     )
     return AgentsResponse(agents=agents, unowned=unowned)
+
+
+# ===========================================================================
+# Agent personal-KPI dashboard (D-14) — GET /enrollment/agent-kpis. The
+# sales-agent KPI Dashboard (Tab 5) surface. A PURE AGGREGATION over already-logged
+# facts (assigned_at, the contact-outcome log, app_form state, funded state) —
+# no new applicant data (INV-1), owner-scoped (INV-5), read-only (INV-2). The
+# Day/Week/Month/All window day-counts live in params (INV-11).
+# ===========================================================================
+
+
+@router.get("/enrollment/agent-kpis", response_model=AgentKpisResponse)
+def get_agent_kpis(
+    repository: RepositoryDep,
+    params: ParamsDep,
+    log: LogDep,
+    principal: PrincipalDep,
+    owner: Annotated[str | None, Query(description=_OWNER_QUERY_DESC)] = None,
+    window: Annotated[
+        KpiWindow, Query(description="Time window: day | week | month | all (default all)")
+    ] = "all",
+) -> AgentKpisResponse:
+    """The sales agent's PERSONAL KPI dashboard over a window (D-14; Tab 5 brief).
+
+    Returns the agent's Leads Assigned, Contacts Made, Follow-Ups Completed,
+    Appointments Booked, Applications Started, Applications Completed, and Conversion
+    Rate (= funded ÷ assigned), each a PURE aggregation over facts already on the
+    spine — no new applicant data (INV-1). Owner-scoped through the SAME
+    :func:`resolve_owner_scope` IDOR clamp every owner-scoped route uses (INV-5): an
+    agent ALWAYS sees only its own book regardless of the ``owner`` it passes; an
+    admin may slice any owner. ``now`` is read once so the response is internally
+    consistent; the window cutoff comes from ``params.kpi.windows`` (INV-11).
+    Read-only, no AI (INV-2 — no writes).
+    """
+    now = datetime.now(UTC)
+    owner_scope = resolve_owner_scope(principal, owner)
+    families = repository.list_joined(owner=owner_scope)
+    # Gather the owner's contact outcomes (owner-scoped via the families just
+    # resolved — never a cross-book read). list_contact_outcomes is per-family.
+    outcomes = [
+        record
+        for joined in families
+        for record in log.list_contact_outcomes(joined.family.family_id)
+    ]
+    cutoff = _window_cutoff(window, now=now, params=params)
+    kpis = agent_kpis(families, outcomes, cutoff=cutoff)
+    return AgentKpisResponse(
+        window=window,
+        leads_assigned=kpis.leads_assigned,
+        contacts_made=kpis.contacts_made,
+        follow_ups_completed=kpis.follow_ups_completed,
+        appointments_booked=kpis.appointments_booked,
+        applications_started=kpis.applications_started,
+        applications_completed=kpis.applications_completed,
+        conversion_rate=kpis.conversion_rate,
+    )
 
 
 # Fixed admin display order: the discrepancies that need action first (🔴 → 🟡 →

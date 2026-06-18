@@ -427,6 +427,34 @@ class AgentsResponse(BaseModel):
     unowned: AgentRollup
 
 
+# The agent-dashboard time-window selector (D-14/D-15). ``all`` is unbounded; the
+# others narrow to a trailing window whose day-count lives in ``params.kpi.windows``
+# (INV-11 — never a hardcoded literal). A named Literal so FastAPI validates the
+# query param (a bad value is a 422, never silently treated as ``all``).
+KpiWindow = Literal["day", "week", "month", "all"]
+
+
+class AgentKpisResponse(BaseModel):
+    """One agent's personal KPIs over a window (D-14; `GET /enrollment/agent-kpis`).
+
+    The sales-agent KPI Dashboard (Tab 5) surface. Each field is a PURE aggregation
+    over already-logged facts — the family's ``assigned_at`` (Leads Assigned), the
+    contact-outcome log (Contacts Made / Follow-Ups Completed / Appointments Booked),
+    ``app_form`` state (Applications Started / Completed), and ``funding_state``
+    (Conversion Rate = funded ÷ assigned). No new applicant data (INV-1); owner-scoped
+    (INV-5); read-only (INV-2). ``conversion_rate`` is a 4-dp float in [0, 1].
+    """
+
+    window: KpiWindow
+    leads_assigned: int
+    contacts_made: int
+    follow_ups_completed: int
+    appointments_booked: int
+    applications_started: int
+    applications_completed: int
+    conversion_rate: float
+
+
 # --------------------------------------------------------------------------- #
 # S2 AI action surface (FR-2.4; ARCH §5.2/§6; INV-2/INV-3/INV-4).
 # --------------------------------------------------------------------------- #

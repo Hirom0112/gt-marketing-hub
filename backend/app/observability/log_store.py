@@ -171,6 +171,15 @@ class ContactDisposition(StrEnum):
     ``NO_ANSWER``/``NO_REPLY``/``VOICEMAIL`` are the no-response dispositions that
     accrue toward the presumed-lost rule (the family went silent). The rest record a
     live result (``REACHED``, a payment commitment, or an explicit decline).
+
+    The sales-agent dashboard redesign (D-16) adds four ADDITIVE values so the agent
+    call-outcome dropdown's labels (Appointment Scheduled / Interested / Not
+    Interested / Follow-Up Needed) map onto this enum. They are classified by
+    :func:`app.core.recovery_state.classify_disposition`: appointment/interested/
+    follow-up are ENGAGEMENT (a positive live contact, never silence), not_interested
+    is a DECLINE (like ``DECLINED``). They are NOT added to
+    :data:`NO_RESPONSE_DISPOSITIONS` — an engagement/decline outcome is not silence,
+    so the presumed-lost accrual is unchanged.
     """
 
     REACHED = "reached"
@@ -180,6 +189,11 @@ class ContactDisposition(StrEnum):
     WRONG_NUMBER = "wrong_number"
     COMMITTED_TO_PAY = "committed_to_pay"
     DECLINED = "declined"
+    # --- D-16 agent call-outcome dropdown additions (additive; existing unchanged). ---
+    APPOINTMENT_SCHEDULED = "appointment_scheduled"
+    INTERESTED = "interested"
+    NOT_INTERESTED = "not_interested"
+    FOLLOW_UP_NEEDED = "follow_up_needed"
 
 
 # The dispositions that count as "no live response" — the silence the presumed-lost
