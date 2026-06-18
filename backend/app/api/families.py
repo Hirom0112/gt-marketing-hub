@@ -74,7 +74,14 @@ from app.core.work_queue import (
     student_value,
     value,
 )
-from app.data.models import FamilyRecord, FundingState, SeamStatus, Stage, StallReason
+from app.data.models import (
+    FamilyRecord,
+    FundingState,
+    LeadAssignment,
+    SeamStatus,
+    Stage,
+    StallReason,
+)
 from app.data.repository import (
     UNASSIGNED,
     FamilyRepository,
@@ -544,6 +551,42 @@ def get_family(
         community_profile=joined.community_profile,
         deal_view=deal_view,
     )
+
+
+@router.get("/families/{family_id}/assignments", response_model=list[LeadAssignment])
+def get_family_assignments(
+    family_id: UUID,
+    repository: RepositoryDep,
+    principal: PrincipalDep,
+) -> list[LeadAssignment]:
+    """Append-only ownership-history timeline for ONE family (LEAD_ASSIGNMENT.md §10).
+
+    The deal view's audit drill-down: every assign / reassign / unassign is an
+    immutable from→to/reason fact (never an overwrite), so this is the durable
+    record of "who owned this lead, when, and why" (NFR-6). Rows come straight from
+    the ``lead_assignment`` store (``repository.list_assignments``), occurred-at
+    ascending.
+
+    Owner-scoped through the SAME :func:`resolve_owner_scope` IDOR clamp every
+    owner-scoped read uses (INV-5): the scope is decided by the principal's ROLE,
+    never a client-supplied owner. An ``agent`` may read history only for a family
+    in its OWN book (current ``assigned_rep_id`` == the rep) — a foreign family is a
+    404, never leaked (the IDOR defense the product disclosed must not reproduce).
+    An ``admin`` may read any family. An unknown family is a 404. Read-only (INV-2).
+    """
+    joined = repository.get_family(family_id)
+    if joined is None:
+        raise HTTPException(status_code=404, detail="family not found")
+
+    # IDOR clamp: an agent only sees its own book. `owner` is intentionally fixed to
+    # None — the role (not a client param) decides; for an agent the resolver always
+    # returns its own id, so a family it does not currently own reads as not-found
+    # (deny-by-default; we 404 rather than 403 so existence itself isn't leaked).
+    owner_scope = resolve_owner_scope(principal, None)
+    if isinstance(owner_scope, UUID) and joined.family.assigned_rep_id != owner_scope:
+        raise HTTPException(status_code=404, detail="family not found")
+
+    return repository.list_assignments(family_id)
 
 
 @router.get(

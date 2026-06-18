@@ -5,7 +5,7 @@ import { Button, Chip } from './ui';
 import RecencyChip from './enrollment/RecencyChip';
 import CompletionRing from './enrollment/CompletionRing';
 import SeamDot, { type SeamStatus } from './enrollment/SeamDot';
-import { fundingLabel, humanizeSegment } from './enrollment/format';
+import { fmtDay, fundingLabel, humanizeSegment } from './enrollment/format';
 
 // Deal view (FR-2.2). Fetches GET /families/{id} and surfaces the deal_view
 // summary: stall reason, funding type, conversion likelihood (DH-1 — REPLACES the
@@ -68,6 +68,52 @@ interface DealHouseholdGroup {
 
 interface StudentBoardResponse {
   households: DealHouseholdGroup[];
+}
+
+// LA-23 — one append-only ownership-history fact from GET /families/{id}/assignments
+// (the `lead_assignment` rows). A reassignment NEVER overwrites: each assign /
+// reassign / unassign is its own from→to/reason row, so the timeline is the durable
+// audit record of who owned this lead, when, and why (NFR-6). `from_rep_id` null ⇒
+// out of the intake pool; `to_rep_id` null ⇒ back to intake. Read-only (INV-2).
+interface AssignmentEvent {
+  assignment_id: string;
+  from_rep_id: string | null;
+  to_rep_id: string | null;
+  routed_role: string | null;
+  assigned_by: string;
+  reason: string;
+  occurred_at: string | null;
+}
+
+// A response counts as the assignment history only if it is an array of rows
+// carrying the discriminating `assignment_id` + `reason` — so the blanket family
+// payload (served for every url by a test stub) does NOT masquerade as history.
+// Fail safe on any other shape: render no timeline rather than crash.
+function isAssignmentList(value: unknown): value is AssignmentEvent[] {
+  return (
+    Array.isArray(value) &&
+    value.every(
+      (r) =>
+        typeof r === 'object' &&
+        r !== null &&
+        typeof (r as Record<string, unknown>).assignment_id === 'string' &&
+        typeof (r as Record<string, unknown>).reason === 'string',
+    )
+  );
+}
+
+// The GET /enrollment/agents roster, read ONLY to resolve an agent_id → display
+// name for the timeline. A missing / unknown shape degrades gracefully (the row
+// falls back to a short id) — names are a nicety, never a dependency.
+interface AgentRosterRow {
+  agent_id: string;
+  name?: string | null;
+  synthetic_name?: string | null;
+}
+
+function isAgentRoster(value: unknown): value is { agents: AgentRosterRow[] } {
+  if (typeof value !== 'object' || value === null) return false;
+  return Array.isArray((value as Record<string, unknown>).agents);
 }
 
 // A response only counts as a student-board payload if it carries the
@@ -400,6 +446,92 @@ function ChildrenSection({
   );
 }
 
+// LA-23 — the assignment-history timeline. Renders the append-only ownership
+// facts newest-LAST (chronological), each as "<from> → <to> · <date>" with the
+// human-readable routing reason underneath (every assignment is explainable, §2).
+// `from` null ⇒ "Intake" (out of the unassigned pool); `to` null ⇒ "Intake" (back
+// to the pool). Names resolve through the roster map; an unresolved id falls back
+// to a short id. Omitted entirely when there is no history (fail safe). Read-only.
+function AssignmentTimeline({
+  events,
+  names,
+}: {
+  events: AssignmentEvent[] | null;
+  names: Record<string, string>;
+}): JSX.Element | null {
+  if (events === null || events.length === 0) return null;
+  const label = (repId: string | null): string => {
+    if (repId === null) return 'Intake';
+    return names[repId] ?? `${repId.slice(0, 8)}…`;
+  };
+  return (
+    <div
+      data-testid="deal-assignment-history"
+      style={{
+        marginTop: 'var(--s-3)',
+        padding: 'var(--s-3) var(--s-4)',
+        background: 'var(--surface-2)',
+        border: '1px solid var(--line)',
+        borderRadius: 'var(--r-md)',
+      }}
+    >
+      <div className="lab">Assignment history</div>
+      <ul
+        style={{
+          listStyle: 'none',
+          margin: 'var(--s-2) 0 0',
+          padding: 0,
+          display: 'flex',
+          flexDirection: 'column',
+          gap: 'var(--s-2)',
+        }}
+      >
+        {events.map((ev) => (
+          <li
+            key={ev.assignment_id}
+            data-testid={`deal-assignment-${ev.assignment_id}`}
+            style={{
+              borderLeft: '2px solid var(--line)',
+              paddingLeft: 'var(--s-3)',
+            }}
+          >
+            <div
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                gap: 'var(--s-2)',
+              }}
+            >
+              <span
+                className="mono"
+                style={{ fontSize: 'var(--fs-sm)', color: 'var(--ink)' }}
+              >
+                {label(ev.from_rep_id)} → {label(ev.to_rep_id)}
+                {ev.routed_role != null ? ` · ${ev.routed_role}` : ''}
+              </span>
+              {ev.occurred_at != null && (
+                <span className="lab" style={{ whiteSpace: 'nowrap' }}>
+                  {fmtDay(ev.occurred_at)}
+                </span>
+              )}
+            </div>
+            <div
+              style={{
+                marginTop: 2,
+                fontSize: 'var(--fs-xs, 11px)',
+                color: 'var(--signal-ink, #6b7280)',
+              }}
+            >
+              {ev.reason}
+            </div>
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
 export default function DealView({
   familyId,
   refreshKey,
@@ -418,6 +550,12 @@ export default function DealView({
   // resolves; an unknown shape / error leaves it null ⇒ no per-child section
   // (fail safe, never a crash or bogus rows).
   const [children, setChildren] = useState<DealStudentRow[] | null>(null);
+  // LA-23 — this family's append-only ownership history + an agent_id→name map for
+  // the timeline. null until /families/{id}/assignments resolves; any error /
+  // unknown shape leaves it null ⇒ no timeline (fail safe). The name map is a
+  // nicety (an unresolved id falls back to a short id), so it loads independently.
+  const [assignments, setAssignments] = useState<AssignmentEvent[] | null>(null);
+  const [agentNames, setAgentNames] = useState<Record<string, string>>({});
 
   function seedToHubSpot(): void {
     setSeed({ status: 'seeding' });
@@ -511,6 +649,49 @@ export default function DealView({
       cancelled = true;
     };
   }, [familyId, refreshKey]);
+
+  useEffect(() => {
+    // LA-23 — fetch this family's append-only ownership history (owner-scoped
+    // server-side, INV-5). Fail safe: any error / unknown shape ⇒ no timeline
+    // (never a crash). Read-only (INV-2).
+    let cancelled = false;
+    setAssignments(null);
+    apiFetch(`/families/${familyId}/assignments`)
+      .then((res) => (res.ok ? (res.json() as Promise<unknown>) : null))
+      .then((data) => {
+        if (!cancelled) setAssignments(isAssignmentList(data) ? data : null);
+      })
+      .catch(() => {
+        if (!cancelled) setAssignments(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [familyId, refreshKey]);
+
+  useEffect(() => {
+    // The agent_id→name map for the timeline (GET /enrollment/agents). Loaded once;
+    // a missing / unknown shape just leaves the map empty (the timeline falls back
+    // to a short id — names are a nicety, never a dependency). Read-only.
+    let cancelled = false;
+    apiFetch(`/enrollment/agents`)
+      .then((res) => (res.ok ? (res.json() as Promise<unknown>) : null))
+      .then((data) => {
+        if (cancelled || !isAgentRoster(data)) return;
+        const map: Record<string, string> = {};
+        for (const a of data.agents) {
+          const name = a.name ?? a.synthetic_name;
+          if (name) map[a.agent_id] = name;
+        }
+        setAgentNames(map);
+      })
+      .catch(() => {
+        /* names are optional — leave the map empty */
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   if (state.status === 'loading') {
     return (
@@ -679,6 +860,11 @@ export default function DealView({
           a multi-child household (e.g. the Riveras) shows BOTH at their own
           (possibly different) stages. Sourced from GET /students (A-24). */}
       <ChildrenSection children={children} />
+
+      {/* Assignment-history timeline (LA-23) — the per-family ownership audit:
+          every assign / reassign as an append-only from→to/reason fact. Omitted
+          when the family has no history (an un-routed interest lead). */}
+      <AssignmentTimeline events={assignments} names={agentNames} />
 
       <dl
         className="deal-fields"

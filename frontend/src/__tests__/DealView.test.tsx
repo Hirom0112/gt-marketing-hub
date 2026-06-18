@@ -619,3 +619,105 @@ describe('DealView — S14 W4 CRM seam badge + kill switch', () => {
     expect(screen.queryByTestId('seed-kill-switch-note')).toBeNull();
   });
 });
+
+// --------------------------------------------------------------------------- #
+// LA-23 — assignment-history timeline. The deal view drills into the per-family
+// ownership history (GET /families/{id}/assignments): the append-only from→to/
+// reason facts (who owned this lead, when, why). Names resolve via GET
+// /enrollment/agents; an unavailable / unknown shape fails safe (no section).
+// --------------------------------------------------------------------------- #
+
+// Two append-only assignment facts: routed out of intake to the FL closer, then
+// reassigned to the CA qualifier by the SLA sweep.
+const ASSIGNMENT_HISTORY = [
+  {
+    assignment_id: 'asn-1',
+    family_id: 'fam-123',
+    from_rep_id: null,
+    to_rep_id: 'a0000000-0000-0000-0000-000000000001',
+    routed_role: 'closer',
+    assigned_by: 'router',
+    reason: 'territory: state=FL → closer (Agent A)',
+    occurred_at: '2026-06-16T10:00:00Z',
+  },
+  {
+    assignment_id: 'asn-2',
+    family_id: 'fam-123',
+    from_rep_id: 'a0000000-0000-0000-0000-000000000001',
+    to_rep_id: 'a0000000-0000-0000-0000-000000000002',
+    routed_role: 'qualifier',
+    assigned_by: 'router',
+    reason: 'sla-reassign: unworked past timer',
+    occurred_at: '2026-06-17T10:00:00Z',
+  },
+];
+
+const AGENTS_ROSTER = {
+  agents: [
+    { agent_id: 'a0000000-0000-0000-0000-000000000001', name: 'Riley Carter' },
+    { agent_id: 'a0000000-0000-0000-0000-000000000002', name: 'Jordan Avery' },
+  ],
+};
+
+// Route GET /families/{id}/assignments → history, /enrollment/agents → roster,
+// everything else → the family payload.
+function mockHistoryFetch(history: unknown = ASSIGNMENT_HISTORY): void {
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(async (url: string) => {
+      if (/\/assignments$/.test(url)) {
+        return { ok: true, status: 200, json: async () => history };
+      }
+      if (/\/enrollment\/agents$/.test(url)) {
+        return { ok: true, status: 200, json: async () => AGENTS_ROSTER };
+      }
+      return { ok: true, status: 200, json: async () => ENROLLED_PAYLOAD };
+    }),
+  );
+}
+
+describe('DealView — LA-23 assignment history', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+
+  it('renders the append-only from→to/reason timeline with resolved names', async () => {
+    mockHistoryFetch();
+    render(<DealView familyId="fam-123" />);
+
+    const timeline = await screen.findByTestId('deal-assignment-history');
+    expect(timeline).toBeInTheDocument();
+
+    // First fact: routed out of intake to the FL closer, with its reason.
+    const first = screen.getByTestId('deal-assignment-asn-1');
+    expect(first).toHaveTextContent('Intake');
+    expect(first).toHaveTextContent('Riley Carter');
+    expect(first).toHaveTextContent('territory: state=FL');
+
+    // Second fact: reassigned closer → qualifier, with the SLA reason (append-only,
+    // both facts present — the first is not overwritten).
+    const second = screen.getByTestId('deal-assignment-asn-2');
+    expect(second).toHaveTextContent('Riley Carter');
+    expect(second).toHaveTextContent('Jordan Avery');
+    expect(second).toHaveTextContent('sla-reassign');
+  });
+
+  it('does not render the timeline when there is no history (fail safe)', async () => {
+    mockHistoryFetch([]);
+    render(<DealView familyId="fam-123" />);
+
+    expect(await screen.findByText('The Rivera Family')).toBeInTheDocument();
+    expect(screen.queryByTestId('deal-assignment-history')).toBeNull();
+  });
+
+  it('does not render the timeline on an unknown shape (fail safe, no crash)', async () => {
+    // The blanket family payload is served for /assignments too — not an array ⇒
+    // the type guard rejects it ⇒ no timeline, never a crash.
+    mockFetch(ENROLLED_PAYLOAD);
+    render(<DealView familyId="fam-123" />);
+
+    expect(await screen.findByText('The Rivera Family')).toBeInTheDocument();
+    expect(screen.queryByTestId('deal-assignment-history')).toBeNull();
+  });
+});
