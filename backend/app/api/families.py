@@ -50,6 +50,7 @@ from app.core.contact_log import last_contact_at
 from app.core.contact_status import ContactStatus, derive_contact_status
 from app.core.conversion import ConversionScore, ConversionSignals, conversion_likelihood
 from app.core.family_record import assemble_deal_view
+from app.core.nurture import is_cold, is_presumed_lost
 from app.core.params import Params
 from app.core.recovery_state import (
     RecoveredOutcome,
@@ -345,18 +346,28 @@ def _recovery_state_for(
 ) -> RecoveryState:
     """Compose a family's derived :class:`RecoveryState` at the API layer (A-19).
 
-    Resolves the log-derived facts the pure :func:`derive_recovery_state` must NOT
-    read itself (CLAUDE §3, INV-2) — ``last_contact_at`` (A-14) and ``dismissed``
-    (the S12 dismiss event, netted against a superseding re-stall via the family's
-    derived ``stall_date``) — plus the ``stall_stage`` baseline mapped from the
-    spine's ``stall_reason``, then delegates to the pure deriver. The same
-    composition-root rationale as :func:`_recency_for` / :func:`_stall_date`.
+    Resolves the log-derived + clock-dependent facts the pure
+    :func:`derive_recovery_state` must NOT read itself (CLAUDE §3, INV-2), then
+    delegates to the pure deriver. The facts resolved here, all against the SAME
+    request ``now`` so a response is internally consistent:
+
+    - ``last_contact_at`` (A-14) and ``dismissed`` (the S12 dismiss event, netted
+      against a superseding re-stall via the derived ``stall_date``).
+    - the later-lifecycle facts (the close-loop): ``cold`` (stalled past
+      ``nurture.cold_after_days`` — :func:`is_cold` on the ``stall_date`` anchor),
+      ``presumed_lost`` (``nurture.presumed_lost`` no-response attempts accrued from
+      the contact-outcome events — :func:`is_presumed_lost`), and ``lost`` (a
+      human-confirmed LostRecord still holding, netted against re-stall like
+      dismiss). ``dormant`` stays off — its nurture-touch-count signal is HubSpot's.
+
+    Same composition-root rationale as :func:`_recency_for` / :func:`_stall_date`.
 
     Args:
         joined: The spine row joined to its source rows.
-        log: The NFR-6 audit spine — the dismiss + last-contact source.
+        log: The NFR-6 audit spine — dismiss / last-contact / contact-outcome /
+            lost source.
         now: The request's reference time, read once at the api layer.
-        params: Loaded params (§8).
+        params: Loaded params (§8) — supplies the ``nurture`` lifecycle dials.
 
     Returns:
         The family's :class:`RecoveryState`.
@@ -365,12 +376,17 @@ def _recovery_state_for(
     contacted_at = last_contact_at(log, family.family_id)
     stall_date = _stall_date(joined, log=log, now=now, params=params)
     dismissed = log.is_dismissed(family.family_id, restalled_after=stall_date)
+    outcomes = log.list_contact_outcomes(family.family_id)
+    cold = is_cold(stall_date=stall_date, now=now, cold_after_days=params.nurture.cold_after_days)
     return derive_recovery_state(
         joined=joined,
         last_contact_at=contacted_at,
         dismissed=dismissed,
         stall_stage=_stall_stage(joined),
         params=params,
+        cold=cold,
+        presumed_lost=is_presumed_lost(outcomes, params.nurture.presumed_lost, now=now),
+        lost=log.is_lost(family.family_id, restalled_after=stall_date),
     )
 
 
@@ -657,18 +673,15 @@ def get_drop_off_heatmap(repository: RepositoryDep) -> DropOffHeatmapResponse:
 
 
 # The work-queue scope (the Show-all surface's first axis). ``active`` is the
-# DEFAULT — the live recovery queue (recovery_state ∈ {stalled, working}); the
-# 5,006-strong recovered/dismissed cohort does NOT belong in it (FR-2.5). The
-# other scopes are bounded by ``limit`` so the route never streams the long tail.
+# DEFAULT — the live recovery queue (the rep's to work: stalled/working plus the
+# urgency annotations cold/presumed_lost — :func:`is_active`); the recovered/
+# dismissed/lost/dormant tail does NOT belong in it (FR-2.5). The other scopes are
+# bounded by ``limit`` so the route never streams the long tail.
 WorkQueueScope = Literal["active", "history", "all"]
 
 # Bounds for the history/all ``limit`` cap — never stream the recovered long tail.
 _DEFAULT_QUEUE_LIMIT = 200
 _MAX_QUEUE_LIMIT = 500
-
-# recovery_states that constitute the ACTIVE recovery queue and the HISTORY tail.
-_ACTIVE_STATES = (RecoveryState.STALLED, RecoveryState.WORKING)
-_HISTORY_STATES = (RecoveryState.RECOVERED, RecoveryState.DISMISSED)
 
 
 @router.get("/work-queue", response_model=list[WorkQueueItem])
@@ -683,11 +696,12 @@ def get_work_queue(
         Query(
             description=(
                 "Which slice of the recovery queue to return. **active** (default) — "
-                "the live recovery queue, recovery_state ∈ {stalled, working}; "
+                "the live recovery queue (is_active: stalled/working/cold/presumed_lost); "
                 "pre-filtered to the cheap `stalled_since is not None` candidates "
                 "BEFORE the per-family derive so the default response stays small/fast. "
-                "**history** — only {recovered, dismissed}, `limit`-capped (never the "
-                "5,006-strong tail). **all** — the back-compat full cohort, `limit`-capped."
+                "**history** — the closed-out/parked rest (recovered/dismissed/lost/"
+                "dormant), `limit`-capped (never the long tail). **all** — the "
+                "back-compat full cohort, `limit`-capped."
             ),
         ),
     ] = "active",
@@ -707,13 +721,15 @@ def get_work_queue(
 
     Three scopes off the derived ``recovery_state`` (A-19):
 
-    - **active** (default): the live recovery queue — ``{stalled, working}``. To
-      keep this fast on a recovered-heavy cohort (5,146 families, ~5,006 of them
-      recovered) it PRE-FILTERS to the cheap ``family.stalled_since is not None``
-      candidates BEFORE the expensive per-family derive/score: a family that was
-      never stalled cannot be active recovery work. Only the ~140 candidates are
-      derived, then kept iff ``{stalled, working}``.
-    - **history**: ``{recovered, dismissed}`` only, ordered by ``recoverable_now``
+    - **active** (default): the live recovery queue — :func:`is_active`
+      (``{stalled, working, cold, presumed_lost}``). To keep this fast on a
+      recovered-heavy cohort (5,146 families, ~5,006 of them recovered) it
+      PRE-FILTERS to the cheap ``family.stalled_since is not None`` candidates
+      BEFORE the expensive per-family derive/score: a family that was never stalled
+      cannot be active recovery work. Only the ~140 candidates are derived, then
+      kept iff :func:`is_active`.
+    - **history**: the closed-out/parked rest (recovered/dismissed/lost/dormant),
+      ordered by ``recoverable_now``
       desc and capped to ``limit`` — never streams the long tail.
     - **all**: the back-compat full cohort, also ``limit``-capped.
 
@@ -735,7 +751,7 @@ def get_work_queue(
     owner_scope = resolve_owner_scope(principal, owner)
 
     # The candidate cohort. For the ACTIVE default, pre-filter to families that
-    # were ever stalled (the only ones that can be {stalled, working}) BEFORE the
+    # were ever stalled (the only ones that can be active recovery work) BEFORE the
     # per-family derive — so the default response is computed over ~140 rows, not
     # 5,146. history/all keep the full cohort (then cap by `limit` after ranking).
     candidates = repository.list_joined(owner=owner_scope)
@@ -757,9 +773,12 @@ def get_work_queue(
         joined = joined_by_id[family.family_id]
         state = _recovery_state_for(joined, log=log, now=now, params=params)
         # Scope gate: drop rows whose derived state is outside the requested slice.
-        if scope == "active" and state not in _ACTIVE_STATES:
+        # active/history are exact complements over :func:`is_active` (active =
+        # {stalled, working, cold, presumed_lost}; history = the closed-out/parked
+        # rest) — ONE canonical split (INV-11), not a tuple re-listed here.
+        if scope == "active" and not is_active(state):
             continue
-        if scope == "history" and state not in _HISTORY_STATES:
+        if scope == "history" and is_active(state):
             continue
         contact_status, contacted_at = _recency_for(joined, log=log, now=now, params=params)
         # History-scope OUTCOME story (A-19) — computed ONLY here, so the active
@@ -1235,7 +1254,8 @@ def _agent_metrics(
       :func:`get_work_queue` applies before the per-family derive.
     - each candidate's recovery_state via :func:`_recovery_state_for` (the SAME
       deriver the work-queue route uses, not a new rule).
-    - ``queue_size`` = count whose state ∈ {stalled, working} (the active set).
+    - ``queue_size`` = count whose state is :func:`is_active` (the active set —
+      stalled/working/cold/presumed_lost).
     - ``stall_rate`` = (# stalled) / queue_size — the EXISTING work-queue stall
       signal (``working`` means already worked; ``stalled`` means gone-quiet,
       untouched). 0.0 when the queue is empty.
@@ -1252,7 +1272,7 @@ def _agent_metrics(
         j for j in repository.list_joined(owner=owner) if j.family.stalled_since is not None
     ]
     states = [_recovery_state_for(j, log=log, now=now, params=params) for j in candidates]
-    active = [s for s in states if s in _ACTIVE_STATES]
+    active = [s for s in states if is_active(s)]
     queue_size = len(active)
     stalled = sum(1 for s in active if s is RecoveryState.STALLED)
     stall_rate = (stalled / queue_size) if queue_size else 0.0

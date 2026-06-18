@@ -31,7 +31,7 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from collections import defaultdict
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from enum import StrEnum
 from uuid import UUID
 
@@ -151,6 +151,91 @@ class DismissRecord(BaseModel):
     # The child set aside, when the dismiss is per-student (A-24). None for a
     # family-level dismiss; a per-child dismiss never leaks to a sibling or the
     # family-level query (see :meth:`ObservabilityLog.is_dismissed`).
+    student_id: UUID | None = None
+    human: str
+    reason: str = Field(min_length=1)
+    created_at: datetime
+
+
+class ContactChannel(StrEnum):
+    """How a rep reached (or tried to reach) a family. SMS-first per the funnel data."""
+
+    SMS = "sms"
+    EMAIL = "email"
+    CALL = "call"
+
+
+class ContactDisposition(StrEnum):
+    """The outcome of a contact attempt — the structured 'log a call outcome' taxonomy.
+
+    ``NO_ANSWER``/``NO_REPLY``/``VOICEMAIL`` are the no-response dispositions that
+    accrue toward the presumed-lost rule (the family went silent). The rest record a
+    live result (``REACHED``, a payment commitment, or an explicit decline).
+    """
+
+    REACHED = "reached"
+    NO_ANSWER = "no_answer"
+    NO_REPLY = "no_reply"
+    VOICEMAIL = "voicemail"
+    WRONG_NUMBER = "wrong_number"
+    COMMITTED_TO_PAY = "committed_to_pay"
+    DECLINED = "declined"
+
+
+# The dispositions that count as "no live response" — the silence the presumed-lost
+# rule accumulates (a left voicemail is still no answer back). Named here so the
+# policy (core/nurture.py) reads ONE canonical set, never a scattered literal.
+NO_RESPONSE_DISPOSITIONS: frozenset[ContactDisposition] = frozenset(
+    {
+        ContactDisposition.NO_ANSWER,
+        ContactDisposition.NO_REPLY,
+        ContactDisposition.VOICEMAIL,
+    }
+)
+
+
+class ContactOutcomeRecord(BaseModel):
+    """A rep's logged contact attempt — an append-only spine event (NFR-6, INV-2).
+
+    Mirrors :class:`DismissRecord`: family-keyed (optionally per-child), carries who
+    acted and when, and is never mutated — the record IS the audit. ``promised_by``
+    captures a commitment ("paying next week") so a follow-up can be scheduled and a
+    premature nudge suppressed. A logged event, never a silent state write — the
+    deterministic core derives lifecycle/recency FROM these (INV-2).
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    family_id: UUID
+    student_id: UUID | None = None
+    channel: ContactChannel
+    disposition: ContactDisposition
+    human: str
+    # A future-dated commitment captured from the call ("paying next week"); drives
+    # the follow-up surface and suppresses a premature nudge. None = no promise.
+    promised_by: date | None = None
+    note: str = ""
+    created_at: datetime
+
+
+class LostRecord(BaseModel):
+    """A human-confirmed LOST event — the manual close of a presumed-lost lead (A-19).
+
+    The presumed-lost rule only SURFACES a family (accrued silence); a human then
+    CONFIRMS the LOST transition here (``nurture.presumed_lost.requires_human_confirm``
+    — the machine never auto-drops a warm lead). Mirrors :class:`DismissRecord`
+    exactly: family-keyed (optionally per-child), a REQUIRED ``reason`` so the audit
+    always records *why* (INV-2: a logged event, never a silent mutation), and
+    reversible — a later re-stall (a fresh ``stall_date``) supersedes it (see
+    :meth:`ObservabilityLog.is_lost`), so a re-engaged family returns to the board.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    family_id: UUID
+    # The child confirmed lost, when the event is per-student (A-24). None for a
+    # family-level lost; a per-child event never leaks to a sibling or the
+    # family-level query (mirrors :meth:`ObservabilityLog.is_dismissed`).
     student_id: UUID | None = None
     human: str
     reason: str = Field(min_length=1)
@@ -299,6 +384,71 @@ class ObservabilityLog(ABC):
         """
         raise NotImplementedError
 
+    @abstractmethod
+    def log_contact_outcome(
+        self,
+        *,
+        family_id: UUID,
+        channel: ContactChannel,
+        disposition: ContactDisposition,
+        human: str,
+        student_id: UUID | None = None,
+        promised_by: date | None = None,
+        note: str = "",
+        created_at: datetime | None = None,
+    ) -> ContactOutcomeRecord:
+        """Append a rep's contact-attempt outcome (the 'log a call outcome' event).
+
+        Append-only (INV-2): a logged event the core derives recency/lifecycle from,
+        never a direct state write. ``promised_by`` captures a commitment date.
+        """
+        raise NotImplementedError
+
+    @abstractmethod
+    def list_contact_outcomes(self, family_id: UUID) -> list[ContactOutcomeRecord]:
+        """This family's contact outcomes, in append order (owner-scoped at the API)."""
+        raise NotImplementedError
+
+    @abstractmethod
+    def log_lost(
+        self,
+        *,
+        family_id: UUID,
+        student_id: UUID | None = None,
+        human: str,
+        reason: str,
+        created_at: datetime | None = None,
+    ) -> LostRecord:
+        """Append a human-confirmed LOST event (A-19). Append-only.
+
+        ``student_id`` confirms ONE child lost (A-24); omit it for a family-level
+        lost. Raises ``ValueError`` if ``reason`` is blank — a lost must say why.
+        """
+        raise NotImplementedError
+
+    @abstractmethod
+    def list_lost(self) -> list[LostRecord]:
+        """Every logged lost event, in append order (the lost audit index)."""
+        raise NotImplementedError
+
+    @abstractmethod
+    def is_lost(
+        self,
+        family_id: UUID,
+        *,
+        student_id: UUID | None = None,
+        restalled_after: datetime | None = None,
+    ) -> bool:
+        """Whether the latest matching LOST event still holds (A-19).
+
+        Mirrors :meth:`is_dismissed`: matches on BOTH ``family_id`` and
+        ``student_id`` (a per-child lost never leaks to a sibling or the family
+        query). True when such an event exists AND no later re-stall supersedes it
+        — ``restalled_after`` (the API layer's derived ``stall_date``) strictly
+        later than the latest lost event means the family re-engaged ⇒ False.
+        """
+        raise NotImplementedError
+
 
 class InMemoryObservabilityLog(ObservabilityLog):
     """In-memory append-only audit log (v1; ASSUMPTIONS A-3).
@@ -317,6 +467,10 @@ class InMemoryObservabilityLog(ObservabilityLog):
         self._decisions: dict[UUID, list[DecisionRecord]] = defaultdict(list)
         # Append-only family-keyed dismiss events (A-19) — the one new write.
         self._dismissals: list[DismissRecord] = []
+        # Append-only family-keyed contact-attempt outcomes (the close-loop event).
+        self._contact_outcomes: list[ContactOutcomeRecord] = []
+        # Append-only family-keyed confirmed-lost events (A-19) — the manual close.
+        self._lost: list[LostRecord] = []
 
     def log_proposal(
         self,
@@ -449,6 +603,82 @@ class InMemoryObservabilityLog(ObservabilityLog):
         if latest is None:
             return False
         # A re-stall strictly after the latest dismiss supersedes it (A-19).
+        if restalled_after is not None and restalled_after > latest:
+            return False
+        return True
+
+    def log_contact_outcome(
+        self,
+        *,
+        family_id: UUID,
+        channel: ContactChannel,
+        disposition: ContactDisposition,
+        human: str,
+        student_id: UUID | None = None,
+        promised_by: date | None = None,
+        note: str = "",
+        created_at: datetime | None = None,
+    ) -> ContactOutcomeRecord:
+        record = ContactOutcomeRecord(
+            family_id=family_id,
+            student_id=student_id,
+            channel=channel,
+            disposition=disposition,
+            human=human,
+            promised_by=promised_by,
+            note=note,
+            created_at=created_at if created_at is not None else _now(),
+        )
+        self._contact_outcomes.append(record)
+        return record
+
+    def list_contact_outcomes(self, family_id: UUID) -> list[ContactOutcomeRecord]:
+        return [r for r in self._contact_outcomes if r.family_id == family_id]
+
+    def log_lost(
+        self,
+        *,
+        family_id: UUID,
+        student_id: UUID | None = None,
+        human: str,
+        reason: str,
+        created_at: datetime | None = None,
+    ) -> LostRecord:
+        if not reason.strip():
+            # A confirmed-lost must record WHY (A-19); a blank reason is a
+            # programming error, not a silent no-reason drop.
+            raise ValueError("lost requires a non-blank reason (A-19)")
+        record = LostRecord(
+            family_id=family_id,
+            student_id=student_id,
+            human=human,
+            reason=reason,
+            created_at=created_at if created_at is not None else _now(),
+        )
+        self._lost.append(record)
+        return record
+
+    def list_lost(self) -> list[LostRecord]:
+        return list(self._lost)
+
+    def is_lost(
+        self,
+        family_id: UUID,
+        *,
+        student_id: UUID | None = None,
+        restalled_after: datetime | None = None,
+    ) -> bool:
+        latest: datetime | None = None
+        for record in self._lost:
+            # Match on BOTH keys so a per-child lost never leaks to a sibling or the
+            # family-level query, and vice-versa (A-24) — mirrors is_dismissed.
+            if record.family_id != family_id or record.student_id != student_id:
+                continue
+            if latest is None or record.created_at > latest:
+                latest = record.created_at
+        if latest is None:
+            return False
+        # A re-stall strictly after the latest lost event supersedes it (A-19).
         if restalled_after is not None and restalled_after > latest:
             return False
         return True

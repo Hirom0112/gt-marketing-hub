@@ -268,14 +268,10 @@ def test_work_queue_scope_active_excludes_history() -> None:
         active_items = active_resp.json()
         assert [it["family_id"] for it in default_items] == [it["family_id"] for it in active_items]
 
-        # Every active row is {stalled, working}; NO recovered/dismissed leak in.
-        active_states = {RecoveryState.STALLED.value, RecoveryState.WORKING.value}
+        # Every active row is is_active (stalled/working/cold/presumed_lost); NO
+        # closed-out/parked row (recovered/dismissed/lost/dormant) leaks in.
         for it in active_items:
-            assert it["recovery_state"] in active_states
-            assert it["recovery_state"] not in {
-                RecoveryState.RECOVERED.value,
-                RecoveryState.DISMISSED.value,
-            }
+            assert is_active(RecoveryState(it["recovery_state"]))
 
         # stall_date is present and matches the api-layer `_stall_date` derivation.
         params = _params()
@@ -315,16 +311,16 @@ def test_work_queue_scope_history_only_recovered_dismissed_and_limit() -> None:
     History is the closed-out tail; it must never include an active family, and
     its `limit` cap bounds the response so the long tail is never streamed.
     """
-    from app.core.recovery_state import RecoveryState
+    from app.core.recovery_state import RecoveryState, is_active
 
     deps.reset_observability_log()
     try:
         hist = client.get("/work-queue", params={"scope": "history"})
         assert hist.status_code == 200
         hist_items = hist.json()
-        history_states = {RecoveryState.RECOVERED.value, RecoveryState.DISMISSED.value}
+        # History is the exact complement of is_active (closed-out/parked).
         for it in hist_items:
-            assert it["recovery_state"] in history_states
+            assert not is_active(RecoveryState(it["recovery_state"]))
 
         # `limit` caps the row count (never stream the long tail).
         capped = client.get("/work-queue", params={"scope": "history", "limit": 1})

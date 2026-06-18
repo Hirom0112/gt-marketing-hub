@@ -1,8 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { CalendarDays, ListOrdered } from 'lucide-react';
 import ActionPanel from '../ActionPanel';
 import DealView from '../DealView';
 import FundingTracker from '../FundingTracker';
 import CloseTipsPanel from '../enrollment/CloseTipsPanel';
+import EnrollmentCalendar from '../enrollment/EnrollmentCalendar';
 import TriageList, { type TriageScope } from '../enrollment/TriageList';
 import NotesTimeline, {
   type NotesTimelineHandle,
@@ -11,7 +13,7 @@ import SituationBar from '../enrollment/SituationBar';
 import { ToastHost, useToasts } from '../enrollment/toast';
 import { type RecoverableRow } from '../enrollment/recency';
 import { apiFetch } from '../config';
-import { Card } from '../ui';
+import { Card, WorkspaceToggle } from '../ui';
 import type { SortKey } from '../enrollment/EnrollmentCalendar';
 import type { DrillBulk } from '../enrollment/EnrollmentCalendar';
 import type { SendPartition } from '../enrollment/BulkBar';
@@ -84,8 +86,16 @@ export default function RepWorkspace(): JSX.Element {
   // "My Queue" lives at ALL scope (the rep works their whole book ranked by
   // recoverable_now; the recency facets surface overdue/fresh/working — §4).
   const [triageScope, setTriageScope] = useState<TriageScope>('all');
-  const [triageAnchor, setTriageAnchor] = useState<string | undefined>(undefined);
-  const [recoveryRows, setRecoveryRows] = useState<RecoverableRow[] | null>(null);
+  const [triageAnchor, setTriageAnchor] = useState<string | undefined>(
+    undefined,
+  );
+  const [recoveryRows, setRecoveryRows] = useState<RecoverableRow[] | null>(
+    null,
+  );
+  // The founder's ask: a calendar the rep can switch to a list. 'list' is the
+  // default (the rep opens on their ranked queue); 'calendar' is the owner-scoped
+  // recovery calendar (anchor=stall — "when they went quiet" = when to contact).
+  const [queueView, setQueueView] = useState<'list' | 'calendar'>('list');
   const [dealRefresh, setDealRefresh] = useState(0);
   const [queueRefresh, setQueueRefresh] = useState(0);
   const [sort, setSort] = useState<SortKey>('likely');
@@ -108,7 +118,8 @@ export default function RepWorkspace(): JSX.Element {
   const reloadRows = useCallback((): void => {
     apiFetch(`/work-queue`)
       .then((res) => {
-        if (!res.ok) throw new Error(`work-queue request failed: ${res.status}`);
+        if (!res.ok)
+          throw new Error(`work-queue request failed: ${res.status}`);
         return res.json() as Promise<RecoverableRow[]>;
       })
       .then((rows) => setRecoveryRows(rows))
@@ -126,7 +137,10 @@ export default function RepWorkspace(): JSX.Element {
         if (cancelled) return;
         const first = families[0]?.family_id ?? null;
         if (first === null) {
-          setFamiliesState({ status: 'error', message: 'no families returned' });
+          setFamiliesState({
+            status: 'error',
+            message: 'no families returned',
+          });
           return;
         }
         setSelectedFamilyId(first);
@@ -321,6 +335,24 @@ export default function RepWorkspace(): JSX.Element {
     [],
   );
 
+  // Opening a calendar cell/day jumps back to the LIST at that scope (the calendar
+  // is a viewing aid; the rep works the list). Mirrors the admin openTriageScope.
+  const openTriageScope = useCallback(
+    (scope: TriageScope, anchorDate?: string): void => {
+      setTriageScope(scope);
+      setTriageAnchor(anchorDate);
+      setQueueView('list');
+    },
+    [],
+  );
+
+  // The rep's list/calendar toggle options (their OWN switch — distinct from the
+  // admin's multi-surface enrollment-view-toggle).
+  const queueViewOptions = [
+    { key: 'list' as const, label: 'List', icon: ListOrdered },
+    { key: 'calendar' as const, label: 'Calendar', icon: CalendarDays },
+  ];
+
   function renderDealPanel(): JSX.Element {
     if (familiesState.status === 'error') {
       return (
@@ -351,6 +383,8 @@ export default function RepWorkspace(): JSX.Element {
           refreshKey={dealRefresh}
           dismissReasons={DISMISS_REASONS}
           onDismiss={dismissOne}
+          onChanged={handleActionApproved}
+          variant="rep"
         />
         <div className="work-panel-rule" aria-hidden />
         <ActionPanel
@@ -373,26 +407,49 @@ export default function RepWorkspace(): JSX.Element {
       className="enrollment-workspace"
       data-testid="rep-workspace"
     >
-      {recoveryRows !== null && <SituationBar rows={recoveryRows} variant="rep" />}
+      {recoveryRows !== null && (
+        <SituationBar rows={recoveryRows} variant="rep" />
+      )}
 
       <div className="operator-grid">
         <div className="operator-find">
           <div className="find-head">
             <span className="lab find-head-title">
-              My Queue — my families, ranked; work the overdue first
+              {queueView === 'calendar'
+                ? 'My Calendar — when my families went quiet; the day to reach out'
+                : 'My Queue — my families, ranked; work the overdue first'}
             </span>
+            <div data-testid="rep-view-toggle">
+              <WorkspaceToggle
+                options={queueViewOptions}
+                active={queueView}
+                onSelect={setQueueView}
+                ariaLabel="Queue view"
+              />
+            </div>
           </div>
-          <TriageList
-            scope={triageScope}
-            anchorDate={triageAnchor}
-            onScopeChange={changeTriageScope}
-            selectedFamilyId={selectedFamilyId ?? undefined}
-            onSelectFamily={selectFamily}
-            bulk={bulk}
-            sort={sort}
-            onSort={setSort}
-            refreshKey={queueRefresh}
-          />
+          {queueView === 'calendar' ? (
+            // The owner-scoped recovery calendar (anchor=stall — the default rep
+            // flavor; apiFetch clamps the agent to its own book, M1). Opening a day
+            // jumps back to the list at that scope.
+            <EnrollmentCalendar
+              selectedFamilyId={selectedFamilyId ?? undefined}
+              onSelectFamily={selectFamily}
+              onOpenScope={openTriageScope}
+            />
+          ) : (
+            <TriageList
+              scope={triageScope}
+              anchorDate={triageAnchor}
+              onScopeChange={changeTriageScope}
+              selectedFamilyId={selectedFamilyId ?? undefined}
+              onSelectFamily={selectFamily}
+              bulk={bulk}
+              sort={sort}
+              onSort={setSort}
+              refreshKey={queueRefresh}
+            />
+          )}
         </div>
 
         <div className="operator-act">{renderDealPanel()}</div>

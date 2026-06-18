@@ -22,7 +22,7 @@ from fastapi.testclient import TestClient
 
 from app.api import deps
 from app.api.families import _recovery_state_for, _stall_stage
-from app.core.recovery_state import RecoveryState, recovered_outcome
+from app.core.recovery_state import RecoveryState, is_active, recovered_outcome
 from app.data.repository import UNASSIGNED, InMemoryFamilyRepository, JoinedFamily, OwnerScope
 from app.data.synthetic import SyntheticDataset, generate
 from app.main import app
@@ -101,7 +101,7 @@ def _expected_metrics(
         j for j in repo.list_joined(owner=owner) if j.family.stalled_since is not None
     ]
     states = [_recovery_state_for(j, log=log, now=now, params=params) for j in candidates]
-    active = [s for s in states if s in (RecoveryState.STALLED, RecoveryState.WORKING)]
+    active = [s for s in states if is_active(s)]
     queue_size = len(active)
     stalled = sum(1 for s in active if s is RecoveryState.STALLED)
     stall_rate = (stalled / queue_size) if queue_size else 0.0
@@ -176,8 +176,7 @@ def test_per_agent_metrics() -> None:
         j
         for j in repo.list_joined(owner=UNASSIGNED)
         if j.family.stalled_since is not None
-        and _recovery_state_for(j, log=log, now=now, params=params)
-        in (RecoveryState.STALLED, RecoveryState.WORKING)
+        and is_active(_recovery_state_for(j, log=log, now=now, params=params))
     ]
     assert unowned["queue_size"] == len(active_unowned)
     assert set(j.family.family_id for j in active_unowned) <= set(unassigned_ids)

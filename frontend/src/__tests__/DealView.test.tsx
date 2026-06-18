@@ -435,11 +435,46 @@ describe('DealView — S12 W4 work-panel', () => {
     expect(await screen.findByTestId('deal-recovery-state')).toHaveTextContent(
       'Stalled',
     );
+
+    // The later-lifecycle states render their own labels (rep close-loop, A-35).
+  });
+
+  it('renders the later-lifecycle recovery states (cold / presumed-lost / lost)', async () => {
+    const cases: Array<[string, string]> = [
+      ['cold', 'Cold'],
+      ['presumed_lost', 'Presumed lost'],
+      ['lost', 'Lost'],
+      ['dormant', 'Dormant'],
+    ];
+    for (const [state, label] of cases) {
+      mockFetch({
+        deal_view: { ...ENROLLED_PAYLOAD.deal_view, recovery_state: state },
+        family: {},
+        lead: {},
+        app_form: {},
+      });
+      const { unmount } = render(<DealView familyId="fam-123" />);
+      expect(
+        await screen.findByTestId('deal-recovery-state'),
+      ).toHaveTextContent(label);
+      unmount();
+    }
+  });
+
+  it('keeps the completion ring and seam dot for a stalled family', async () => {
+    mockFetch(STALLED_PAYLOAD);
+    render(<DealView familyId="fam-123" />);
+    await screen.findByTestId('deal-recovery-state');
     // The completion ring (52px conic dial) shows the ENROLLMENT-packet progress
     // for a submitted family (2 of 6 = 33%), not the always-100% application %.
-    expect(screen.getByTestId('completion-ring-label')).toHaveTextContent('33%');
+    expect(screen.getByTestId('completion-ring-label')).toHaveTextContent(
+      '33%',
+    );
     // The seam field carries a colour-coded SeamDot alongside the named status.
-    expect(screen.getByTestId('seam-dot')).toHaveAttribute('data-seam', 'synced');
+    expect(screen.getByTestId('seam-dot')).toHaveAttribute(
+      'data-seam',
+      'synced',
+    );
   });
 
   it('opens the dismiss reason picker and delegates the write (no client write)', async () => {
@@ -459,6 +494,154 @@ describe('DealView — S12 W4 work-panel', () => {
       await screen.findByTestId('dismiss-family-reason-Declined'),
     );
     expect(onDismiss).toHaveBeenCalledWith('fam-123', 'Declined');
+  });
+});
+
+// --------------------------------------------------------------------------- #
+// Rep close-loop WRITE UI (A-35) — "log a call outcome" + confirm-presumed-lost.
+// The deal panel POSTs the close-loop spine events directly (like Seed-to-HubSpot),
+// re-fetches its own deal_view, and notifies the parent (onChanged) to refresh the
+// board. The confirm-lost affordance appears ONLY for a presumed_lost family (the
+// human-confirm gate); the whole block is hidden once a family is closed out.
+// --------------------------------------------------------------------------- #
+
+// A fetch stub that serves the deal_view on GET and a 201/200 on the write POSTs.
+function closeLoopFetch(state: string): ReturnType<typeof vi.fn> {
+  return vi.fn(async (url: string, init?: RequestInit) => {
+    const method = init?.method ?? 'GET';
+    if (method === 'POST' && /contact-outcome$/.test(url)) {
+      return {
+        ok: true,
+        status: 201,
+        json: async () => ({ family_id: 'fam-123' }),
+      };
+    }
+    if (method === 'POST' && /presumed-lost-confirm$/.test(url)) {
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({ family_id: 'fam-123', recovery_state: 'lost' }),
+      };
+    }
+    return {
+      ok: true,
+      status: 200,
+      json: async () => ({
+        deal_view: { ...STALLED_PAYLOAD.deal_view, recovery_state: state },
+        family: {},
+        lead: {},
+        app_form: {},
+      }),
+    };
+  });
+}
+
+describe('DealView — rep close-loop write UI', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+
+  it('logs a contact outcome (POST) and re-fetches + notifies the parent', async () => {
+    vi.stubGlobal('fetch', closeLoopFetch('cold'));
+    const onChanged = vi.fn();
+    render(<DealView familyId="fam-123" onChanged={onChanged} />);
+
+    fireEvent.change(await screen.findByTestId('deal-outcome-disposition'), {
+      target: { value: 'no_answer' },
+    });
+    fireEvent.click(screen.getByTestId('deal-outcome-submit'));
+
+    await waitFor(() => {
+      const fetchMock = fetch as unknown as ReturnType<typeof vi.fn>;
+      const post = fetchMock.mock.calls.find(
+        ([u, i]) =>
+          /\/families\/fam-123\/contact-outcome$/.test(u as string) &&
+          (i as RequestInit | undefined)?.method === 'POST',
+      );
+      expect(post).toBeTruthy();
+      const body = JSON.parse((post![1] as RequestInit).body as string);
+      expect(body.disposition).toBe('no_answer');
+      expect(body.channel).toBeTruthy();
+    });
+    // The write notifies the parent so the board can refresh.
+    await waitFor(() => expect(onChanged).toHaveBeenCalled());
+  });
+
+  it('shows confirm-lost ONLY for a presumed_lost family and POSTs the reason', async () => {
+    vi.stubGlobal('fetch', closeLoopFetch('presumed_lost'));
+    render(<DealView familyId="fam-123" />);
+
+    fireEvent.click(await screen.findByTestId('deal-confirm-lost-start'));
+    fireEvent.change(await screen.findByTestId('deal-confirm-lost-reason'), {
+      target: { value: 'family enrolled elsewhere' },
+    });
+    fireEvent.click(screen.getByTestId('deal-confirm-lost-submit'));
+
+    await waitFor(() => {
+      const fetchMock = fetch as unknown as ReturnType<typeof vi.fn>;
+      const post = fetchMock.mock.calls.find(
+        ([u, i]) =>
+          /\/families\/fam-123\/presumed-lost-confirm$/.test(u as string) &&
+          (i as RequestInit | undefined)?.method === 'POST',
+      );
+      expect(post).toBeTruthy();
+      const body = JSON.parse((post![1] as RequestInit).body as string);
+      expect(body.reason).toBe('family enrolled elsewhere');
+    });
+  });
+
+  it('hides confirm-lost for a non-presumed-lost family', async () => {
+    vi.stubGlobal('fetch', closeLoopFetch('cold'));
+    render(<DealView familyId="fam-123" />);
+    await screen.findByTestId('deal-outcome-submit');
+    expect(screen.queryByTestId('deal-confirm-lost-start')).toBeNull();
+  });
+
+  it('hides the whole log-outcome block once a family is closed out (lost)', async () => {
+    vi.stubGlobal('fetch', closeLoopFetch('lost'));
+    render(<DealView familyId="fam-123" />);
+    await screen.findByTestId('deal-recovery-state');
+    expect(screen.queryByTestId('deal-outcome-submit')).toBeNull();
+  });
+});
+
+// --------------------------------------------------------------------------- #
+// Rep variant (A-35; the founder's "they do not need all that"). variant="rep"
+// cuts the admin/CRM-ops chrome from the deal panel — Seed-to-HubSpot, the CRM
+// seam badge, the seam-status field, and the marketing attribution field — while
+// keeping the close essentials (why-stalled, the conversion/close signal, and the
+// rep's own log-outcome + dismiss actions). The default (admin) keeps everything.
+// --------------------------------------------------------------------------- #
+
+describe('DealView — rep variant chrome cut', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+
+  it('rep variant hides admin/CRM chrome but keeps the close essentials', async () => {
+    vi.stubGlobal('fetch', closeLoopFetch('stalled'));
+    render(<DealView familyId="fam-123" variant="rep" />);
+
+    await screen.findByTestId('deal-recovery-state');
+    // Admin / CRM-ops chrome is gone for the rep.
+    expect(screen.queryByTestId('seed-hubspot')).toBeNull();
+    expect(screen.queryByTestId('deal-attribution')).toBeNull();
+    expect(screen.queryByTestId('deal-seam-status')).toBeNull();
+    // The close essentials remain — including the rep's own log-outcome action.
+    expect(screen.getByTestId('deal-stall-reason')).toBeInTheDocument();
+    expect(screen.getByTestId('deal-conversion')).toBeInTheDocument();
+    expect(screen.getByTestId('deal-outcome-submit')).toBeInTheDocument();
+  });
+
+  it('default (admin) variant keeps the seam status, attribution, and seed action', async () => {
+    mockFetch(ENROLLED_PAYLOAD);
+    render(<DealView familyId="fam-123" />);
+
+    expect(await screen.findByTestId('deal-seam-status')).toBeInTheDocument();
+    expect(screen.getByTestId('deal-attribution')).toBeInTheDocument();
+    expect(screen.getByTestId('seed-hubspot')).toBeInTheDocument();
   });
 });
 
@@ -608,9 +791,7 @@ describe('DealView — S14 W4 CRM seam badge + kill switch', () => {
   it('fails OPEN on an unknown status shape: the type guard rejects it, action enabled', async () => {
     // /crm/status resolves 200 but to some OTHER payload (no kill_switch field).
     // isCrmStatus must reject it ⇒ no badge, action enabled (no silent disable).
-    mockCrmFetch(
-      { unexpected: 'shape' } as unknown as CrmStatusFixture,
-    );
+    mockCrmFetch({ unexpected: 'shape' } as unknown as CrmStatusFixture);
     render(<DealView familyId="fam-123" />);
 
     const seed = await screen.findByTestId('seed-hubspot');

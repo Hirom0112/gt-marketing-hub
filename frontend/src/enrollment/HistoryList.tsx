@@ -58,12 +58,17 @@ type LoadState =
   | { status: 'error'; message: string }
   | { status: 'ready'; items: WorkQueueItem[] };
 
-// The closed-out kind for a row — prefers an explicit recovery_state, then the
-// presence of a dismiss field, defaulting to recovered.
+// The closed-out kind for a row. Only a genuinely RECOVERED (won) family is
+// 'recovered'; every other closed-out/parked state — dismissed AND the rep
+// close-loop's lost/dormant (A-35) — is bucketed 'dismissed' (closed-out, NOT a
+// win), so a confirmed-lost family is never mis-counted as recovered. (A dedicated
+// 'lost' sub-tab + backend lost_* fields is the proper follow-up — TODO close-loop
+// History view.) Falls back to the dismiss fields only if recovery_state is absent.
 function kindOf(it: WorkQueueItem): 'recovered' | 'dismissed' {
-  if (it.recovery_state === 'dismissed') return 'dismissed';
   if (it.recovery_state === 'recovered') return 'recovered';
-  if (it.dismiss_reason || it.dismissed_at || it.dismissed_by) return 'dismissed';
+  if (it.recovery_state != null) return 'dismissed';
+  if (it.dismiss_reason || it.dismissed_at || it.dismissed_by)
+    return 'dismissed';
   return 'recovered';
 }
 
@@ -274,8 +279,8 @@ export default function HistoryList({
         )}
 
         <div className="history-foot lab" data-testid="history-foot">
-          Showing the {Math.min(rows.length, HISTORY_LIMIT)} most recently closed
-          of {counts.all}.
+          Showing the {Math.min(rows.length, HISTORY_LIMIT)} most recently
+          closed of {counts.all}.
         </div>
       </Card>
     </section>

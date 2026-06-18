@@ -11,6 +11,7 @@ from fastapi.staticfiles import StaticFiles
 from mangum import Mangum
 
 from app.api.ai_actions import router as ai_actions_router
+from app.api.contact_outcome import router as contact_outcome_router
 from app.api.content import router as content_router
 from app.api.crm_status import router as crm_status_router
 from app.api.deps import get_params, get_security_event_log
@@ -92,6 +93,12 @@ app.include_router(ai_actions_router)
 # Per-family notes timeline (FR-2.3; A-8) — /families/{id}/notes GET + POST.
 # Manual notes + deterministic state-change auto-notes; no LLM, no proposals.
 app.include_router(notes_router)
+
+# Rep close-loop WRITE surface (A-19) — /families/{id}/contact-outcome POST (log a
+# call result) + /families/{id}/presumed-lost-confirm POST (the human-confirm gate
+# that records LOST). Append-only spine events the recovery deriver reads; both
+# owner-scoped (INV-5), the confirm fail-closed so a warm lead is never auto-dropped.
+app.include_router(contact_outcome_router)
 
 # Identity merge queue (ENROLLMENT_REFACTOR §5.2/§6; INV-2/INV-4/INV-9) —
 # /merge-queue GET. The dedup human-review pile: the deterministic propose_merge

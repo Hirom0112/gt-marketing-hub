@@ -1038,6 +1038,78 @@ class Conversion(_StrictModel):
         return self
 
 
+class PresumedLost(_StrictModel):
+    """nurture.presumed_lost — the auto-SURFACED 'presumed lost' suggestion.
+
+    After ``after_attempts`` no-answer/no-reply contact outcomes within
+    ``within_days``, the family is flagged 'presumed lost' for a HUMAN to confirm
+    (``requires_human_confirm``). The machine never silently drops a warm lead — it
+    only suggests; a person confirms LOST (mirrors the dismiss pattern, INV-2).
+    """
+
+    after_attempts: int
+    within_days: int
+    requires_human_confirm: bool
+
+
+class NurtureAnchor(_StrictModel):
+    """nurture.anchors[] — a recurring school-year re-engagement window.
+
+    A calendar window (``month``/``day``, recurring yearly) the funnel pulses on
+    (voucher deadline, school-selection deadline, back-to-school). Re-engagement
+    pressure ramps over the ``ramp_days`` before the date. ``name`` is a program /
+    calendar label (no PII). Read by the deterministic anchor-pressure deriver.
+    """
+
+    name: str
+    month: int
+    day: int
+    ramp_days: int
+
+    @model_validator(mode="after")
+    def _valid_calendar(self) -> NurtureAnchor:
+        if not 1 <= self.month <= 12:
+            raise ValueError(f"nurture anchor {self.name!r} month must be 1-12, got {self.month!r}")
+        if not 1 <= self.day <= 31:
+            raise ValueError(f"nurture anchor {self.name!r} day must be 1-31, got {self.day!r}")
+        if self.ramp_days < 0:
+            raise ValueError(
+                f"nurture anchor {self.name!r} ramp_days must be >= 0, got {self.ramp_days!r}"
+            )
+        return self
+
+
+class LongHorizon(_StrictModel):
+    """nurture.long_horizon — the long-drip track for future-enrollment families.
+
+    Incoming-kindergarten / future-grade families are nurtured over a long horizon
+    (``drip_months``) — kept warm, never treated as lost. ``channel_priority`` orders
+    outreach channels (lead with the channel that historically out-responded).
+    """
+
+    drip_months: int
+    channel_priority: list[str]
+
+
+class Nurture(_StrictModel):
+    """nurture — the later-lifecycle policy dials (INV-11; all BUSINESS-owned).
+
+    Every value here is a team dial, not engineering: how long until COLD, when a
+    silent family is PRESUMED LOST (human-confirmed), the base re-contact cadence and
+    touch cap before DORMANT, the channel order, and the school-year anchors that ramp
+    re-engagement. Nurture EXECUTION (the actual drip sends) is HubSpot's job (the
+    locked seam plan); the cockpit owns these dials and pushes the trigger.
+    """
+
+    cold_after_days: int
+    presumed_lost: PresumedLost
+    base_recontact_interval_months: int
+    max_touches: int
+    channel_priority: list[str]
+    anchors: list[NurtureAnchor]
+    long_horizon: LongHorizon
+
+
 class Params(_StrictModel):
     """Typed view of the whole params file — one field per §8 top-level block."""
 
@@ -1045,6 +1117,7 @@ class Params(_StrictModel):
     conversion: Conversion
     enrollment: Enrollment
     assignment: Assignment
+    nurture: Nurture
     sis: Sis
     bulk: Bulk
     back_to_school: BackToSchool

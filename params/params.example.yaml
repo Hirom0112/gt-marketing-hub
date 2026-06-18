@@ -80,6 +80,23 @@ assignment:                 # M2 — owner-authority assignment split + routing/
     cooldown_days: 5          # re-sweep cool-down after a reassignment (timer restarts on reassign)
     owned_breach: alert       # owner-matched lead on SLA breach: alert (don't silently move) | auto_reassign
 
+nurture:                      # later-lifecycle policy dials (rep close-loop) — every value is a BUSINESS dial (INV-11). Nurture EXECUTION is HubSpot's job; the cockpit owns these dials + pushes the trigger.
+  cold_after_days: 14         # stalled + zero contact this long ⇒ COLD. shorter = more aggressive; longer avoids false-flagging families waiting on TEFA funding
+  presumed_lost:              # auto-SURFACED suggestion, never a silent removal
+    after_attempts: 5         # no-answer/no-reply contact outcomes...
+    within_days: 21           # ...across this window ⇒ "presumed lost" (a human confirms)
+    requires_human_confirm: true   # the system never auto-drops a warm lead
+  base_recontact_interval_months: 6   # floor re-contact cadence for parked families
+  max_touches: 8              # then ⇒ DORMANT (retained, never deleted — families return)
+  channel_priority: [sms, email]      # SMS first, email backup (texting/calling historically out-responded email)
+  anchors:                    # harder re-engagement auto-ramps as each school-year window approaches (recurring month/day)
+    - {name: tefa_window,      month: 3, day: 17, ramp_days: 45}   # spring voucher application deadline
+    - {name: school_selection, month: 6, day: 1,  ramp_days: 30}   # school-selection deadline
+    - {name: back_to_school,   month: 8, day: 13, ramp_days: 60}   # first day of school
+  long_horizon:               # future-enrollment families (incoming-K / future grade)
+    drip_months: 18           # nurtured over a long horizon — not treated as lost
+    channel_priority: [sms, email]
+
 sis:                        # M5 — seam reconcile bucket rules (MULTI_AGENT_COCKPIT §6); thresholds are tunables, not hardcoded
   match_confidence_cutoff: 0.9        # below this normalized GT↔SIS match score ⇒ ambiguous → merge queue
   confirmed_min_confidence: 0.9       # at/above this ⇒ CONFIRMED (reconciled on both sides)
