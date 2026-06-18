@@ -34,6 +34,7 @@ from datetime import datetime
 from enum import StrEnum
 from typing import Literal
 
+from app.core.funding_gate import _LEGAL_PATH
 from app.core.params import Params
 from app.data.models import EnrollmentForms, FundingState, Stage
 from app.data.repository import JoinedFamily
@@ -41,17 +42,10 @@ from app.data.repository import JoinedFamily
 # §4.8 funnel order — index comparison decides "advanced past the stall stage".
 _STAGE_ORDER: tuple[Stage, ...] = (Stage.INTEREST, Stage.APPLY, Stage.ENROLL, Stage.TUITION)
 
-# §5.4 funding gate: a family at or past this funding_state has recovered the
-# deal (first installment received ⇒ tuition unlocked). The threshold itself is
-# a structural enum ordering, not a tunable — it mirrors funding.tuition_unlock_state.
-_RECOVERED_FUNDING_ORDER: tuple[FundingState, ...] = (
-    FundingState.NONE,
-    FundingState.APPLIED,
-    FundingState.AWARDED_SELFREPORT,
-    FundingState.GT_CONFIRMED,
-    FundingState.FIRST_INSTALLMENT_RECEIVED,
-    FundingState.FUNDED,
-)
+# §5.4 funding gate: a family at or past this funding_state has recovered the deal
+# (first installment received ⇒ tuition unlocked). The funnel ORDER is the canonical
+# `funding_gate._LEGAL_PATH` (ONE home, INV-11) — NOT a hand-maintained copy. (A prior
+# local copy omitted SELECTED_GT/RECONFIRMED, so `.index()` crashed for those states.)
 _FUNDING_RECOVERED_FLOOR = FundingState.FIRST_INSTALLMENT_RECEIVED
 
 # Which recovery predicate fired, for the history-scope outcome story (A-19).
@@ -68,12 +62,24 @@ class RecoveryState(StrEnum):
     - ``RECOVERED``: DETECTED data movement (stage-advance / forms-cleared /
       first-installment) — never a button, never an LLM write.
     - ``DISMISSED``: manually set aside with a recorded reason (the one new write).
+    - ``COLD``: stalled + uncontacted past ``nurture.cold_after_days`` — a more-urgent
+      STALLED (still active). An annotation, not a removal.
+    - ``PRESUMED_LOST``: accrued silence (``nurture.presumed_lost`` no-response attempts)
+      — auto-SURFACED for a human to confirm LOST; stays active until they do.
+    - ``LOST``: human-confirmed lost (a recorded event) — history; reversible on
+      re-engagement (the dismiss pattern).
+    - ``DORMANT``: long-parked after nurture is exhausted (``nurture.max_touches``) —
+      history; kept, never deleted (families return).
     """
 
     STALLED = "stalled"
     WORKING = "working"
     RECOVERED = "recovered"
     DISMISSED = "dismissed"
+    COLD = "cold"
+    PRESUMED_LOST = "presumed_lost"
+    LOST = "lost"
+    DORMANT = "dormant"
 
 
 def _forms_cleared(joined: JoinedFamily) -> bool:
@@ -96,9 +102,7 @@ def _stage_advanced(current_stage: Stage, stall_stage: Stage) -> bool:
 
 def _funding_recovered(funding_state: FundingState) -> bool:
     """True when funding has reached at least the first-installment gate (§5.4)."""
-    return _RECOVERED_FUNDING_ORDER.index(funding_state) >= _RECOVERED_FUNDING_ORDER.index(
-        _FUNDING_RECOVERED_FLOOR
-    )
+    return _LEGAL_PATH.index(funding_state) >= _LEGAL_PATH.index(_FUNDING_RECOVERED_FLOOR)
 
 
 def recovered_outcome(joined: JoinedFamily, *, stall_stage: Stage) -> RecoveredOutcome | None:
@@ -141,6 +145,10 @@ def derive_recovery_state(
     dismissed: bool,
     stall_stage: Stage,
     params: Params,
+    cold: bool = False,
+    presumed_lost: bool = False,
+    lost: bool = False,
+    dormant: bool = False,
 ) -> RecoveryState:
     """Derive a family's :class:`RecoveryState` (A-19) — pure, precedence-ordered.
 
@@ -166,16 +174,27 @@ def derive_recovery_state(
     """
     del params  # Signature parity; the recovery predicates read structural enums.
 
+    # Precedence (document order is the contract). The later-lifecycle facts (cold/
+    # presumed_lost/lost/dormant) are resolved at the API layer and passed IN, same
+    # as `dismissed` — they default off so the deriver never fabricates them.
     if dismissed:
         return RecoveryState.DISMISSED
+    if dormant:  # long-parked after nurture exhausted (history)
+        return RecoveryState.DORMANT
+    if lost:  # human-confirmed lost (history); holds over a recovered-looking signal
+        return RecoveryState.LOST
 
     # RECOVERED iff any §5.x signal fired; `recovered_outcome` is the single source
     # of truth for that OR (and exposes WHICH one for the history surface).
     if recovered_outcome(joined, stall_stage=stall_stage) is not None:
         return RecoveryState.RECOVERED
 
+    if presumed_lost:  # accrued silence — surfaced for confirm; dominates working
+        return RecoveryState.PRESUMED_LOST
     if last_contact_at is not None:
         return RecoveryState.WORKING
+    if cold:  # stalled + uncontacted past the cold threshold (a more-urgent stalled)
+        return RecoveryState.COLD
 
     return RecoveryState.STALLED
 
@@ -226,7 +245,13 @@ def derive_student_recovery_state(
 def is_active(state: RecoveryState) -> bool:
     """Whether a state belongs on the ACTIVE recovery board (A-19).
 
-    Active = ``{STALLED, WORKING}`` (still in play); history =
-    ``{RECOVERED, DISMISSED}`` (closed out).
+    Active = ``{STALLED, WORKING, COLD, PRESUMED_LOST}`` (still the rep's to work —
+    COLD/PRESUMED_LOST are urgency annotations, not removals); history =
+    ``{RECOVERED, DISMISSED, LOST, DORMANT}`` (closed out / parked).
     """
-    return state in (RecoveryState.STALLED, RecoveryState.WORKING)
+    return state in (
+        RecoveryState.STALLED,
+        RecoveryState.WORKING,
+        RecoveryState.COLD,
+        RecoveryState.PRESUMED_LOST,
+    )
