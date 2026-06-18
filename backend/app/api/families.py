@@ -89,7 +89,7 @@ from app.data.repository import (
     JoinedStudent,
     OwnerScope,
 )
-from app.data.sis_reconcile_job import run_sis_reconcile
+from app.data.sis_reconcile_job import run_sis_reconcile_students
 from app.observability.log_store import DismissRecord, ObservabilityLog
 
 router = APIRouter(tags=["families"])
@@ -1338,6 +1338,7 @@ def _roll_up_sis_buckets(verdicts: list[SisVerdict]) -> SisBucketsResponse:
         by_bucket[verdict.bucket].append(
             SisFamilyStatus(
                 family_id=verdict.family_id,
+                student_id=verdict.student_id,
                 present=verdict.present,
                 confirmed_at=verdict.confirmed_at,
                 bucket=verdict.bucket,
@@ -1359,10 +1360,13 @@ def get_sis_buckets(
     """The admin SIS reconcile roll-up (M5; MULTI_AGENT_COCKPIT §6).
 
     Runs the daily SIS reconcile job — match the cockpit's paid families against
-    the SIS roster (``SIS_MODE``) and bucket each — and groups the verdicts.
-    Read-only (INV-2) and PII-firewalled (INV-1/INV-6): the payload carries only
-    ``family_id`` / ``present`` / ``confirmed_at`` / ``bucket`` — never a child
-    name/DOB/grade or any roster contact.
+    the SIS roster (``SIS_MODE``) and bucket each — and groups the verdicts at the
+    per-CHILD grain (A-24): the household is matched on its contact (never child
+    data, INV-6), then the verdict is attributed to each enrolled child under it, so
+    a parent sees ✅/🟡/🔴 per child. Read-only (INV-2) and PII-firewalled
+    (INV-1/INV-6): the payload carries only ``family_id`` / ``student_id`` (an opaque
+    uuid) / ``present`` / ``confirmed_at`` / ``bucket`` — never a child name/DOB/grade
+    or any roster contact.
     """
-    verdicts = run_sis_reconcile(repository, adapter, params)
+    verdicts = run_sis_reconcile_students(repository, adapter, params)
     return _roll_up_sis_buckets(verdicts)

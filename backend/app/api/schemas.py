@@ -873,15 +873,18 @@ class ContentDecisionResponse(BaseModel):
 
 
 class SisFamilyStatus(BaseModel):
-    """One family's SIS reconcile outcome — the PII-firewall fields ONLY (M5).
+    """One reconcile outcome — the PII-firewall fields ONLY (M5; per-child A-24).
 
     This is the entire surface that crosses from the SIS roster into the cockpit:
-    ``family_id``, ``present``, ``confirmed_at``, ``bucket`` — never a child
-    name/DOB/grade or any roster contact. The firewall is the shape itself
-    (INV-1/INV-6; enforced by ``test_buckets_leak_no_roster_pii``).
+    ``family_id``, ``student_id``, ``present``, ``confirmed_at``, ``bucket`` — never a
+    child name/DOB/grade or any roster contact. ``student_id`` is an opaque
+    owner-scoped uuid (the per-CHILD grain), NOT child PII; ``None`` = a
+    household-grain verdict. The firewall is the shape itself (INV-1/INV-6; enforced
+    by ``test_buckets_leak_no_roster_pii``).
     """
 
     family_id: UUID
+    student_id: UUID | None = None
     present: bool
     confirmed_at: datetime | None
     bucket: SisBucket

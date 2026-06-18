@@ -34,7 +34,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from app.adapters.sis.simulated import SimulatedSISAdapter  # noqa: E402
 from app.core.params import load_params  # noqa: E402
-from app.data.sis_reconcile_job import run_sis_reconcile  # noqa: E402
+from app.data.sis_reconcile_job import run_sis_reconcile_students  # noqa: E402
 from app.data.supabase_repository import SupabaseFamilyRepository  # noqa: E402
 from app.data.synthetic import generate_demo_cohort  # noqa: E402
 
@@ -190,17 +190,19 @@ def main() -> None:
         for table, items in plain:
             _post_rows(url, service_key, table, [shape(x, table) for x in items])
 
-        # Persist the SIS verdicts to sis_status (the 🔴/🟡/✅ buckets the cockpit +
-        # apply "Closed — pending SIS" read). Reconcile the seeded cloud repo against
-        # the demo cohort's aligned roster (DH-3), then write the 4 PII-firewall fields.
+        # Persist the SIS verdicts to sis_status — PER-CHILD (A-24): the household is
+        # matched on its contact (never child PII, INV-6), then the verdict is
+        # attributed to each enrolled child (student_id, an opaque uuid). Writes the
+        # 5 PII-firewall fields only.
         repo = SupabaseFamilyRepository(base_url=url, service_role_key=service_key, params=params)
         adapter = SimulatedSISAdapter.from_cohort(
             ds, seed=params.back_to_school.seed, params=params
         )
-        verdicts = run_sis_reconcile(repo, adapter, params)
+        verdicts = run_sis_reconcile_students(repo, adapter, params)
         sis_rows = [
             {
                 "family_id": str(v.family_id),
+                "student_id": str(v.student_id) if v.student_id else None,
                 "present": v.present,
                 "confirmed_at": v.confirmed_at.isoformat() if v.confirmed_at else None,
                 "bucket": str(v.bucket),

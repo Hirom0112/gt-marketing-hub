@@ -22,8 +22,8 @@ families are not reconciled — a SIS has no reason to carry them yet.
 from __future__ import annotations
 
 import re
-from collections.abc import Iterable
-from dataclasses import dataclass
+from collections.abc import Iterable, Mapping
+from dataclasses import dataclass, replace
 from datetime import datetime
 from enum import StrEnum
 from uuid import UUID
@@ -86,9 +86,15 @@ class FamilyMatchKey:
 class SisVerdict:
     """One family's reconcile outcome — the firewall fields plus a merge handle.
 
-    Only ``family_id`` / ``present`` / ``confirmed_at`` / ``bucket`` cross to the
-    cockpit (the PII firewall). ``matched_external_id`` is the SIS's own opaque id
-    (never child PII) kept for routing an ``ambiguous`` verdict to the merge queue.
+    Only ``family_id`` / ``student_id`` / ``present`` / ``confirmed_at`` / ``bucket``
+    cross to the cockpit (the PII firewall — ``student_id`` is an opaque owner-scoped
+    uuid, NOT child PII). ``matched_external_id`` is the SIS's own opaque id (never
+    child PII) kept for routing an ``ambiguous`` verdict to the merge queue.
+
+    ``student_id`` is the per-CHILD grain (A-24): ``None`` = a household-grain verdict;
+    set = this verdict attributed to one enrolled child under the matched household
+    (:func:`expand_to_students`). The MATCH is always household-only — a child is
+    never matched on its own data (INV-6).
     """
 
     family_id: UUID
@@ -96,6 +102,7 @@ class SisVerdict:
     confirmed_at: datetime | None
     bucket: SisBucket
     matched_external_id: str | None = None
+    student_id: UUID | None = None
 
 
 def _norm_email(value: str | None) -> str | None:
@@ -165,3 +172,27 @@ def reconcile(
     """Reconcile every PAID family against the roster (input order preserved)."""
     rows = list(roster)
     return [reconcile_family(key, rows, params) for key in keys if key.paid]
+
+
+def expand_to_students(
+    verdicts: Iterable[SisVerdict],
+    students_by_family: Mapping[UUID, list[UUID]],
+) -> list[SisVerdict]:
+    """Attribute each HOUSEHOLD verdict to each enrolled CHILD under it (A-24).
+
+    Pure. The matcher stays household-only — it never sees child data (INV-6) — and
+    this is the SEPARATE step that attaches the household's ✅/🟡/🔴 to its children
+    by opaque ``student_id`` (a uuid, not PII), one verdict per child. SIS confirms
+    the household is enrolled; the children under it inherit that status, so a parent
+    sees per-child confirmation on a call. A family with NO known children keeps a
+    single household-grain verdict (``student_id`` None) — back-compat. Order is
+    preserved (household order; children in their ``students_by_family`` order).
+    """
+    out: list[SisVerdict] = []
+    for verdict in verdicts:
+        children = students_by_family.get(verdict.family_id, [])
+        if not children:
+            out.append(verdict)
+            continue
+        out.extend(replace(verdict, student_id=student_id) for student_id in children)
+    return out

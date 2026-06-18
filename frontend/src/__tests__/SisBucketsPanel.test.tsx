@@ -114,4 +114,37 @@ describe('SisBucketsPanel (M5 acceptance)', () => {
     const fetchMock = globalThis.fetch as unknown as ReturnType<typeof vi.fn>;
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
+
+  it('shows the per-child grain: one row per child with its student chip (A-24)', async () => {
+    // A 2-child confirmed household: same family_id, two student_ids — each its own
+    // row with a "child <id>" chip (the per-child SIS confirmation a parent sees).
+    const FAM = '66666666-0000-4000-8000-000000000006';
+    const KID_A = 'aaaaaaaa-0000-4000-8000-0000000000aa';
+    const KID_B = 'bbbbbbbb-0000-4000-8000-0000000000bb';
+    installFetch({
+      buckets: [
+        {
+          bucket: 'confirmed',
+          count: 2,
+          families: [
+            { family_id: FAM, student_id: KID_A, present: true, confirmed_at: '2026-06-10T00:00:00Z', bucket: 'confirmed' },
+            { family_id: FAM, student_id: KID_B, present: true, confirmed_at: '2026-06-10T00:00:00Z', bucket: 'confirmed' },
+          ],
+        },
+      ],
+      total: 2,
+    });
+    render(<SisBucketsPanel />);
+
+    const confirmed = await screen.findByTestId('sis-bucket-confirmed');
+    // Two rows for the SAME household — one per child.
+    const rows = within(confirmed).getAllByTestId('sis-bucket-row');
+    expect(rows).toHaveLength(2);
+    // Each row carries its child chip (the per-child grain), short-id'd.
+    const chips = within(confirmed).getAllByTestId('sis-row-student');
+    expect(chips).toHaveLength(2);
+    const chipText = chips.map((c) => c.textContent ?? '').join(' ');
+    expect(chipText).toContain('child aaaaaaaa');
+    expect(chipText).toContain('child bbbbbbbb');
+  });
 });

@@ -13,6 +13,7 @@ from __future__ import annotations
 
 from collections.abc import Iterator
 from pathlib import Path
+from uuid import UUID
 
 from fastapi.testclient import TestClient
 
@@ -28,8 +29,13 @@ client = TestClient(app)
 
 EXAMPLE_PARAMS = Path(__file__).resolve().parents[3] / "params" / "params.example.yaml"
 
-_ALLOWED_FAMILY_KEYS = {"family_id", "present", "confirmed_at", "bucket"}
-# Anything a roster row might carry about a household/minor must never appear.
+# `student_id` is the per-CHILD grain (A-24) — an opaque owner-scoped uuid, NOT
+# child PII, so it is an allowed firewall field. The PII protection is the
+# exact-allowed-keys lock below + the forbidden PII substrings (name/dob/grade/…).
+_ALLOWED_FAMILY_KEYS = {"family_id", "student_id", "present", "confirmed_at", "bucket"}
+# Anything a roster row might carry about a household/minor must never appear. NOTE:
+# the bare token "student" is NOT forbidden (student_id is a legitimate opaque uuid);
+# the actual child-PII substrings below + the allowed-keys lock are the firewall.
 _FORBIDDEN_KEY_SUBSTR = (
     "name",
     "dob",
@@ -37,7 +43,6 @@ _FORBIDDEN_KEY_SUBSTR = (
     "grade",
     "email",
     "phone",
-    "student",
     "child",
     "address",
     "income",
@@ -77,8 +82,9 @@ def test_buckets_leak_no_roster_pii() -> None:
     labels = {group["bucket"] for group in body["buckets"]}
     assert labels == {"paid_not_in_sis", "records_lag", "ambiguous", "confirmed"}
 
-    # --- every family entry carries EXACTLY the firewall fields, nothing else ---
+    # --- every entry carries EXACTLY the firewall fields, nothing else ---
     counted = 0
+    with_student = 0
     for group in body["buckets"]:
         assert set(group) == {"bucket", "count", "families"}
         assert group["count"] == len(group["families"])
@@ -88,7 +94,15 @@ def test_buckets_leak_no_roster_pii() -> None:
             assert not extra, f"PII firewall breached: unexpected family fields {extra}"
             assert isinstance(family["present"], bool)
             assert family["bucket"] == group["bucket"]
+            # student_id is the per-child grain: when set it is an opaque UUID, never
+            # a name/grade — a value-level firewall check (not just the key lock).
+            sid = family.get("student_id")
+            if sid is not None:
+                with_student += 1
+                UUID(sid)  # raises if not a uuid → not a name/PII string
     assert counted == body["total"]
+    # The cohort has children, so the verdicts are attributed per-child (A-24).
+    assert with_student > 0, "expected per-child SIS verdicts (student_id attributed)"
 
     # --- no PII-shaped key ANYWHERE in the payload (recursive) ---
     for key in _all_keys(body):

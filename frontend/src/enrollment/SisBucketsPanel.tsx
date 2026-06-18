@@ -24,6 +24,9 @@ type Bucket = 'paid_not_in_sis' | 'records_lag' | 'ambiguous' | 'confirmed';
 
 interface SisFamilyStatus {
   family_id: string;
+  // Per-CHILD grain (A-24): the opaque student_id this verdict is attributed to
+  // (null = a household-grain verdict). Never child PII — an owner-scoped uuid.
+  student_id?: string | null;
   present: boolean;
   confirmed_at: string | null;
   bucket: Bucket;
@@ -199,7 +202,7 @@ export default function SisBucketsPanel({
 
               {families.map((fam) => (
                 <div
-                  key={fam.family_id}
+                  key={`${fam.family_id}-${fam.student_id ?? 'household'}`}
                   data-testid="sis-bucket-row"
                   style={{
                     display: 'flex',
@@ -211,12 +214,37 @@ export default function SisBucketsPanel({
                   }}
                 >
                   <span
-                    className="mono"
-                    data-testid="sis-row-family"
-                    title={fam.family_id}
-                    style={{ fontSize: 'var(--fs-sm)', color: 'var(--ink)' }}
+                    style={{
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: 'var(--s-2)',
+                      minWidth: 0,
+                    }}
                   >
-                    {shortId(fam.family_id)}
+                    <span
+                      className="mono"
+                      data-testid="sis-row-family"
+                      title={fam.family_id}
+                      style={{ fontSize: 'var(--fs-sm)', color: 'var(--ink)' }}
+                    >
+                      {shortId(fam.family_id)}
+                    </span>
+                    {fam.student_id != null && (
+                      <span
+                        className="mono"
+                        data-testid="sis-row-student"
+                        title={`child ${fam.student_id}`}
+                        style={{
+                          fontSize: 'var(--fs-chip)',
+                          color: 'var(--muted)',
+                          border: '1px solid var(--line)',
+                          borderRadius: 'var(--r-pill)',
+                          padding: '1px 7px',
+                        }}
+                      >
+                        child {shortId(fam.student_id)}
+                      </span>
+                    )}
                   </span>
                   {meta.action ? (
                     <Button

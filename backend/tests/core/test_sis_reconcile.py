@@ -21,7 +21,14 @@ from pathlib import Path
 from uuid import UUID
 
 from app.core.params import load_params
-from app.core.sis_reconcile import FamilyMatchKey, SisBucket, SisRosterRow, reconcile
+from app.core.sis_reconcile import (
+    FamilyMatchKey,
+    SisBucket,
+    SisRosterRow,
+    SisVerdict,
+    expand_to_students,
+    reconcile,
+)
 
 EXAMPLE_PARAMS = Path(__file__).resolve().parents[3] / "params" / "params.example.yaml"
 
@@ -123,3 +130,31 @@ def test_thresholds_read_from_params_not_hardcoded() -> None:
         update={"sis": params.sis.model_copy(update={"paid_not_in_sis_max_confidence": 0.7})}
     )
     assert reconcile(key, roster, drifted)[0].bucket is SisBucket.PAID_NOT_IN_SIS
+
+
+def test_expand_to_students_attributes_household_verdict_per_child() -> None:
+    """A HOUSEHOLD verdict is attributed to each enrolled child (A-24): one verdict
+    per child, same bucket, carrying the opaque student_id (never child PII). A
+    family with no children keeps its single household-grain verdict."""
+    fam_two = UUID("00000000-0000-4000-8000-0000000000a1")
+    fam_none = UUID("00000000-0000-4000-8000-0000000000a2")
+    kid1 = UUID("00000000-0000-4000-8000-0000000000b1")
+    kid2 = UUID("00000000-0000-4000-8000-0000000000b2")
+    when = datetime(2026, 6, 15, tzinfo=UTC)
+
+    verdicts = [
+        SisVerdict(fam_two, present=True, confirmed_at=when, bucket=SisBucket.CONFIRMED),
+        SisVerdict(fam_none, present=False, confirmed_at=None, bucket=SisBucket.PAID_NOT_IN_SIS),
+    ]
+    out = expand_to_students(verdicts, {fam_two: [kid1, kid2]})  # fam_none has no kids
+
+    # The 2-child household fans out to 2 per-child verdicts, same bucket + date.
+    two = [v for v in out if v.family_id == fam_two]
+    assert len(two) == 2
+    assert {v.student_id for v in two} == {kid1, kid2}
+    assert all(v.bucket is SisBucket.CONFIRMED and v.confirmed_at == when for v in two)
+    # The child-less family keeps ONE household-grain verdict (student_id None).
+    none = [v for v in out if v.family_id == fam_none]
+    assert len(none) == 1 and none[0].student_id is None
+    # The match itself is untouched — expansion only attaches student_id.
+    assert all(v.present == (v.bucket is SisBucket.CONFIRMED) for v in out)
