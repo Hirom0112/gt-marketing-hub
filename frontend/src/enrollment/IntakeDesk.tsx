@@ -173,6 +173,40 @@ async function postBulkAssign(
   return res.ok;
 }
 
+// One routed lead from POST /enrollment/leads/auto-assign — the DETERMINISTIC
+// router's decision + its human-readable reason. agent_id null ⇒ HELD (ambiguous
+// identity / parked); held leads stay in the pool.
+interface AutoAssignResult {
+  family_id: string;
+  agent_id: string | null;
+  routed_role: string | null;
+  rule: string;
+  reason: string;
+  owner_match: boolean;
+  held: boolean;
+}
+
+interface AutoAssignResponse {
+  batch_id: string;
+  counts: { assigned: number; held: number };
+  results: AutoAssignResult[];
+}
+
+// Fire the deterministic router over the WHOLE unassigned intake pool (empty body
+// ⇒ route every owner=none family). Unlike the per-row bulk-assign, this runs the
+// real route_lead precedence server-side (owner-match → territory → readiness →
+// income → weighted RR) and returns each decision WITH its reason (NFR-6). The
+// deterministic core owns the write (INV-2); the UI only renders the result.
+async function postAutoAssign(): Promise<AutoAssignResponse> {
+  const res = await apiFetch('/enrollment/leads/auto-assign', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({}),
+  });
+  if (!res.ok) throw new Error(`auto-assign request failed: ${res.status}`);
+  return (await res.json()) as AutoAssignResponse;
+}
+
 export default function IntakeDesk({
   selectedFamilyId,
   onSelectFamily,
@@ -188,6 +222,11 @@ export default function IntakeDesk({
   // banner (surfaced, never silent — matches the desk's role="alert" idiom).
   const [assigning, setAssigning] = useState(false);
   const [assignError, setAssignError] = useState<string | null>(null);
+  // The last auto-route's per-lead decisions (with reasons), surfaced as a
+  // transient receipt so the operator sees WHY each lead routed where it did.
+  const [routeReceipt, setRouteReceipt] = useState<
+    { name: string; result: AutoAssignResult }[] | null
+  >(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -248,27 +287,24 @@ export default function IntakeDesk({
     [],
   );
 
-  // Auto-route all: assign every currently-listed unassigned family to its
-  // per-row recommended agent. Group by agent so it is ONE bulk-assign call per
-  // distinct target (the backend route is bulk-shaped); skip rows with no
-  // recommendation. One re-pull after the batch.
+  // Auto-route all: run the DETERMINISTIC router over the whole unassigned pool
+  // (one POST /enrollment/leads/auto-assign — no client-side routing). The server
+  // returns each decision + its reason; we capture display names BEFORE the
+  // re-pull (the routed families drop out of owner=none) so the receipt can name
+  // them, then re-pull once.
   const autoRouteAll = useCallback(async (): Promise<void> => {
-    const groups = new Map<string, string[]>();
-    for (const fam of ordered) {
-      const agentId = fam.recommended_agent_id;
-      if (!agentId) continue;
-      const ids = groups.get(agentId) ?? [];
-      ids.push(fam.family_id);
-      groups.set(agentId, ids);
-    }
-    if (groups.size === 0) return;
+    if (ordered.length === 0) return;
+    const nameById = new Map(ordered.map((f) => [f.family_id, f.display_name]));
     setAssigning(true);
     setAssignError(null);
     try {
-      for (const [agentId, ids] of groups) {
-        const ok = await postBulkAssign(ids, agentId);
-        if (!ok) throw new Error('auto-route request failed');
-      }
+      const resp = await postAutoAssign();
+      setRouteReceipt(
+        resp.results.map((result) => ({
+          name: nameById.get(result.family_id) ?? result.family_id,
+          result,
+        })),
+      );
       setLocalRefresh((n) => n + 1); // re-pull owner=none once
     } catch (err: unknown) {
       setAssignError(err instanceof Error ? err.message : 'auto-route failed');
@@ -277,7 +313,7 @@ export default function IntakeDesk({
     }
   }, [ordered]);
 
-  const routableCount = ordered.filter((f) => f.recommended_agent_id).length;
+  const routableCount = ordered.length;
 
   if (state.status === 'loading') {
     return (
@@ -349,6 +385,55 @@ export default function IntakeDesk({
           >
             Could not route: {assignError}
           </p>
+        )}
+
+        {routeReceipt !== null && routeReceipt.length > 0 && (
+          <div
+            data-testid="intake-route-receipt"
+            style={{
+              padding: 'var(--s-2) var(--s-4)',
+              borderBottom: '1px solid var(--line-2)',
+              background: 'var(--rest, var(--surface-2))',
+            }}
+          >
+            <div
+              className="lab"
+              style={{ fontWeight: 700, marginBottom: 'var(--s-1)' }}
+            >
+              Routed {routeReceipt.filter((r) => !r.result.held).length} ·
+              held {routeReceipt.filter((r) => r.result.held).length} — why:
+            </div>
+            <ul
+              style={{
+                listStyle: 'none',
+                margin: 0,
+                padding: 0,
+                display: 'flex',
+                flexDirection: 'column',
+                gap: 'var(--s-1)',
+              }}
+            >
+              {routeReceipt.map(({ name, result }) => (
+                <li
+                  key={result.family_id}
+                  data-testid="intake-route-receipt-row"
+                  style={{ fontSize: 'var(--fs-sm)', lineHeight: 1.4 }}
+                >
+                  <b>{name}</b>
+                  {result.owner_match && (
+                    <span className="lab" style={{ color: 'var(--muted)' }}>
+                      {' '}
+                      · owner-match
+                    </span>
+                  )}
+                  {result.held && (
+                    <span style={{ color: 'var(--signal-ink)' }}> · HELD</span>
+                  )}
+                  <div style={{ color: 'var(--muted)' }}>{result.reason}</div>
+                </li>
+              ))}
+            </ul>
+          </div>
         )}
 
         {ordered.length === 0 ? (

@@ -214,6 +214,35 @@ describe('IntakeDesk', () => {
             json: () => Promise.resolve({ assigned: 1 }),
           } as Response);
         }
+        if (url.includes('/leads/auto-assign')) {
+          // The deterministic router over the whole pool — returns each decision
+          // WITH its reason (the WHY the receipt renders).
+          posts.push({
+            url,
+            body: init?.body ? JSON.parse(String(init.body)) : undefined,
+          });
+          const results = [FAM_IN_WINDOW, FAM_ALARM_OLD, FAM_ALARM_OLDER].map(
+            (family_id) => ({
+              family_id,
+              agent_id: RILEY,
+              routed_role: 'closer',
+              rule: 'territory',
+              reason: 'territory: state=FL → pool [Riley Carter]; weighted RR → Riley Carter',
+              owner_match: false,
+              held: false,
+            }),
+          );
+          return Promise.resolve({
+            ok: true,
+            status: 200,
+            json: () =>
+              Promise.resolve({
+                batch_id: 'auto-assign-test',
+                counts: { assigned: 3, held: 0 },
+                results,
+              }),
+          } as Response);
+        }
         if (url.includes('/families')) {
           // Each owner=none GET pulls the NEXT desk body (re-pull proof): the
           // initial list, then the post-assign list (assigned families gone).
@@ -274,7 +303,7 @@ describe('IntakeDesk', () => {
     expect(screen.getAllByTestId('intake-row')).toHaveLength(2);
   });
 
-  it('intakeDeskAutoRouteAllFiresAssignsForListedFamiliesAndRePulls', async () => {
+  it('intakeDeskAutoRouteAllFiresDeterministicRouterAndShowsReasons', async () => {
     // After auto-route, the re-pull returns an EMPTY desk (all routed).
     const { posts } = installAssignFetch([INTAKE_PAYLOAD, []]);
     render(<IntakeDesk />);
@@ -283,19 +312,20 @@ describe('IntakeDesk', () => {
 
     fireEvent.click(screen.getByTestId('intake-auto-route'));
 
-    // All three listed families share one recommended agent (RILEY) → grouped
-    // into ONE bulk-assign call carrying all three family_ids.
+    // Auto-route fires the DETERMINISTIC router endpoint over the whole pool —
+    // ONE POST /enrollment/leads/auto-assign, NOT per-row bulk-assign.
     await waitFor(() => expect(posts.length).toBeGreaterThanOrEqual(1));
-    const allAssigned = posts.flatMap(
-      (p) => (p.body as { family_ids: string[] }).family_ids,
-    );
-    expect(allAssigned).toEqual(
-      expect.arrayContaining([FAM_IN_WINDOW, FAM_ALARM_OLD, FAM_ALARM_OLDER]),
-    );
-    posts.forEach((p) => {
-      expect(p.url).toContain('/enrollment/families/bulk-assign');
-      expect((p.body as { agent_id: string }).agent_id).toBe(RILEY);
-    });
+    expect(
+      posts.some((p) => p.url.includes('/enrollment/leads/auto-assign')),
+    ).toBe(true);
+
+    // The receipt surfaces each routed family + its REASON (the explainability
+    // mandate — NFR-6 / "deterministic and explainable").
+    const receipt = await screen.findByTestId('intake-route-receipt');
+    expect(
+      within(receipt).getAllByTestId('intake-route-receipt-row'),
+    ).toHaveLength(3);
+    expect(receipt.textContent).toContain('territory: state=FL');
 
     // RE-PULL proof: the desk is now clear (all families routed out of owner=none).
     await screen.findByTestId('intake-empty');
