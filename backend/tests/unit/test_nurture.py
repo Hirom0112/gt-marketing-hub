@@ -11,10 +11,10 @@ build (CLAUDE.md §4.1).
 
 from __future__ import annotations
 
-from datetime import date
+from datetime import UTC, date, datetime
 from pathlib import Path
 
-from app.core.nurture import anchor_pressure
+from app.core.nurture import anchor_pressure, is_cold
 from app.core.params import load_params
 
 EXAMPLE_PARAMS = Path(__file__).resolve().parents[3] / "params" / "params.example.yaml"
@@ -77,3 +77,32 @@ def test_anchor_pressure_ramps_linearly_within_window() -> None:
     p = anchor_pressure(date(2026, 7, 29), _ANCHORS)
     assert p.anchor == "back_to_school"
     assert round(p.pressure, 4) == 0.75
+
+
+# --- cold threshold (deterministic, params-homed) ---
+# A family is COLD once it has been stalled (its stall-anchor) longer than
+# `nurture.cold_after_days` (14). It's a more-urgent STALLED, still active — an
+# annotation, not a removal. The recency precedence (a contacted family is
+# WORKING) is the deriver's job; this helper only decides the age threshold.
+
+_COLD_AFTER = load_params(EXAMPLE_PARAMS).nurture.cold_after_days
+
+
+def _now(day: int) -> datetime:
+    return datetime(2026, 6, day, 12, 0, tzinfo=UTC)
+
+
+def test_is_cold_true_past_the_threshold() -> None:
+    """Stalled longer than cold_after_days (14) ⇒ cold."""
+    # Stall-anchored June 1; 'now' June 20 ⇒ 19 days >= 14.
+    assert is_cold(stall_date=_now(1), now=_now(20), cold_after_days=_COLD_AFTER) is True
+
+
+def test_is_cold_true_exactly_on_the_threshold() -> None:
+    """Exactly cold_after_days old ⇒ cold (the boundary is inclusive)."""
+    assert is_cold(stall_date=_now(1), now=_now(15), cold_after_days=_COLD_AFTER) is True
+
+
+def test_is_cold_false_within_the_threshold() -> None:
+    """Stalled fewer than cold_after_days ⇒ not yet cold."""
+    assert is_cold(stall_date=_now(10), now=_now(20), cold_after_days=_COLD_AFTER) is False

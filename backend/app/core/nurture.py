@@ -66,6 +66,19 @@ def anchor_pressure(today: date, anchors: list[NurtureAnchor]) -> AnchorPressure
     return best
 
 
+def is_cold(*, stall_date: datetime, now: datetime, cold_after_days: int) -> bool:
+    """Whether a stalled family has gone COLD — stalled longer than the threshold.
+
+    True once ``now - stall_date`` reaches ``cold_after_days`` (inclusive boundary).
+    COLD is a more-urgent STALLED (still active — an annotation, not a removal); the
+    recency precedence (a contacted family is WORKING, not COLD) is the recovery
+    deriver's job — this only decides the age threshold. ``stall_date`` is the API
+    layer's derived stall-anchor; ``now`` is read once per request (INV-2: the pure
+    core never reads a clock).
+    """
+    return (now - stall_date) >= timedelta(days=cold_after_days)
+
+
 def count_no_response(
     outcomes: Iterable[ContactOutcomeRecord], *, now: datetime, within_days: int
 ) -> int:
