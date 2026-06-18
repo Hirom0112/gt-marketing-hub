@@ -55,6 +55,13 @@ def _joined_family() -> JoinedFamily:
         crm_seam_status=SeamStatus.UNSYNCED,  # seeded value — the deriver is the source of truth.
         crm_synced_at=_AFTER,
         updated_at=_T0,
+        # Household guardians (A-36) + the new secondary phone (D-6) + state (D-5).
+        state="MA",
+        guardian_1_relationship="mother",
+        secondary_contact_name="Alex Rivera",
+        secondary_contact_synthetic_email="rivera.guardian2@example.invalid",
+        secondary_contact_synthetic_phone="555-0188",
+        guardian_2_relationship="father",
     )
     lead = LeadsNew(
         lead_id=uuid4(),
@@ -68,6 +75,7 @@ def _joined_family() -> JoinedFamily:
         product_interest=ProductInterest.CAMPUS,
         grade_interest="3",
         region="Northeast",
+        neighborhood="Beacon Hill",
     )
     app_form = AppForm(
         app_form_id=uuid4(),
@@ -136,6 +144,70 @@ def test_deal_view_projection() -> None:
     #     crm_synced_at (_AFTER) >= updated_at (_T0) and mirror agrees ⇒ synced,
     #     even though the spine row was seeded `unsynced`. The deriver wins. ---
     assert view.crm_seam_status is SeamStatus.SYNCED
+
+
+def test_deal_view_household_and_contact_fields() -> None:
+    """The redesign panel (§1–3) needs BOTH parents, both contacts, and location.
+
+    `assemble_deal_view` is a pure projection, so it surfaces these straight off the
+    already-joined rows: the primary parent name + phone off the lead, both guardians'
+    relationships + the secondary contact (name/email/phone) off the family spine, and
+    the aggregate location labels (neighborhood/region/state). No precise geo (INV-6).
+    """
+    joined = _joined_family()
+    view = assemble_deal_view(joined)
+
+    # §1 Parents — both names. Primary off the lead, secondary off the spine.
+    assert view.primary_contact_name == "Jordan Rivera"
+    assert view.secondary_contact_name == "Alex Rivera"
+
+    # §2 Contact — both emails + both phones.
+    assert view.primary_contact_synthetic_email == "rivera.synthetic@example.invalid"
+    assert view.primary_contact_synthetic_phone == "555-0142"
+    assert view.secondary_contact_synthetic_email == "rivera.guardian2@example.invalid"
+    assert view.secondary_contact_synthetic_phone == "555-0188"
+
+    # Guardian relationships (apply-form picks) ride alongside the names.
+    assert view.guardian_1_relationship == "mother"
+    assert view.guardian_2_relationship == "father"
+
+    # §3 Location — aggregate labels only (no street address; INV-6).
+    assert view.neighborhood == "Beacon Hill"
+    assert view.region == "Northeast"
+    assert view.state == "MA"
+
+
+def test_deal_view_household_fields_degrade_without_lead_or_secondary() -> None:
+    """No lead ⇒ primary name/phone/location None; no secondary guardian ⇒ those None."""
+    base = _joined_family()
+    family = base.family.model_copy(
+        update={
+            "state": None,
+            "secondary_contact_name": None,
+            "secondary_contact_synthetic_email": None,
+            "secondary_contact_synthetic_phone": None,
+            "guardian_2_relationship": None,
+        }
+    )
+    no_lead = JoinedFamily(
+        family=family,
+        lead=None,
+        app_form=base.app_form,
+        enrollment_forms=base.enrollment_forms,
+        community_profile=base.community_profile,
+    )
+    view = assemble_deal_view(no_lead)
+    # Primary name falls back to the household display name when there's no lead row.
+    assert view.primary_contact_name == "The Rivera Family"
+    assert view.primary_contact_synthetic_phone is None
+    assert view.neighborhood is None
+    assert view.region is None
+    assert view.state is None
+    # No second guardian listed ⇒ all secondary fields None.
+    assert view.secondary_contact_name is None
+    assert view.secondary_contact_synthetic_email is None
+    assert view.secondary_contact_synthetic_phone is None
+    assert view.guardian_2_relationship is None
 
 
 def test_deal_view_dropoff_fields() -> None:

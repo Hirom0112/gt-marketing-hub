@@ -179,6 +179,10 @@ class FamilyRecord(BaseModel):
     # NULL ⇒ no second guardian listed. Household-grained — never tied to a student.
     secondary_contact_name: str | None = None
     secondary_contact_synthetic_email: str | None = None
+    # The second guardian's SYNTHETIC phone (D-6; 0023). The admin panel surfaces both
+    # parents' phones; 0022 added the secondary name/email/relationship but no phone.
+    # Synthetic only (INV-1, the 555-01xx fictitious block). NULL ⇒ unstated.
+    secondary_contact_synthetic_phone: str | None = None
     guardian_2_relationship: str | None = None
 
     # Join keys, nullable until the related record exists (§4.1).

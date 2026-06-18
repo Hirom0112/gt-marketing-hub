@@ -51,6 +51,27 @@ class DealView(BaseModel):
     display_name: str
     primary_contact_synthetic_email: str
 
+    # Household contacts (A-36; redesign panel §1–2) — BOTH parents on the ONE
+    # household. The PRIMARY parent's name + phone come off the lead row (the
+    # top-of-funnel synthetic contact), falling back to the household display name
+    # when there is no lead. The SECONDARY guardian (name/email/phone/relationship)
+    # and BOTH guardian relationships come off the family spine. All synthetic
+    # (INV-1); each is None when not on file. Household-grained — never a child key.
+    primary_contact_name: str | None = None
+    primary_contact_synthetic_phone: str | None = None
+    guardian_1_relationship: str | None = None
+    secondary_contact_name: str | None = None
+    secondary_contact_synthetic_email: str | None = None
+    secondary_contact_synthetic_phone: str | None = None
+    guardian_2_relationship: str | None = None
+
+    # Location (redesign panel §3) — AGGREGATE labels only, never precise geo of a
+    # minor (INV-6): the lead's neighborhood/region area labels + the household's
+    # coarse US state code. None when not on file.
+    neighborhood: str | None = None
+    region: str | None = None
+    state: str | None = None
+
     # Deterministic spine columns (§4.1, §4.8).
     stall_reason: StallReason | None
     funding_type: FundingType | None
@@ -156,10 +177,19 @@ def assemble_deal_view(
         The assembled :class:`DealView`.
     """
     family = joined.family
+    lead = joined.lead
     app_form = joined.app_form
     enrollment_forms = joined.enrollment_forms
 
     effective_mirror = mirror if mirror is not None else _default_mirror(joined)
+
+    # §1–2 primary parent: name + phone off the lead, falling back to the household
+    # display name when no lead row exists (an interest-stage / marketing row).
+    primary_contact_name = (
+        f"{lead.synthetic_first_name} {lead.synthetic_last_name}"
+        if lead is not None
+        else family.display_name
+    )
 
     # Drop-off projection (S9 W2; FR-2.2) — pure, straight off the source rows.
     # apply_date prefers the application instant, else the spine created_at.
@@ -171,6 +201,18 @@ def assemble_deal_view(
         family_id=family.family_id,
         display_name=family.display_name,
         primary_contact_synthetic_email=family.primary_contact_synthetic_email,
+        # Household contacts (§1–2) — primary off the lead, secondary off the spine.
+        primary_contact_name=primary_contact_name,
+        primary_contact_synthetic_phone=lead.synthetic_phone if lead is not None else None,
+        guardian_1_relationship=family.guardian_1_relationship,
+        secondary_contact_name=family.secondary_contact_name,
+        secondary_contact_synthetic_email=family.secondary_contact_synthetic_email,
+        secondary_contact_synthetic_phone=family.secondary_contact_synthetic_phone,
+        guardian_2_relationship=family.guardian_2_relationship,
+        # Location (§3) — aggregate labels only (INV-6).
+        neighborhood=lead.neighborhood if lead is not None else None,
+        region=lead.region if lead is not None else None,
+        state=family.state,
         stall_reason=family.stall_reason,
         funding_type=family.funding_type,
         attribution_source=family.attribution_source,
