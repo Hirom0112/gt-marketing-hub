@@ -218,6 +218,30 @@ class ContactOutcomeRecord(BaseModel):
     created_at: datetime
 
 
+class LostRecord(BaseModel):
+    """A human-confirmed LOST event — the manual close of a presumed-lost lead (A-19).
+
+    The presumed-lost rule only SURFACES a family (accrued silence); a human then
+    CONFIRMS the LOST transition here (``nurture.presumed_lost.requires_human_confirm``
+    — the machine never auto-drops a warm lead). Mirrors :class:`DismissRecord`
+    exactly: family-keyed (optionally per-child), a REQUIRED ``reason`` so the audit
+    always records *why* (INV-2: a logged event, never a silent mutation), and
+    reversible — a later re-stall (a fresh ``stall_date``) supersedes it (see
+    :meth:`ObservabilityLog.is_lost`), so a re-engaged family returns to the board.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    family_id: UUID
+    # The child confirmed lost, when the event is per-student (A-24). None for a
+    # family-level lost; a per-child event never leaks to a sibling or the
+    # family-level query (mirrors :meth:`ObservabilityLog.is_dismissed`).
+    student_id: UUID | None = None
+    human: str
+    reason: str = Field(min_length=1)
+    created_at: datetime
+
+
 @dataclass(frozen=True, slots=True)
 class AuditView:
     """The joined audit chain for one proposal (NFR-6 reconstruction).
@@ -385,6 +409,46 @@ class ObservabilityLog(ABC):
         """This family's contact outcomes, in append order (owner-scoped at the API)."""
         raise NotImplementedError
 
+    @abstractmethod
+    def log_lost(
+        self,
+        *,
+        family_id: UUID,
+        student_id: UUID | None = None,
+        human: str,
+        reason: str,
+        created_at: datetime | None = None,
+    ) -> LostRecord:
+        """Append a human-confirmed LOST event (A-19). Append-only.
+
+        ``student_id`` confirms ONE child lost (A-24); omit it for a family-level
+        lost. Raises ``ValueError`` if ``reason`` is blank — a lost must say why.
+        """
+        raise NotImplementedError
+
+    @abstractmethod
+    def list_lost(self) -> list[LostRecord]:
+        """Every logged lost event, in append order (the lost audit index)."""
+        raise NotImplementedError
+
+    @abstractmethod
+    def is_lost(
+        self,
+        family_id: UUID,
+        *,
+        student_id: UUID | None = None,
+        restalled_after: datetime | None = None,
+    ) -> bool:
+        """Whether the latest matching LOST event still holds (A-19).
+
+        Mirrors :meth:`is_dismissed`: matches on BOTH ``family_id`` and
+        ``student_id`` (a per-child lost never leaks to a sibling or the family
+        query). True when such an event exists AND no later re-stall supersedes it
+        — ``restalled_after`` (the API layer's derived ``stall_date``) strictly
+        later than the latest lost event means the family re-engaged ⇒ False.
+        """
+        raise NotImplementedError
+
 
 class InMemoryObservabilityLog(ObservabilityLog):
     """In-memory append-only audit log (v1; ASSUMPTIONS A-3).
@@ -405,6 +469,8 @@ class InMemoryObservabilityLog(ObservabilityLog):
         self._dismissals: list[DismissRecord] = []
         # Append-only family-keyed contact-attempt outcomes (the close-loop event).
         self._contact_outcomes: list[ContactOutcomeRecord] = []
+        # Append-only family-keyed confirmed-lost events (A-19) — the manual close.
+        self._lost: list[LostRecord] = []
 
     def log_proposal(
         self,
@@ -568,6 +634,54 @@ class InMemoryObservabilityLog(ObservabilityLog):
 
     def list_contact_outcomes(self, family_id: UUID) -> list[ContactOutcomeRecord]:
         return [r for r in self._contact_outcomes if r.family_id == family_id]
+
+    def log_lost(
+        self,
+        *,
+        family_id: UUID,
+        student_id: UUID | None = None,
+        human: str,
+        reason: str,
+        created_at: datetime | None = None,
+    ) -> LostRecord:
+        if not reason.strip():
+            # A confirmed-lost must record WHY (A-19); a blank reason is a
+            # programming error, not a silent no-reason drop.
+            raise ValueError("lost requires a non-blank reason (A-19)")
+        record = LostRecord(
+            family_id=family_id,
+            student_id=student_id,
+            human=human,
+            reason=reason,
+            created_at=created_at if created_at is not None else _now(),
+        )
+        self._lost.append(record)
+        return record
+
+    def list_lost(self) -> list[LostRecord]:
+        return list(self._lost)
+
+    def is_lost(
+        self,
+        family_id: UUID,
+        *,
+        student_id: UUID | None = None,
+        restalled_after: datetime | None = None,
+    ) -> bool:
+        latest: datetime | None = None
+        for record in self._lost:
+            # Match on BOTH keys so a per-child lost never leaks to a sibling or the
+            # family-level query, and vice-versa (A-24) — mirrors is_dismissed.
+            if record.family_id != family_id or record.student_id != student_id:
+                continue
+            if latest is None or record.created_at > latest:
+                latest = record.created_at
+        if latest is None:
+            return False
+        # A re-stall strictly after the latest lost event supersedes it (A-19).
+        if restalled_after is not None and restalled_after > latest:
+            return False
+        return True
 
     def _require_proposal(self, proposal_id: UUID) -> None:
         """Enforce ARCH §10 causality: no eval/decision before the proposal."""
