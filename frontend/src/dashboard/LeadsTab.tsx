@@ -2,21 +2,25 @@ import { useState } from 'react';
 import { CalendarDays, List } from 'lucide-react';
 import { WorkspaceToggle } from '../ui';
 import LeadsCalendar from './LeadsCalendar';
-import LeadsList, { type DayAnchor, type TimeScope } from './LeadsList';
+import LeadsList from './LeadsList';
 
-// The Leads tab (admin-dashboard redesign) — two view modes behind a toggle:
-// Calendar (default) and List. Clicking an agent chip in the calendar switches to
-// the list pre-filtered to that agent + that day. The agent/scope/day filter state
-// lives HERE so the calendar can drive it; the list owns its own status/search/
-// triage facets. Selecting a lead row lifts the family id to the dashboard.
+// The shared Leads tab (redesign R2) — two view modes behind a WorkspaceToggle:
+// Calendar (default) and List. Clicking a day or an agent chip in the calendar
+// switches to the list pre-filtered to that day (+agent for a chip). The tab is
+// scope-agnostic (the backend owner-scopes both reads); `showTriageFilter` only
+// surfaces the admin Leads-list Triage facet. Selecting a row lifts the family id.
 
 type Mode = 'calendar' | 'list';
 
 interface LeadsTabProps {
-  selectedFamilyId: string | null;
   onSelectFamily: (familyId: string) => void;
+  selectedFamilyId?: string | null;
+  // Admin shell surfaces the in-list Triage facet; agent shell has its own tab.
+  showTriageFilter?: boolean;
   // Tests pin the calendar's opening month; production resolves the latest month.
   initialMonth?: string;
+  // Narrow the calendar to a single owner (agent shell).
+  owner?: string;
 }
 
 const MODE_OPTIONS = [
@@ -25,19 +29,22 @@ const MODE_OPTIONS = [
 ];
 
 export default function LeadsTab({
-  selectedFamilyId,
   onSelectFamily,
+  selectedFamilyId = null,
+  showTriageFilter = false,
   initialMonth,
+  owner,
 }: LeadsTabProps): JSX.Element {
   const [mode, setMode] = useState<Mode>('calendar');
-  const [agentFilter, setAgentFilter] = useState<string | null>(null);
-  const [scope, setScope] = useState<TimeScope>('all');
-  const [dayAnchor, setDayAnchor] = useState<DayAnchor | null>(null);
+  // The filter handed to the list when arriving from the calendar. A manual toggle
+  // to List clears it (a fresh manual list starts unfiltered, All scope).
+  const [listFilter, setListFilter] = useState<{
+    day?: number;
+    agentId?: string;
+  } | null>(null);
 
-  function pickAgentDay(agentId: string, day: number, month: string): void {
-    setAgentFilter(agentId);
-    setDayAnchor({ month, day });
-    setScope('day');
+  function drillToList(filter: { day: number; agentId?: string }): void {
+    setListFilter(filter);
     setMode('list');
   }
 
@@ -49,11 +56,8 @@ export default function LeadsTab({
             options={MODE_OPTIONS}
             active={mode}
             onSelect={(m) => {
-              // Leaving the calendar for the list manually clears the day anchor
-              // (a fresh manual list starts at All scope, no pinned day).
-              if (m === 'list' && mode === 'calendar') {
-                /* keep any chip-set anchor only when arriving via a chip */
-              }
+              // A manual switch to the list drops any pinned calendar filter.
+              if (m === 'list') setListFilter(null);
               setMode(m);
             }}
             ariaLabel="Leads view"
@@ -62,23 +66,24 @@ export default function LeadsTab({
       </div>
 
       {mode === 'calendar' ? (
-        <LeadsCalendar initialMonth={initialMonth} onPickAgentDay={pickAgentDay} />
+        <LeadsCalendar
+          initialMonth={initialMonth}
+          owner={owner}
+          onDrillToList={drillToList}
+        />
       ) : (
         <LeadsList
-          selectedFamilyId={selectedFamilyId}
+          // Remount the list when the calendar-supplied filter changes so the
+          // pre-filter is applied as the list's initial state.
+          key={
+            listFilter
+              ? `${listFilter.day ?? ''}:${listFilter.agentId ?? ''}`
+              : 'manual'
+          }
           onSelectFamily={onSelectFamily}
-          agentFilter={agentFilter}
-          onAgentFilter={(v) => {
-            setAgentFilter(v);
-            // Manually changing the agent clears the pinned calendar day.
-            setDayAnchor(null);
-          }}
-          scope={scope}
-          onScope={(s) => {
-            setScope(s);
-            if (s === 'all') setDayAnchor(null);
-          }}
-          dayAnchor={dayAnchor}
+          selectedFamilyId={selectedFamilyId}
+          initialFilter={listFilter ?? undefined}
+          showTriageFilter={showTriageFilter}
         />
       )}
     </section>

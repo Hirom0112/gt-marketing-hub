@@ -2,18 +2,25 @@ import { useEffect, useState } from 'react';
 import { CalendarDays, ChevronLeft, ChevronRight } from 'lucide-react';
 import { apiFetch } from '../config';
 import { Button, Card } from '../ui';
+import HeatCell from '../enrollment/HeatCell';
+import { shortDollars } from '../enrollment/format';
 import type { LeadsCalendarResponse } from './types';
 
-// The Leads-tab calendar (admin-dashboard redesign; D-3). Reads
-// GET /enrollment/leads-calendar?month=YYYY-MM → per-day NEW-lead counts split by
-// owning sales agent. The month is OPTIONAL on first load: the endpoint resolves
-// it to the latest data month so the surface opens non-empty; we read the resolved
-// `month` back from the response and drive prev/next from it. Each populated day
-// shows one chip per agent (name + lead count) and an unowned indicator; a subtle
-// heatmap tint weights high-volume days. Clicking an agent chip switches to the
-// list view pre-filtered to that agent + that day. Read-only GETs (INV-2).
+// The shared Leads-tab calendar (redesign R2; D-3). Reads
+// GET /enrollment/leads-calendar?month=YYYY-MM[&owner=] → per-day NEW-lead counts
+// split by owning sales agent. Owner-scoping is already enforced server-side by the
+// demo principal; the optional `owner` prop only narrows further when a shell asks.
+// Each day cell REUSES enrollment/HeatCell for the subtle heat weight (heat = that
+// day's total lead volume, light→dark) and overlays one agent chip per agent
+// (synthetic_name + count) plus an unowned indicator. Clicking a day emits {day};
+// clicking an agent chip emits {day, agentId} so the parent can switch to the list
+// pre-filtered to that day (+agent). Read-only GETs (INV-2).
 
 const WEEKDAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'] as const;
+
+// Heat saturates at this many leads on a single day — keeps the ramp subtle so a
+// busy day reads darker without the grid turning into a wall of colour.
+const HEAT_SATURATION = 12;
 
 function shiftMonth(month: string, delta: number): string {
   const [yStr, mStr] = month.split('-');
@@ -57,15 +64,19 @@ type LoadState =
   | { status: 'ready'; data: LeadsCalendarResponse };
 
 interface LeadsCalendarProps {
-  // Pin the opening month (tests). Omitted → the server-resolved latest month.
+  // A day click emits {day}; an agent-chip click emits {day, agentId}. The parent
+  // switches to the list pre-filtered to that day (+agent).
+  onDrillToList: (filter: { day: number; agentId?: string }) => void;
+  // Narrow to a single owner (agent shell). Omitted → the principal's own scope.
+  owner?: string;
+  // Tests pin the opening month; production resolves the server's latest month.
   initialMonth?: string;
-  // Clicking an agent chip → switch to the list, filtered to (agentId, day).
-  onPickAgentDay: (agentId: string, day: number, month: string) => void;
 }
 
 export default function LeadsCalendar({
+  onDrillToList,
+  owner,
   initialMonth,
-  onPickAgentDay,
 }: LeadsCalendarProps): JSX.Element {
   const [month, setMonth] = useState<string | null>(initialMonth ?? null);
   const [state, setState] = useState<LoadState>({ status: 'loading' });
@@ -73,8 +84,11 @@ export default function LeadsCalendar({
   useEffect(() => {
     let cancelled = false;
     setState({ status: 'loading' });
-    const qs = month !== null ? `?month=${month}` : '';
-    apiFetch(`/enrollment/leads-calendar${qs}`)
+    const qs = new URLSearchParams();
+    if (month !== null) qs.set('month', month);
+    if (owner) qs.set('owner', owner);
+    const suffix = qs.toString() === '' ? '' : `?${qs.toString()}`;
+    apiFetch(`/enrollment/leads-calendar${suffix}`)
       .then((res) => {
         if (!res.ok) throw new Error(`leads-calendar failed: ${res.status}`);
         return res.json() as Promise<LeadsCalendarResponse>;
@@ -94,18 +108,14 @@ export default function LeadsCalendar({
     return () => {
       cancelled = true;
     };
-  }, [month]);
+  }, [month, owner]);
 
   const shownMonth =
     month ?? (state.status === 'ready' ? state.data.month : null);
 
   const byDay = new Map<number, LeadsCalendarResponse['days'][number]>();
-  let maxTotal = 0;
   if (state.status === 'ready') {
-    for (const d of state.data.days) {
-      byDay.set(d.day, d);
-      if (d.total > maxTotal) maxTotal = d.total;
-    }
+    for (const d of state.data.days) byDay.set(d.day, d);
   }
 
   return (
@@ -171,54 +181,73 @@ export default function LeadsCalendar({
               if (day === null) return <div key={`blank-${i}`} aria-hidden />;
               const entry = byDay.get(day);
               const total = entry?.total ?? 0;
-              // A subtle heat weight on busy days (opacity ramp, no new colour).
-              const weight =
-                maxTotal > 0 && total > 0
-                  ? 0.12 + (total / maxTotal) * 0.18
-                  : 0;
+              const dollarsRisk = entry?.unowned_count ?? 0;
               return (
                 <div
                   key={`day-${day}`}
                   data-testid={`leads-cal-day-${day}`}
                   className={`leads-cal-cell${total > 0 ? ' has-leads' : ''}`}
-                  style={
-                    weight > 0
-                      ? {
-                          background: `rgba(var(--heat-from), ${weight})`,
-                        }
-                      : undefined
-                  }
                 >
                   <span className="lab leads-cal-daynum">{day}</span>
-                  {entry?.agents.map((a) => (
-                    <button
-                      key={a.agent_id}
-                      type="button"
-                      className="leads-agent-chip"
-                      data-testid="leads-agent-chip"
-                      title={`${a.synthetic_name} · ${a.count} of ${total}`}
-                      onClick={() => onPickAgentDay(a.agent_id, day, shownMonth)}
-                    >
-                      <span
+                  {total > 0 ? (
+                    <>
+                      {/* The day's heat-weighted tile (reused HeatCell). A subtle
+                          light→dark ramp on volume; clicking it drills to {day}. */}
+                      <HeatCell
+                        count={total}
+                        atRisk={
+                          dollarsRisk > 0
+                            ? `${dollarsRisk} unowned`
+                            : shortDollars(0)
+                        }
+                        intensity={Math.min(1, total / HEAT_SATURATION)}
+                        onClick={() => onDrillToList({ day })}
+                      />
+                      <div
                         style={{
-                          overflow: 'hidden',
-                          textOverflow: 'ellipsis',
+                          display: 'flex',
+                          flexDirection: 'column',
+                          gap: 'var(--s-1)',
+                          marginTop: 'var(--s-1)',
                         }}
                       >
-                        {a.synthetic_name}
-                      </span>
-                      <span className="leads-agent-chip-count">{a.count}</span>
-                    </button>
-                  ))}
-                  {entry && entry.unowned_count > 0 && (
-                    <span
-                      className="leads-cal-unowned"
-                      data-testid="leads-cal-unowned"
-                      title="Unowned this day"
-                    >
-                      ⚠ {entry.unowned_count} unowned
-                    </span>
-                  )}
+                        {entry?.agents.map((a) => (
+                          <button
+                            key={a.agent_id}
+                            type="button"
+                            className="leads-agent-chip"
+                            data-testid="leads-agent-chip"
+                            data-agent={a.agent_id}
+                            title={`${a.synthetic_name} · ${a.count} of ${total}`}
+                            onClick={() =>
+                              onDrillToList({ day, agentId: a.agent_id })
+                            }
+                          >
+                            <span
+                              style={{
+                                overflow: 'hidden',
+                                textOverflow: 'ellipsis',
+                              }}
+                            >
+                              {a.synthetic_name}
+                            </span>
+                            <span className="leads-agent-chip-count">
+                              {a.count}
+                            </span>
+                          </button>
+                        ))}
+                        {entry && entry.unowned_count > 0 && (
+                          <span
+                            className="leads-cal-unowned"
+                            data-testid="leads-cal-unowned"
+                            title="Unowned this day"
+                          >
+                            ⚠ {entry.unowned_count} unowned
+                          </span>
+                        )}
+                      </div>
+                    </>
+                  ) : null}
                 </div>
               );
             })}
