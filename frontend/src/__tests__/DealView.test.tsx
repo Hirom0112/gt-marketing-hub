@@ -435,11 +435,46 @@ describe('DealView — S12 W4 work-panel', () => {
     expect(await screen.findByTestId('deal-recovery-state')).toHaveTextContent(
       'Stalled',
     );
+
+    // The later-lifecycle states render their own labels (rep close-loop, A-35).
+  });
+
+  it('renders the later-lifecycle recovery states (cold / presumed-lost / lost)', async () => {
+    const cases: Array<[string, string]> = [
+      ['cold', 'Cold'],
+      ['presumed_lost', 'Presumed lost'],
+      ['lost', 'Lost'],
+      ['dormant', 'Dormant'],
+    ];
+    for (const [state, label] of cases) {
+      mockFetch({
+        deal_view: { ...ENROLLED_PAYLOAD.deal_view, recovery_state: state },
+        family: {},
+        lead: {},
+        app_form: {},
+      });
+      const { unmount } = render(<DealView familyId="fam-123" />);
+      expect(
+        await screen.findByTestId('deal-recovery-state'),
+      ).toHaveTextContent(label);
+      unmount();
+    }
+  });
+
+  it('keeps the completion ring and seam dot for a stalled family', async () => {
+    mockFetch(STALLED_PAYLOAD);
+    render(<DealView familyId="fam-123" />);
+    await screen.findByTestId('deal-recovery-state');
     // The completion ring (52px conic dial) shows the ENROLLMENT-packet progress
     // for a submitted family (2 of 6 = 33%), not the always-100% application %.
-    expect(screen.getByTestId('completion-ring-label')).toHaveTextContent('33%');
+    expect(screen.getByTestId('completion-ring-label')).toHaveTextContent(
+      '33%',
+    );
     // The seam field carries a colour-coded SeamDot alongside the named status.
-    expect(screen.getByTestId('seam-dot')).toHaveAttribute('data-seam', 'synced');
+    expect(screen.getByTestId('seam-dot')).toHaveAttribute(
+      'data-seam',
+      'synced',
+    );
   });
 
   it('opens the dismiss reason picker and delegates the write (no client write)', async () => {
@@ -608,9 +643,7 @@ describe('DealView — S14 W4 CRM seam badge + kill switch', () => {
   it('fails OPEN on an unknown status shape: the type guard rejects it, action enabled', async () => {
     // /crm/status resolves 200 but to some OTHER payload (no kill_switch field).
     // isCrmStatus must reject it ⇒ no badge, action enabled (no silent disable).
-    mockCrmFetch(
-      { unexpected: 'shape' } as unknown as CrmStatusFixture,
-    );
+    mockCrmFetch({ unexpected: 'shape' } as unknown as CrmStatusFixture);
     render(<DealView familyId="fam-123" />);
 
     const seed = await screen.findByTestId('seed-hubspot');

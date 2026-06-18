@@ -80,7 +80,9 @@ describe('HistoryList (S13 redesign)', () => {
 
     expect(await screen.findByTestId('history-list')).toBeInTheDocument();
     await waitFor(() => {
-      expect(urlsCalled().some((u) => /scope=history&limit=200/.test(u))).toBe(true);
+      expect(urlsCalled().some((u) => /scope=history&limit=200/.test(u))).toBe(
+        true,
+      );
     });
     // History uses history-row-*, NOT the triage drill-row-* grammar.
     expect(screen.getByTestId(`history-row-${FAM_R}`)).toBeInTheDocument();
@@ -96,12 +98,50 @@ describe('HistoryList (S13 redesign)', () => {
     expect(screen.queryByTestId('triage-scope')).not.toBeInTheDocument();
     expect(screen.queryByTestId('scope-day')).not.toBeInTheDocument();
     expect(screen.queryByTestId('select-all')).not.toBeInTheDocument();
-    expect(screen.queryByTestId('bulk-rail-select-all')).not.toBeInTheDocument();
+    expect(
+      screen.queryByTestId('bulk-rail-select-all'),
+    ).not.toBeInTheDocument();
     expect(screen.queryByTestId('bulk-bar')).not.toBeInTheDocument();
     // No checkbox anywhere on a history row.
     expect(
       screen.queryByTestId(`drill-row-check-${FAM_R}`),
     ).not.toBeInTheDocument();
+  });
+
+  it('classifies a confirmed-lost family as closed-out, never recovered/won (A-35)', async () => {
+    // A lost row carries recovery_state='lost' with NO recovered/dismiss fields
+    // (the read path only stamps those for recovered/dismissed). It must not be
+    // mis-bucketed as recovered (won) — lost is closed-out, not a win.
+    const lostRow = {
+      ...HISTORY_ROWS[0],
+      family_id: '00000000-0000-4000-8000-0000000000ff',
+      display_name: 'The Lost Family',
+      recovery_state: 'lost',
+      recovered_outcome: null,
+      resolved_at: null,
+      dismiss_reason: null,
+      dismissed_by: null,
+      dismissed_at: null,
+    };
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => ({
+        ok: true,
+        status: 200,
+        json: async () => [HISTORY_ROWS[0], lostRow],
+      })),
+    );
+    render(<HistoryList />);
+
+    await screen.findByTestId('history-list');
+    // Only the genuinely-recovered row counts as recovered (won).
+    expect(screen.getByTestId('history-recovered-count')).toHaveTextContent(
+      '1',
+    );
+    // The lost family lands in the closed-out (dismissed-side) bucket.
+    expect(screen.getByTestId('history-dismissed-count')).toHaveTextContent(
+      '1',
+    );
   });
 
   it('sub-tabs carry counts and swap the columns (recovered vs dismissed)', async () => {
@@ -120,12 +160,16 @@ describe('HistoryList (S13 redesign)', () => {
     // Recovered tab: only the recovered row.
     fireEvent.click(screen.getByTestId('history-tab-recovered'));
     expect(screen.getByTestId(`history-row-${FAM_R}`)).toBeInTheDocument();
-    expect(screen.queryByTestId(`history-row-${FAM_S}`)).not.toBeInTheDocument();
+    expect(
+      screen.queryByTestId(`history-row-${FAM_S}`),
+    ).not.toBeInTheDocument();
 
     // Dismissed tab: only the dismissed row.
     fireEvent.click(screen.getByTestId('history-tab-dismissed'));
     expect(screen.getByTestId(`history-row-${FAM_S}`)).toBeInTheDocument();
-    expect(screen.queryByTestId(`history-row-${FAM_R}`)).not.toBeInTheDocument();
+    expect(
+      screen.queryByTestId(`history-row-${FAM_R}`),
+    ).not.toBeInTheDocument();
   });
 
   it('a recovered row shows the detected-outcome chip + recovered $ + NO operator', async () => {
@@ -140,7 +184,9 @@ describe('HistoryList (S13 redesign)', () => {
       '$10,474',
     );
     // Resolved date (Jun 3), not the stall date.
-    expect(screen.getByTestId(`history-when-${FAM_R}`)).toHaveTextContent('Jun 3');
+    expect(screen.getByTestId(`history-when-${FAM_R}`)).toHaveTextContent(
+      'Jun 3',
+    );
     // The system detected it — no operator cell on a recovered row.
     expect(
       screen.queryByTestId(`history-operator-${FAM_R}`),
@@ -158,7 +204,9 @@ describe('HistoryList (S13 redesign)', () => {
     expect(screen.getByTestId(`history-operator-${FAM_S}`)).toHaveTextContent(
       'jordan',
     );
-    expect(screen.getByTestId(`history-when-${FAM_S}`)).toHaveTextContent('May 25');
+    expect(screen.getByTestId(`history-when-${FAM_S}`)).toHaveTextContent(
+      'May 25',
+    );
     // A "set aside at {stage}" subline.
     expect(screen.getByTestId(`history-row-${FAM_S}`)).toHaveTextContent(
       'set aside at apply',
@@ -174,7 +222,9 @@ describe('HistoryList (S13 redesign)', () => {
       target: { value: 'reyes' },
     });
     expect(screen.getByTestId(`history-row-${FAM_R}`)).toBeInTheDocument();
-    expect(screen.queryByTestId(`history-row-${FAM_S}`)).not.toBeInTheDocument();
+    expect(
+      screen.queryByTestId(`history-row-${FAM_S}`),
+    ).not.toBeInTheDocument();
   });
 
   it('degrades gracefully when the backend history fields are null', async () => {
@@ -200,7 +250,9 @@ describe('HistoryList (S13 redesign)', () => {
     expect(screen.getByTestId(`history-outcome-${FAM_R}`)).toHaveTextContent(
       'recovered',
     );
-    expect(screen.getByTestId(`history-when-${FAM_R}`)).toHaveTextContent('May 30');
+    expect(screen.getByTestId(`history-when-${FAM_R}`)).toHaveTextContent(
+      'May 30',
+    );
     expect(screen.getByTestId(`history-row-${FAM_S}`)).toHaveClass(
       'outcome-dismissed',
     );

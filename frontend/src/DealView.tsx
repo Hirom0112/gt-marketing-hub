@@ -1,5 +1,11 @@
 import { useEffect, useState } from 'react';
-import { AlertTriangle, CheckCircle2, ExternalLink, UploadCloud, XCircle } from 'lucide-react';
+import {
+  AlertTriangle,
+  CheckCircle2,
+  ExternalLink,
+  UploadCloud,
+  XCircle,
+} from 'lucide-react';
 import { hubspotContactUrl, hubspotDealUrl, apiFetch } from './config';
 import { Button, Chip } from './ui';
 import RecencyChip from './enrollment/RecencyChip';
@@ -37,8 +43,20 @@ interface DealViewData {
   forms_total?: number | null;
   next_unsigned_form?: string | null;
   contact_status?: string | null;
-  // S12 W1 — the derived recovery state (A-19), composed in the API layer.
-  recovery_state?: 'stalled' | 'working' | 'recovered' | 'dismissed' | null;
+  // S12 W1 — the derived recovery state (A-19), composed in the API layer. The
+  // later-lifecycle states (cold/presumed_lost/lost/dormant) are the rep close-loop
+  // (A-35): cold/presumed_lost stay on the active board (urgency annotations),
+  // lost/dormant are history.
+  recovery_state?:
+    | 'stalled'
+    | 'working'
+    | 'recovered'
+    | 'dismissed'
+    | 'cold'
+    | 'presumed_lost'
+    | 'lost'
+    | 'dormant'
+    | null;
 }
 
 // We only read deal_view; the rest of the family response is ignored here.
@@ -325,7 +343,11 @@ function SeamField({ status }: { status: string }): JSX.Element {
       <div className="lab">HubSpot seam</div>
       <span
         data-testid="deal-seam-status"
-        style={{ display: 'inline-flex', alignItems: 'center', gap: 'var(--s-2)' }}
+        style={{
+          display: 'inline-flex',
+          alignItems: 'center',
+          gap: 'var(--s-2)',
+        }}
       >
         <SeamDot status={dotStatus} />
         <Chip tone={tone}>{status}</Chip>
@@ -334,23 +356,30 @@ function SeamField({ status }: { status: string }): JSX.Element {
   );
 }
 
-// The recovery-state tag in the panel header (S12 W4; A-19). recovered/working
-// read teal (forward progress), dismissed neutral, stalled signal.
+// The recovery-state tag in the panel header (S12 W4; A-19; A-35). recovered/working
+// read teal (forward progress); the urgent-active states (stalled/cold/presumed_lost)
+// read signal — still the rep's to work; the closed-out/parked states (dismissed/
+// lost/dormant) read neutral.
+const _RECOVERY_LABELS: Record<string, string> = {
+  working: 'Working',
+  recovered: 'Recovered',
+  dismissed: 'Dismissed',
+  stalled: 'Stalled',
+  cold: 'Cold',
+  presumed_lost: 'Presumed lost',
+  lost: 'Lost',
+  dormant: 'Dormant',
+};
+const _RECOVERY_SIGNAL = new Set(['stalled', 'cold', 'presumed_lost']);
+
 function RecoveryTag({ state }: { state: string }): JSX.Element {
   const tone: 'flow' | 'signal' | 'neutral' =
     state === 'recovered' || state === 'working'
       ? 'flow'
-      : state === 'stalled'
+      : _RECOVERY_SIGNAL.has(state)
         ? 'signal'
         : 'neutral';
-  const label =
-    state === 'working'
-      ? 'Working'
-      : state === 'recovered'
-        ? 'Recovered'
-        : state === 'dismissed'
-          ? 'Dismissed'
-          : 'Stalled';
+  const label = _RECOVERY_LABELS[state] ?? 'Stalled';
   return (
     <span data-testid="deal-recovery-state">
       <Chip tone={tone}>{label}</Chip>
@@ -412,7 +441,8 @@ function ChildrenSection({
           {children.map((child) => {
             const grade = child.grade ? `Grade ${child.grade}` : PLACEHOLDER;
             const name = child.synthetic_first_name || null;
-            const stageLabel = humanizeSegment(child.current_stage) || PLACEHOLDER;
+            const stageLabel =
+              humanizeSegment(child.current_stage) || PLACEHOLDER;
             return (
               <li
                 key={child.student_id}
@@ -554,7 +584,9 @@ export default function DealView({
   // the timeline. null until /families/{id}/assignments resolves; any error /
   // unknown shape leaves it null ⇒ no timeline (fail safe). The name map is a
   // nicety (an unresolved id falls back to a short id), so it loads independently.
-  const [assignments, setAssignments] = useState<AssignmentEvent[] | null>(null);
+  const [assignments, setAssignments] = useState<AssignmentEvent[] | null>(
+    null,
+  );
   const [agentNames, setAgentNames] = useState<Record<string, string>>({});
 
   function seedToHubSpot(): void {
@@ -760,7 +792,13 @@ export default function DealView({
         >
           {deal.display_name}
         </h2>
-        <div style={{ display: 'inline-flex', alignItems: 'center', gap: 'var(--s-2)' }}>
+        <div
+          style={{
+            display: 'inline-flex',
+            alignItems: 'center',
+            gap: 'var(--s-2)',
+          }}
+        >
           {deal.recovery_state != null && (
             <RecoveryTag state={deal.recovery_state} />
           )}
@@ -789,7 +827,8 @@ export default function DealView({
             gap: 'var(--s-1)',
           }}
         >
-          <AlertTriangle size={11} aria-hidden /> Why they haven&apos;t converted
+          <AlertTriangle size={11} aria-hidden /> Why they haven&apos;t
+          converted
         </div>
         <div
           data-testid="deal-stall-reason"
@@ -952,11 +991,14 @@ export default function DealView({
         )}
         {/* Dismiss this family (S12 W4; A-19) — an audited remove from the active
             board. The WRITE is the parent's (one route); this only opens the
-            reason picker and calls back. Hidden once already dismissed. */}
+            reason picker and calls back. Hidden once already closed out (dismissed/
+            recovered/lost/dormant — A-35: no point dismissing a parked family). */}
         {onDismiss !== undefined &&
           dismissReasons !== undefined &&
           deal.recovery_state !== 'dismissed' &&
-          deal.recovery_state !== 'recovered' && (
+          deal.recovery_state !== 'recovered' &&
+          deal.recovery_state !== 'lost' &&
+          deal.recovery_state !== 'dormant' && (
             <Button
               icon={XCircle}
               data-testid="dismiss-family-start"
@@ -967,69 +1009,69 @@ export default function DealView({
           )}
       </div>
 
-      {dismissing && onDismiss !== undefined && dismissReasons !== undefined && (
-        <div
-          data-testid="dismiss-family-reasons"
-          style={{
-            marginTop: 'var(--s-2)',
-            display: 'flex',
-            flexWrap: 'wrap',
-            gap: 'var(--s-2)',
-            alignItems: 'center',
-            padding: 'var(--s-2) var(--s-3)',
-            background: 'var(--surface-2)',
-            border: '1px solid var(--line)',
-            borderRadius: 'var(--r-md)',
-          }}
-        >
-          <span className="lab">reason:</span>
-          {dismissReasons.map((r) => (
+      {dismissing &&
+        onDismiss !== undefined &&
+        dismissReasons !== undefined && (
+          <div
+            data-testid="dismiss-family-reasons"
+            style={{
+              marginTop: 'var(--s-2)',
+              display: 'flex',
+              flexWrap: 'wrap',
+              gap: 'var(--s-2)',
+              alignItems: 'center',
+              padding: 'var(--s-2) var(--s-3)',
+              background: 'var(--surface-2)',
+              border: '1px solid var(--line)',
+              borderRadius: 'var(--r-md)',
+            }}
+          >
+            <span className="lab">reason:</span>
+            {dismissReasons.map((r) => (
+              <button
+                key={r}
+                type="button"
+                data-testid={`dismiss-family-reason-${r}`}
+                onClick={() => {
+                  onDismiss(familyId, r);
+                  setDismissing(false);
+                }}
+                style={{
+                  border: '1px solid var(--line)',
+                  background: 'var(--surface)',
+                  fontSize: 11.5,
+                  fontWeight: 600,
+                  padding: '5px 10px',
+                  borderRadius: 'var(--r-pill)',
+                  color: 'var(--ink)',
+                  cursor: 'pointer',
+                  fontFamily: 'inherit',
+                }}
+              >
+                {r}
+              </button>
+            ))}
             <button
-              key={r}
               type="button"
-              data-testid={`dismiss-family-reason-${r}`}
-              onClick={() => {
-                onDismiss(familyId, r);
-                setDismissing(false);
-              }}
+              data-testid="dismiss-family-cancel"
+              onClick={() => setDismissing(false)}
               style={{
-                border: '1px solid var(--line)',
-                background: 'var(--surface)',
+                border: '1px solid transparent',
+                background: 'transparent',
+                color: 'var(--muted)',
                 fontSize: 11.5,
                 fontWeight: 600,
                 padding: '5px 10px',
-                borderRadius: 'var(--r-pill)',
-                color: 'var(--ink)',
                 cursor: 'pointer',
                 fontFamily: 'inherit',
               }}
             >
-              {r}
+              cancel
             </button>
-          ))}
-          <button
-            type="button"
-            data-testid="dismiss-family-cancel"
-            onClick={() => setDismissing(false)}
-            style={{
-              border: '1px solid transparent',
-              background: 'transparent',
-              color: 'var(--muted)',
-              fontSize: 11.5,
-              fontWeight: 600,
-              padding: '5px 10px',
-              cursor: 'pointer',
-              fontFamily: 'inherit',
-            }}
-          >
-            cancel
-          </button>
-        </div>
-      )}
+          </div>
+        )}
 
-      {seed.status === 'captured' && (
-        <CapturePanel data={seed.data} />
-      )}
+      {seed.status === 'captured' && <CapturePanel data={seed.data} />}
     </section>
   );
 }
@@ -1046,8 +1088,14 @@ function CrmSeamBadge({ crm }: { crm: CrmStatus | null }): JSX.Element | null {
   if (crm.kill_switch) {
     return (
       <div data-testid="crm-seam-badge" style={{ marginTop: 'var(--s-3)' }}>
-        <span data-testid="crm-seam-state" data-crm-effective={crm.effective_mode}>
-          <Chip tone="signal" title="HubSpot kill switch is ON — live writes are disabled (INV-8).">
+        <span
+          data-testid="crm-seam-state"
+          data-crm-effective={crm.effective_mode}
+        >
+          <Chip
+            tone="signal"
+            title="HubSpot kill switch is ON — live writes are disabled (INV-8)."
+          >
             Kill switch ON — live sync disabled
           </Chip>
         </span>
@@ -1057,7 +1105,10 @@ function CrmSeamBadge({ crm }: { crm: CrmStatus | null }): JSX.Element | null {
   const live = crm.effective_mode === 'live';
   return (
     <div data-testid="crm-seam-badge" style={{ marginTop: 'var(--s-3)' }}>
-      <span data-testid="crm-seam-state" data-crm-effective={crm.effective_mode}>
+      <span
+        data-testid="crm-seam-state"
+        data-crm-effective={crm.effective_mode}
+      >
         <Chip
           tone={live ? 'flow' : 'neutral'}
           title={
@@ -1128,7 +1179,11 @@ function CapturePanel({ data }: { data: SeedResponse }): JSX.Element {
           <div
             data-testid="capture-seam-status"
             className="mono"
-            style={{ fontSize: 'var(--fs-sm)', color: 'var(--flow-ink)', marginTop: 2 }}
+            style={{
+              fontSize: 'var(--fs-sm)',
+              color: 'var(--flow-ink)',
+              marginTop: 2,
+            }}
           >
             {data.seam_status}
           </div>
