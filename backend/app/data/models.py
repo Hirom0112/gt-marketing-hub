@@ -53,6 +53,24 @@ class FundingType(StrEnum):
     SELF_PAY = "self_pay"
 
 
+class IncomeTier(StrEnum):
+    """`family_record.income_tier` — GT's synthetic household-income BUCKET
+    (LEAD_ASSIGNMENT.md §6/§13; INV-1/INV-6).
+
+    Mirrors GT's real income segmentation (<$65K / $65K–$160K / >$160K) as a
+    THREE-VALUE bucket — deliberately NOT the raw `household_income` figure, so a
+    synthetic family carrying it cannot form the C-SYN-2 PII cluster signature
+    (a real name + household_income + ZIP on one row) the PII-scan gate forbids
+    (THREAT_MODEL.md §5.2). The two lower tiers are the TEFA-eligible (voucher)
+    band; the top tier correlates with self-pay/full-pay. Bucket vocabulary
+    (INV-11 — not a magic string set), mirrored by the 0017 CHECK constraint.
+    """
+
+    LT_65K = "lt_65k"
+    MID_65K_160K = "65k_160k"
+    GT_160K = "gt_160k"
+
+
 class FundingState(StrEnum):
     """`family_record.funding_state` — funding-gate progression (§4.1, §5.4)."""
 
@@ -130,6 +148,25 @@ class FamilyRecord(BaseModel):
     # anchor — a mirror owner that changed AFTER `assigned_at` is a post-assignment
     # HubSpot edit the seam flags rather than stomps (INV-4-style; app/core/seam.py).
     assigned_at: datetime | None = None
+
+    # --- Lead-assignment routing attributes (LEAD_ASSIGNMENT.md §10). SYNTHETIC,
+    # household-scoped, NULLABLE so rows predating the field stay valid. ---
+    # A coarse, synthetic US-state code (e.g. "FL"/"CA") the territory rule routes
+    # on (§4). An aggregate region label, NEVER a ZIP/lat-long/precise geo of a
+    # minor (INV-6) — mirrors the nullable `state text` column (0017). NULL ⇒ no
+    # state on file (routes via the territory fallback pool).
+    state: str | None = None
+    # GT's synthetic household-income BUCKET (§6/§13) — a 3-value enum, NEVER raw
+    # income. One input to territory/eligibility prioritization (TEFA-eligible vs
+    # full-pay). Mirrors the CHECK-bounded `income_tier text` column (0017).
+    income_tier: IncomeTier | None = None
+    # The SELF-REPORTED prior agent the applicant names on the apply form (§3).
+    # The applicant writes this on their OWN row (anon+RLS); the SERVER promotes a
+    # resolved value to `assigned_rep_id` (service_role). DISTINCT from
+    # `assigned_rep_id`: this is an unverified self-report INPUT, never an
+    # authoritative ownership write by the client (INV-5). Mirrors the nullable
+    # `reported_rep_id uuid REFERENCES sales_agent` column (0017).
+    reported_rep_id: UUID | None = None
 
     # Join keys, nullable until the related record exists (§4.1).
     lead_id: UUID | None = None

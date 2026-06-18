@@ -54,6 +54,31 @@ assignment:                 # M2 — owner-authority assignment split + routing/
   deadline_alarm_days: 14     # within this many days of a voucher deadline ⇒ deadline alarm
   unowned_alarm_days: 3       # an UNOWNED family older than this many days ⇒ unowned alarm
   per_tier_load_cap: 40       # max open families one agent tier may hold before auto-assign stops (load governance)
+  # --- Lead-assignment routing policy (LEAD_ASSIGNMENT.md §11). Agent defs are CONFIG, not code. ---
+  agents:                     # per agent_id: territory/role/availability/weight/capacity (keys = sales_agent.agent_id)
+    "a0000000-0000-4000-8000-000000000001":   # Agent A — Riley Carter (rank 1)
+      territory: ["FL"]       # Florida territory
+      role: closer            # hot / ready-to-deposit leads
+      status: available       # available | out | onboarding (non-available => skipped in rotation)
+      weight: 2               # weighted-RR share — the closer seat historically carries more
+      capacity_cap: 40        # per-agent hard cap; cap BEATS weight (capped => overflow to next)
+    "a0000000-0000-4000-8000-000000000002":   # Agent B — Jordan Avery (rank 2)
+      territory: ["CA"]       # California territory
+      role: qualifier         # early-stage leads (the setter/BDR seat)
+      status: available
+      weight: 1
+      capacity_cap: 40
+  territory:
+    fallback: round_robin_all # family in no agent's territory => round_robin_all (logged) | intake_park (human gate)
+  income_routing:
+    tefa_eligible_tiers: ["lt_65k", "65k_160k"]   # income buckets that mark a voucher-track (TEFA-eligible) family
+  round_robin:
+    mode: weighted            # weighted (honor per-agent weight) | flat (ignore weights); cap beats weight either way
+  sla:
+    unworked_reassign_days: 5 # assigned + no contact past this many days => reassign
+    max_reassignments: 1      # SLA hops before escalating to intake (anti-ping-pong)
+    cooldown_days: 5          # re-sweep cool-down after a reassignment (timer restarts on reassign)
+    owned_breach: alert       # owner-matched lead on SLA breach: alert (don't silently move) | auto_reassign
 
 sis:                        # M5 — seam reconcile bucket rules (MULTI_AGENT_COCKPIT §6); thresholds are tunables, not hardcoded
   match_confidence_cutoff: 0.9        # below this normalized GT↔SIS match score ⇒ ambiguous → merge queue

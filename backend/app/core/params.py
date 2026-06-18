@@ -17,7 +17,7 @@ from __future__ import annotations
 import os
 from datetime import date
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import yaml
 from pydantic import BaseModel, ConfigDict, field_validator, model_validator
@@ -135,6 +135,78 @@ class Enrollment(_StrictModel):
     contact: ContactWindows
 
 
+class AgentPolicy(_StrictModel):
+    """One sales agent's tunable ROUTING POLICY (LEAD_ASSIGNMENT.md §10/§11).
+
+    The DB ``sales_agent`` row is the stable identity/FK anchor (agent_id, rank,
+    synthetic_name, hubspot_owner_id); the *routing policy* lives here, keyed by
+    agent_id, so "adding a real agent later is config, not code". Every value is a
+    tunable home (INV-11): the router reads territory/role/status/weight/capacity
+    from here, never a code literal.
+
+    * ``territory`` — the state codes this agent covers (the §4 territory rule).
+    * ``role`` — ``closer`` (hot/ready-to-deposit leads) or ``qualifier`` (the
+      setter/BDR seat; early-stage leads). The product term; the DB ``tier`` token
+      stays ``closer|setter`` for back-compat.
+    * ``status`` — ``available`` | ``out`` | ``onboarding``; a non-available agent
+      is skipped in rotation (§8). ``at_capacity`` is DERIVED (queue_size ≥ cap),
+      never stored.
+    * ``weight`` — the weighted-round-robin share (§7); ``1`` = flat.
+    * ``capacity_cap`` — the per-agent hard cap; cap BEATS weight (a capped agent
+      overflows to the next in ring order, §7).
+    """
+
+    territory: list[str]
+    role: Literal["closer", "qualifier"]
+    status: Literal["available", "out", "onboarding"] = "available"
+    weight: int = 1
+    capacity_cap: int
+
+
+class Territory(_StrictModel):
+    """Territory-routing policy (LEAD_ASSIGNMENT.md §4).
+
+    ``fallback`` governs a family whose ``state`` no agent covers: ``round_robin_all``
+    routes across all available agents (loudly logged); ``intake_park`` holds the
+    lead for an admin (a human gate). Default round_robin_all (never unrouted).
+    """
+
+    fallback: Literal["round_robin_all", "intake_park"] = "round_robin_all"
+
+
+class IncomeRouting(_StrictModel):
+    """Income-tier routing policy (LEAD_ASSIGNMENT.md §6). ``tefa_eligible_tiers``
+    are the income buckets that mark a voucher-track family (a prioritization /
+    tiebreak signal in v1, not a hard pool gate)."""
+
+    tefa_eligible_tiers: list[str]
+
+
+class RoundRobin(_StrictModel):
+    """Round-robin policy (LEAD_ASSIGNMENT.md §7). ``weighted`` honors per-agent
+    ``weight`` over a weight-expanded ring; ``flat`` ignores weights. Cap always
+    beats weight regardless of mode."""
+
+    mode: Literal["weighted", "flat"] = "weighted"
+
+
+class Sla(_StrictModel):
+    """SLA-reassignment policy (LEAD_ASSIGNMENT.md §9).
+
+    * ``unworked_reassign_days`` — assigned + no contact past this ⇒ reassign.
+    * ``max_reassignments`` — SLA hops before escalating to intake (anti-ping-pong).
+    * ``cooldown_days`` — re-sweep cool-down after a reassignment (timer restarts).
+    * ``owned_breach`` — what an SLA breach does to an OWNER-matched (incl.
+      self-reported) lead: ``alert`` raises an admin alert without silently moving
+      it (the "one source of truth" default); ``auto_reassign`` reroutes it.
+    """
+
+    unworked_reassign_days: int
+    max_reassignments: int
+    cooldown_days: int
+    owned_breach: Literal["alert", "auto_reassign"] = "alert"
+
+
 class Assignment(_StrictModel):
     """Owner-authority assignment split + routing/alarm tunables (MULTI_AGENT_COCKPIT §2.2, §4).
 
@@ -163,6 +235,15 @@ class Assignment(_StrictModel):
     deadline_alarm_days: int
     unowned_alarm_days: int
     per_tier_load_cap: int
+
+    # --- Lead-assignment routing policy (LEAD_ASSIGNMENT.md §11). Agent defs are
+    # config (not hardcoded): territory/role/availability/weight/capacity per
+    # agent_id, plus the territory/income/round-robin/SLA policy knobs. ---
+    agents: dict[str, AgentPolicy]
+    territory: Territory
+    income_routing: IncomeRouting
+    round_robin: RoundRobin
+    sla: Sla
 
 
 class Sis(_StrictModel):

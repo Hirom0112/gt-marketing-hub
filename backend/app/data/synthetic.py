@@ -69,6 +69,7 @@ from app.data.models import (
     FamilyRecord,
     FundingState,
     FundingType,
+    IncomeTier,
     LeadsNew,
     ProductInterest,
     SeamStatus,
@@ -188,6 +189,24 @@ _UTM_CAMPAIGNS: tuple[str, ...] = (
 )
 
 _GRADES: tuple[str, ...] = ("K", "1", "2", "3", "4", "5", "6", "7", "8")
+
+# Synthetic US-state codes for the territory rule (LEAD_ASSIGNMENT.md §4/§13). A
+# coarse 2-letter aggregate label — NEVER a ZIP/lat-long/precise geo of a minor
+# (INV-6); it cannot trip the PII-scan ZIP/geo regex. The demo agents cover FL +
+# CA (params.assignment.agents[*].territory); the rest are deliberately UNCOVERED
+# so the generator exercises the territory FALLBACK path (a family in no agent's
+# territory). Synthetic only (INV-1).
+_STATES: tuple[str, ...] = ("FL", "CA", "TX", "NY", "GA", "WA")
+
+# GT's synthetic household-income BUCKETS (§6/§13). A 3-value enum, NEVER a raw
+# income figure or a `household_income` column — so it cannot form the C-SYN-2
+# PII cluster the scan forbids. Weighted toward the TEFA-eligible band (the lower
+# two tiers) to mirror GT's voucher-heavy funnel.
+_INCOME_TIER_WEIGHTS: dict[IncomeTier, float] = {
+    IncomeTier.LT_65K: 0.45,
+    IncomeTier.MID_65K_160K: 0.40,
+    IncomeTier.GT_160K: 0.15,
+}
 
 _FORM_NAMES: tuple[str, ...] = (
     "enrollment_agreement",
@@ -388,6 +407,13 @@ def _build_family(
     surname = rng.choice(_SURNAMES)
     given = rng.choice(_GIVEN_NAMES)
     region = rng.choice(_REGIONS)
+    # Territory/income are drawn from an INDEPENDENT rng seeded by the (already
+    # drawn) family_id, so they are deterministic per family WITHOUT consuming the
+    # shared stream — every pre-existing seeded fixture (sis_roster, realistic)
+    # stays byte-identical (CLAUDE §4.1 determinism).
+    _attr_rng = random.Random(family_id.int)
+    state = _attr_rng.choice(_STATES)
+    income_tier = _weighted_choice(_attr_rng, _INCOME_TIER_WEIGHTS)
     stage = _weighted_choice(rng, _STAGE_WEIGHTS)
     funding_type = _weighted_choice(rng, _FUNDING_TYPE_WEIGHTS)
     product = _weighted_choice(rng, _PRODUCT_WEIGHTS)
@@ -418,6 +444,8 @@ def _build_family(
         stalled_since=stalled_since,
         funding_type=funding_type,
         funding_state=funding_state,
+        state=state,
+        income_tier=income_tier,
         attribution_source=attribution_source,
         attribution_utm=utm,
         crm_seam_status=_seam_status(rng),
@@ -978,6 +1006,12 @@ class _DemoHousehold:
     # P-4/INV-6); `self_reported_income` is whole USD (`None` = not yet provided).
     neighborhood: str
     self_reported_income: int | None
+    # Lead-assignment routing attributes (LEAD_ASSIGNMENT.md §4/§6). `state` is the
+    # synthetic territory key (FL = Agent A's territory, CA = Agent B's — so the
+    # curated owner assignments stay territory-consistent); `income_tier` is the
+    # synthetic GT bucket (None = not yet provided, mirrors a None income).
+    state: str
+    income_tier: IncomeTier | None
 
 
 # Synthetic AGGREGATE neighborhood / area labels (NOT minor geo — P-4/INV-6); a
@@ -1020,6 +1054,8 @@ _DEMO_HOUSEHOLDS: tuple[_DemoHousehold, ...] = (
         note="multi-child voucher household mid-enroll — the high-value closer case",
         neighborhood=_DEMO_NB_HIGH,
         self_reported_income=185_000,
+        state="FL",
+        income_tier=IncomeTier.GT_160K,
     ),
     # "Went all the way" — funded TUITION ⇒ Closed — pending SIS confirmation.
     # HIGH: top affluence + top income (the self-pay-grade voucher family).
@@ -1034,6 +1070,8 @@ _DEMO_HOUSEHOLDS: tuple[_DemoHousehold, ...] = (
         note="closed voucher enrollment, awaiting SIS confirmation",
         neighborhood=_DEMO_NB_HIGH,
         self_reported_income=240_000,
+        state="FL",
+        income_tier=IncomeTier.GT_160K,
     ),
     # MED: mid district + mid income (a closed self-pay family).
     _DemoHousehold(
@@ -1047,6 +1085,8 @@ _DEMO_HOUSEHOLDS: tuple[_DemoHousehold, ...] = (
         note="closed self-pay enrollment, awaiting SIS confirmation",
         neighborhood=_DEMO_NB_MID,
         self_reported_income=95_000,
+        state="CA",
+        income_tier=IncomeTier.MID_65K_160K,
     ),
     # LOW: modest district + lower income — the disability-IEP ($30k tier) family.
     _DemoHousehold(
@@ -1060,6 +1100,8 @@ _DEMO_HOUSEHOLDS: tuple[_DemoHousehold, ...] = (
         note="closed disability-IEP ($30k tier) enrollment, awaiting SIS",
         neighborhood=_DEMO_NB_MODEST,
         self_reported_income=52_000,
+        state="CA",
+        income_tier=IncomeTier.LT_65K,
     ),
     # Mid-funnel (APPLY) re-engagement — the setter's book (the mid-funnel rung
     # Garcia used to hold). MED neighborhood + a provided mid-funnel income, so the
@@ -1075,6 +1117,8 @@ _DEMO_HOUSEHOLDS: tuple[_DemoHousehold, ...] = (
         note="application incomplete — standard mid-funnel setter re-engagement",
         neighborhood=_DEMO_NB_MIXED,
         self_reported_income=78_000,
+        state="CA",
+        income_tier=IncomeTier.MID_65K_160K,
     ),
     # UNASSIGNED — the intake pool the admin routes LIVE on camera. LOW: modest
     # district; income not yet provided (None) — fresh top-of-funnel lead.
@@ -1089,6 +1133,8 @@ _DEMO_HOUSEHOLDS: tuple[_DemoHousehold, ...] = (
         note="fresh homeschool ($2k tier) lead — UNASSIGNED, the live-route case",
         neighborhood=_DEMO_NB_MODEST,
         self_reported_income=None,
+        state="CA",
+        income_tier=None,
     ),
 )
 
@@ -1185,6 +1231,8 @@ def _build_demo_household(
         stalled_since=stalled_since,
         funding_type=spec.funding_type,
         funding_state=spec.funding_state,
+        state=spec.state,
+        income_tier=spec.income_tier,
         attribution_source=attribution_source,
         attribution_utm=utm,
         crm_seam_status=_seam_status(rng),

@@ -171,3 +171,56 @@ def test_demo_cohort_seeds_sis_divergence() -> None:
 
     # the job-edge key projection agrees with the SIS divergence too (no drift).
     assert family_match_keys is not None
+
+
+def test_demo_cohort_territory_and_income_tier() -> None:
+    """LA-5 — the demo cohort carries synthetic `state` + `income_tier` and the
+    curated owner assignments are territory-consistent (LEAD_ASSIGNMENT.md §4/§6):
+    Agent A (closer) = FL, Agent B (setter/qualifier) = CA, so an OWNED family
+    lives in its owner's territory; the unassigned intake lead carries a state too.
+    """
+    from app.data.models import IncomeTier
+
+    params = load_params(EXAMPLE_PARAMS)
+    ds = generate_demo_cohort(params=params)
+
+    # The demo agents' territories (mirrors params.assignment.agents[*].territory).
+    territory = {_CLOSER_ID: "FL", _SETTER_ID: "CA"}
+
+    states = {f.state for f in ds.families}
+    assert states <= {"FL", "CA"}, "demo families live in the two covered territories"
+    assert {"FL", "CA"} <= states, "both covered territories are represented"
+
+    for f in ds.families:
+        # every household has a synthetic state + a typed income_tier (or None).
+        assert f.state in {"FL", "CA"}
+        assert f.income_tier is None or isinstance(f.income_tier, IncomeTier)
+        # owner-territory consistency: an owned family is in its owner's state.
+        if f.assigned_rep_id is not None:
+            assert f.state == territory[f.assigned_rep_id], (
+                f"owned family {f.display_name} in {f.state} but owner covers "
+                f"{territory[f.assigned_rep_id]}"
+            )
+
+    # income_tier spread: ≥2 distinct buckets present (a believable mix), and ≥1
+    # TEFA-eligible (lower) tier so the income signal has something to act on.
+    tiers = {f.income_tier for f in ds.families if f.income_tier is not None}
+    assert len(tiers) >= 2, "expected an income-tier spread"
+    assert tiers & {IncomeTier.LT_65K, IncomeTier.MID_65K_160K}, "≥1 TEFA-eligible tier"
+
+
+def test_default_cohort_carries_territory_and_income() -> None:
+    """LA-5 — the DEFAULT synthetic generator stamps every family with a state in
+    the known set and a typed income_tier, and the cohort exercises BOTH a covered
+    territory (FL/CA) and an UNCOVERED state (the territory-fallback path)."""
+    from app.data.models import IncomeTier
+    from app.data.synthetic import _STATES, generate
+
+    ds = generate(400, seed=7)
+    states = {f.state for f in ds.families}
+    assert states <= set(_STATES)
+    assert {"FL", "CA"} & states, "covered territories appear"
+    assert states - {"FL", "CA"}, "≥1 uncovered state appears (territory fallback path)"
+    for f in ds.families:
+        assert f.state in _STATES
+        assert isinstance(f.income_tier, IncomeTier)
