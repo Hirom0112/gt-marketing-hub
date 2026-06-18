@@ -25,7 +25,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Literal
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from app.core.params import Params, load_params
 from app.core.pipeline import pipeline_counts as core_pipeline_counts
@@ -36,6 +36,7 @@ from app.data.models import (
     EnrollmentForms,
     FamilyRecord,
     FundingState,
+    LeadAssignment,
     LeadsNew,
     SeamStatus,
     Stage,
@@ -337,6 +338,49 @@ class FamilyRepository(ABC):
         """
         raise NotImplementedError
 
+    # --- Lead-assignment seam (LEAD_ASSIGNMENT.md §10). Return-to-pool, the
+    # append-only ownership history, and the per-pool round-robin cursor. ---
+
+    def unassign_families(self, family_ids: list[UUID], unassigned_at: datetime) -> list[UUID]:
+        """Return families to the intake pool (``assigned_rep_id = NULL``).
+
+        The inverse of :meth:`assign_families` — sets ``assigned_rep_id`` to NULL
+        and re-stamps ``assigned_at`` (the SLA-reassign / explicit-transfer path).
+        Concrete default raises; both stores override. Unknown ids are skipped.
+        """
+        raise NotImplementedError
+
+    def append_assignment_event(
+        self,
+        *,
+        family_id: UUID,
+        from_rep_id: UUID | None,
+        to_rep_id: UUID | None,
+        routed_role: str | None,
+        assigned_by: str,
+        reason: str,
+        batch_id: str | None = None,
+    ) -> None:
+        """Append one row to the immutable ``lead_assignment`` history (§10).
+
+        A who→who/when/why ownership FACT. Append-only (a write, never an
+        UPDATE/DELETE); service_role server-side. The deterministic core owns the
+        decision (INV-2); this only LOGS it after it happened.
+        """
+        raise NotImplementedError
+
+    def list_assignments(self, family_id: UUID) -> list[LeadAssignment]:
+        """The append-only ownership history for one family, oldest→newest."""
+        raise NotImplementedError
+
+    def read_cursors(self) -> dict[str, int]:
+        """The persisted per-pool round-robin cursors (``pool_key → next_index``; §7)."""
+        raise NotImplementedError
+
+    def write_cursor(self, pool_key: str, next_index: int) -> None:
+        """Persist one pool's advanced round-robin cursor (§7)."""
+        raise NotImplementedError
+
 
 class InMemoryFamilyRepository(FamilyRepository):
     """In-memory impl seeded once from ``synthetic.generate`` (A-3).
@@ -377,6 +421,11 @@ class InMemoryFamilyRepository(FamilyRepository):
             for row in dataset.student_enrollment_forms
             if row.student_id is not None
         }
+        # Lead-assignment state (LEAD_ASSIGNMENT.md §10): the append-only ownership
+        # history + the per-pool round-robin cursors (A-3 in-memory; the Supabase
+        # impl persists these to the 0017 tables).
+        self._lead_assignments: list[LeadAssignment] = []
+        self._cursors: dict[str, int] = {}
 
     @classmethod
     def seeded(
@@ -556,3 +605,47 @@ class InMemoryFamilyRepository(FamilyRepository):
             self._replace(family_id, assigned_rep_id=agent_id, assigned_at=assigned_at)
             assigned.append(family_id)
         return assigned
+
+    def unassign_families(self, family_ids: list[UUID], unassigned_at: datetime) -> list[UUID]:
+        # Return to the intake pool: NULL assigned_rep_id + re-stamp assigned_at.
+        unassigned: list[UUID] = []
+        for family_id in family_ids:
+            if self._family_index.get(family_id) is None:
+                continue
+            self._replace(family_id, assigned_rep_id=None, assigned_at=unassigned_at)
+            unassigned.append(family_id)
+        return unassigned
+
+    def append_assignment_event(
+        self,
+        *,
+        family_id: UUID,
+        from_rep_id: UUID | None,
+        to_rep_id: UUID | None,
+        routed_role: str | None,
+        assigned_by: str,
+        reason: str,
+        batch_id: str | None = None,
+    ) -> None:
+        # Append one immutable ownership-history fact (LEAD_ASSIGNMENT.md §10).
+        self._lead_assignments.append(
+            LeadAssignment(
+                assignment_id=uuid4(),
+                family_id=family_id,
+                from_rep_id=from_rep_id,
+                to_rep_id=to_rep_id,
+                routed_role=routed_role,
+                assigned_by=assigned_by,
+                reason=reason,
+                batch_id=batch_id,
+            )
+        )
+
+    def list_assignments(self, family_id: UUID) -> list[LeadAssignment]:
+        return [e for e in self._lead_assignments if e.family_id == family_id]
+
+    def read_cursors(self) -> dict[str, int]:
+        return dict(self._cursors)
+
+    def write_cursor(self, pool_key: str, next_index: int) -> None:
+        self._cursors[pool_key] = next_index

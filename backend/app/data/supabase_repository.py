@@ -56,6 +56,7 @@ from app.data.models import (
     EnrollmentForms,
     FamilyRecord,
     FundingState,
+    LeadAssignment,
     LeadsNew,
     SeamStatus,
     Stage,
@@ -557,6 +558,75 @@ class SupabaseFamilyRepository(FamilyRepository):
                 {"assigned_rep_id": str(agent_id), "assigned_at": assigned_at.isoformat()},
             )
         return list(family_ids)
+
+    def unassign_families(self, family_ids: list[UUID], unassigned_at: datetime) -> list[UUID]:
+        # Return to the intake pool: NULL assigned_rep_id via service_role PATCH.
+        for family_id in family_ids:
+            self._patch(
+                f"{_REST}/family_record",
+                {"family_id": f"eq.{family_id}"},
+                {"assigned_rep_id": None, "assigned_at": unassigned_at.isoformat()},
+            )
+        return list(family_ids)
+
+    def append_assignment_event(
+        self,
+        *,
+        family_id: UUID,
+        from_rep_id: UUID | None,
+        to_rep_id: UUID | None,
+        routed_role: str | None,
+        assigned_by: str,
+        reason: str,
+        batch_id: str | None = None,
+    ) -> None:
+        # Append one immutable ownership-history fact to lead_assignment (0017):
+        # service_role POST (BYPASSRLS, server-only — INV-5/D-RLS-4), append-only
+        # (a POST, never UPDATE/DELETE). The deterministic core owns the decision
+        # (INV-2); this only LOGS it.
+        self._post(
+            f"{_REST}/lead_assignment",
+            {
+                "assignment_id": str(uuid4()),
+                "family_id": str(family_id),
+                "from_rep_id": str(from_rep_id) if from_rep_id is not None else None,
+                "to_rep_id": str(to_rep_id) if to_rep_id is not None else None,
+                "routed_role": routed_role,
+                "assigned_by": assigned_by,
+                "reason": reason,
+                "batch_id": batch_id,
+            },
+        )
+
+    def list_assignments(self, family_id: UUID) -> list[LeadAssignment]:
+        rows = self._get(
+            f"{_REST}/lead_assignment",
+            {"family_id": f"eq.{family_id}", "order": "occurred_at.asc"},
+        )
+        return [LeadAssignment.model_validate(r) for r in rows]
+
+    def read_cursors(self) -> dict[str, int]:
+        rows = self._get(f"{_REST}/assignment_cursor", {"select": "pool_key,next_index"})
+        return {str(r["pool_key"]): int(r["next_index"]) for r in rows}
+
+    def write_cursor(self, pool_key: str, next_index: int) -> None:
+        # Upsert the per-pool cursor (service_role). PATCH the row; if no row yet,
+        # POST it. assignment_cursor is server-only (no client grant, deny-all RLS).
+        existing = self._get(
+            f"{_REST}/assignment_cursor",
+            {"pool_key": f"eq.{pool_key}", "select": "pool_key"},
+        )
+        if existing:
+            self._patch(
+                f"{_REST}/assignment_cursor",
+                {"pool_key": f"eq.{pool_key}"},
+                {"next_index": next_index, "updated_at": "now()"},
+            )
+        else:
+            self._post(
+                f"{_REST}/assignment_cursor",
+                {"pool_key": pool_key, "next_index": next_index},
+            )
 
     def append_voucher_event(
         self,

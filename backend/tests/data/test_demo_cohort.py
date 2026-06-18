@@ -65,8 +65,18 @@ def test_demo_scenario_shape() -> None:
     # the deliberate 12 surnames.
     surnames = {lead.synthetic_last_name for lead in ds.leads}
     assert surnames == {
-        "Rivera", "Okafor", "Nguyen", "Patel", "Kim", "Silva",
-        "Johnson", "Garcia", "Ahmed", "Brooks", "Tran", "Reyes",
+        "Rivera",
+        "Okafor",
+        "Nguyen",
+        "Patel",
+        "Kim",
+        "Silva",
+        "Johnson",
+        "Garcia",
+        "Ahmed",
+        "Brooks",
+        "Tran",
+        "Reyes",
     }
 
     # --- every household was created THIS WEEK (within 7 days of the demo epoch) -
@@ -78,8 +88,7 @@ def test_demo_scenario_shape() -> None:
     for f in ds.families:
         assert f.created_at is not None
         assert week_start <= f.created_at <= _EPOCH, (
-            f"{f.display_name} created {f.created_at} outside this week "
-            f"({week_start}..{_EPOCH})"
+            f"{f.display_name} created {f.created_at} outside this week ({week_start}..{_EPOCH})"
         )
 
     # --- EXACTLY one two-child household, the rest single-child --------------

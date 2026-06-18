@@ -625,6 +625,53 @@ class BulkAssignResponse(BaseModel):
     assigned: list[UUID] = Field(default_factory=list)
 
 
+class AutoAssignRequest(BaseModel):
+    """`POST /enrollment/leads/auto-assign` body — the deterministic router run.
+
+    ``family_ids`` omitted (or empty) ⇒ route the whole UNASSIGNED intake pool
+    (the on-camera "route the new leads" action). A non-empty list routes just
+    those families (each still gated by the owner-match rule). The router decides;
+    the deterministic core writes (INV-2) — no LLM, no eval (deterministic).
+    """
+
+    family_ids: list[UUID] = Field(default_factory=list)
+
+
+class AutoAssignResult(BaseModel):
+    """One lead's routing outcome (LEAD_ASSIGNMENT.md §2). ``agent_id is None`` ⇒
+    HELD (ambiguous identity / parked / all-capped) — a fail-closed non-assignment.
+    ``reason`` is the human-readable rule trace; ``owner_match`` flags the sticky
+    existing/self-reported owner path."""
+
+    family_id: UUID
+    agent_id: UUID | None
+    routed_role: str | None
+    rule: str
+    reason: str
+    owner_match: bool
+    held: bool
+
+
+class AutoAssignCounts(BaseModel):
+    """The auto-assign tally — assigned vs held (fail-closed non-assignments)."""
+
+    assigned: int
+    held: int
+
+
+class AutoAssignResponse(BaseModel):
+    """The `POST /enrollment/leads/auto-assign` result (LEAD_ASSIGNMENT.md §2; NFR-6).
+
+    Every result carries its reason; each assignment is persisted
+    (``assigned_rep_id`` + an append-only ``lead_assignment`` history row) and
+    logged to the audit spine. One ``batch_id`` tags the group.
+    """
+
+    batch_id: str
+    counts: AutoAssignCounts
+    results: list[AutoAssignResult] = Field(default_factory=list)
+
+
 class AuditResponse(BaseModel):
     """The §10 audit view for one proposal — proposal + its evals + decisions (NFR-6)."""
 

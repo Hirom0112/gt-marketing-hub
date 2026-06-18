@@ -32,8 +32,17 @@ from uuid import NAMESPACE_URL, UUID, uuid4, uuid5
 from fastapi import APIRouter, Depends, HTTPException
 
 from app.adapters.hubspot.crm_adapter import CRMAdapter
-from app.api.deps import get_crm_adapter_dep, get_observability_log, get_repository
+from app.api.deps import (
+    get_crm_adapter_dep,
+    get_observability_log,
+    get_params,
+    get_repository,
+)
 from app.api.schemas import (
+    AutoAssignCounts,
+    AutoAssignRequest,
+    AutoAssignResponse,
+    AutoAssignResult,
     BulkAssignCounts,
     BulkAssignRequest,
     BulkAssignResponse,
@@ -47,8 +56,10 @@ from app.api.schemas import (
     SeedResponse,
 )
 from app.core import sales_agents
+from app.core.lead_routing import LeadSignals, route_lead
+from app.core.params import Params
 from app.core.seam import MirrorState, derive_seam_status
-from app.data.repository import FamilyRepository
+from app.data.repository import UNASSIGNED, FamilyRepository, JoinedFamily
 from app.observability.log_store import DecisionAction, ObservabilityLog
 
 # The deterministic-assignment audit flow tag (NFR-6) — distinguishes these
@@ -62,6 +73,7 @@ router = APIRouter(tags=["enrollment"])
 # Dependency aliases (Annotated keeps the call in the type, not a default arg —
 # ruff B008; the idiomatic FastAPI style matching the other routers).
 RepositoryDep = Annotated[FamilyRepository, Depends(get_repository)]
+ParamsDep = Annotated[Params, Depends(get_params)]
 CRMAdapterDep = Annotated[CRMAdapter, Depends(get_crm_adapter_dep)]
 LogDep = Annotated[ObservabilityLog, Depends(get_observability_log)]
 # v1 has no auth; the operator is a fixed audit seam (A-3), mirroring ai_actions.
@@ -231,7 +243,11 @@ def bulk_assign_families(
             proposal_id=proposal_id,
             flow=_ASSIGN_FLOW,
             schema_version=_ASSIGN_SCHEMA_VERSION,
-            payload={"agent_id": str(request.agent_id)},
+            payload={
+                "agent_id": str(request.agent_id),
+                "rule": "manual-override",
+                "reason": f"manual-override: operator assigned {request.agent_id}",
+            },
             family_id=family_id,
             created_at=assigned_at,
         )
@@ -247,4 +263,140 @@ def bulk_assign_families(
         agent_id=request.agent_id,
         counts=BulkAssignCounts(assigned=len(assigned)),
         assigned=assigned,
+    )
+
+
+def _lead_signals(joined: JoinedFamily) -> LeadSignals:
+    """Project a joined family onto the router's :class:`LeadSignals` (§2–§6).
+
+    Reads the spine's territory/income/stage/funding + ownership fields and the
+    lead's child count. The value/at-risk/deadline refinements of ``is_hot`` are
+    left at defaults in v1 (readiness derives from stage + funding); wiring the
+    work-queue/voucher signals in is a documented refinement (LEAD_ASSIGNMENT §5).
+    """
+    f = joined.family
+    return LeadSignals(
+        family_id=f.family_id,
+        state=f.state,
+        income_tier=f.income_tier,
+        current_stage=f.current_stage,
+        funding_state=f.funding_state,
+        assigned_rep_id=f.assigned_rep_id,
+        reported_rep_id=f.reported_rep_id,
+        num_children=joined.lead.num_children if joined.lead else 1,
+    )
+
+
+@router.post("/enrollment/leads/auto-assign", response_model=AutoAssignResponse)
+def auto_assign_leads(
+    request: AutoAssignRequest,
+    repository: RepositoryDep,
+    params: ParamsDep,
+    log: LogDep,
+) -> AutoAssignResponse:
+    """Deterministically route inbound leads to sales agents (LEAD_ASSIGNMENT.md §2).
+
+    The on-camera "route the new leads" action. ``family_ids`` omitted ⇒ the whole
+    UNASSIGNED intake pool; else just those families. For each lead the PURE router
+    (``app.core.lead_routing.route_lead``) decides ``(agent, role, reason)`` by the
+    first-match precedence (owner-match → territory → readiness → income → weighted
+    RR, cap-beats-weight); the DETERMINISTIC core then writes (INV-2, never an LLM):
+    it stamps ``assigned_rep_id`` (promoting a resolved self-reported owner),
+    appends an immutable ``lead_assignment`` history row, persists the pool cursor,
+    and logs the reason to the §10 audit spine (NFR-6). A HELD lead (ambiguous
+    identity / parked / all-capped) is a fail-closed non-assignment — surfaced in
+    the result, never guessed onto an agent (INV-4).
+    """
+    if request.family_ids:
+        joined = [j for fid in request.family_ids if (j := repository.get_family(fid)) is not None]
+    else:
+        joined = repository.list_joined(owner=UNASSIGNED)
+
+    # Per-agent current load (open book size) for the cap-beats-weight rule (§7).
+    loads: dict[UUID, int] = {}
+    for fam in repository.list_families():
+        if fam.assigned_rep_id is not None:
+            loads[fam.assigned_rep_id] = loads.get(fam.assigned_rep_id, 0) + 1
+
+    cursors = repository.read_cursors()
+    batch_id = _batch_id("auto-assign", [j.family.family_id for j in joined])
+    assigned_at = datetime.now(UTC)
+    results: list[AutoAssignResult] = []
+
+    for jf in joined:
+        signals = _lead_signals(jf)
+        decision = route_lead(
+            signals, sales_agents.SALES_AGENTS, params, cursors=cursors, loads=loads
+        )
+        held = decision.agent_id is None
+        results.append(
+            AutoAssignResult(
+                family_id=decision.family_id,
+                agent_id=decision.agent_id,
+                routed_role=decision.routed_role,
+                rule=decision.rule,
+                reason=decision.reason,
+                owner_match=decision.owner_match,
+                held=held,
+            )
+        )
+        if held:
+            continue  # fail-closed: nothing written, nothing owned (INV-4)
+
+        agent_id = decision.agent_id
+        assert agent_id is not None
+        prior = jf.family.assigned_rep_id
+        if prior == agent_id:
+            # Owner-match NO-OP: the family is already owned by this agent (the
+            # "never silently reassign" / duplicate-lead guard). Nothing changes —
+            # no write, no history row, no audit decision.
+            continue
+        # Persist the owner (promotes a resolved self-reported owner → assigned_rep_id,
+        # the server-side write the client never makes — INV-5 IDOR guard).
+        repository.assign_families([decision.family_id], agent_id, assigned_at)
+        # Append the immutable ownership-history fact (§10).
+        repository.append_assignment_event(
+            family_id=decision.family_id,
+            from_rep_id=prior,
+            to_rep_id=agent_id,
+            routed_role=decision.routed_role,
+            assigned_by="router",
+            reason=decision.reason,
+            batch_id=batch_id,
+        )
+        # Advance + persist the pool's round-robin cursor (§7).
+        if decision.cursor_advanced_to is not None and decision.pool_key:
+            cursors[decision.pool_key] = decision.cursor_advanced_to
+            repository.write_cursor(decision.pool_key, decision.cursor_advanced_to)
+        # Reflect the new load so the next lead in this batch sees it (cap math).
+        loads[agent_id] = loads.get(agent_id, 0) + 1
+        # Log the decision + its reason to the §10 audit spine (NFR-6; deterministic
+        # ⇒ no eval). The reason is the WHY, not just the WHO.
+        proposal_id = uuid4()
+        log.log_proposal(
+            proposal_id=proposal_id,
+            flow=_ASSIGN_FLOW,
+            schema_version=_ASSIGN_SCHEMA_VERSION,
+            payload={
+                "agent_id": str(agent_id),
+                "routed_role": decision.routed_role,
+                "rule": decision.rule,
+                "reason": decision.reason,
+                "owner_match": decision.owner_match,
+            },
+            family_id=decision.family_id,
+            created_at=assigned_at,
+        )
+        log.log_decision(
+            proposal_id=proposal_id,
+            human="router",
+            action=DecisionAction.APPROVE,
+            created_at=assigned_at,
+        )
+
+    n_assigned = sum(1 for r in results if not r.held)
+    return AutoAssignResponse(
+        batch_id=batch_id,
+        counts=AutoAssignCounts(assigned=n_assigned, held=len(results) - n_assigned),
+        results=results,
     )

@@ -195,6 +195,34 @@ class FamilyRecord(BaseModel):
 
 
 # ---------------------------------------------------------------------------
+# lead_assignment — append-only ownership history (LEAD_ASSIGNMENT.md §10).
+# ---------------------------------------------------------------------------
+
+
+class LeadAssignment(BaseModel):
+    """One append-only ownership-history row (mirrors the 0017 `lead_assignment`).
+
+    A reassignment is a FACT IN TIME (who→who, when, why), never an overwrite: the
+    mutable ``FamilyRecord.assigned_rep_id`` answers "who owns it now?"; this
+    timeline answers "what is the ownership history?" ``from_rep_id`` NULL ⇒ first
+    assignment out of the intake pool; ``to_rep_id`` NULL ⇒ unassigned back to the
+    pool. ``reason`` is the §2 human-readable rule trace (always present — every
+    assignment is explainable). Written server-side only (service_role); immutable.
+    """
+
+    assignment_id: UUID
+    family_id: UUID
+    from_rep_id: UUID | None = None
+    to_rep_id: UUID | None = None
+    routed_role: str | None = None  # 'closer' | 'qualifier' (a structural label)
+    assigned_by: str  # the operator/admin, or 'router'
+    reason: str
+    batch_id: str | None = None
+    occurred_at: datetime | None = None
+    created_at: datetime | None = None
+
+
+# ---------------------------------------------------------------------------
 # §4.1b student — one child's per-child funnel (A-24).
 # ---------------------------------------------------------------------------
 
