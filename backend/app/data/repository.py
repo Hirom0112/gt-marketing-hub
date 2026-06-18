@@ -226,6 +226,32 @@ def roll_up_households(students: list[JoinedStudent]) -> list[HouseholdRollUp]:
     return rollups
 
 
+def student_stage_counts(students: list[JoinedStudent], params: Params) -> dict[Stage, int]:
+    """Per-stage tally over CHILDREN — the per-student pipeline grain (A-24, FR-2.1).
+
+    The household counter (:func:`app.core.pipeline.pipeline_counts`) places each
+    HOUSEHOLD in one stage; this places each CHILD in its own, so a household with
+    one child at ``tuition`` and one at ``enroll`` contributes to BOTH columns.
+    Every child's stage is DERIVED on read from its OWN ``app_form`` /
+    ``enrollment_forms`` via the same pure :func:`derive_stage` the family/board
+    path uses (A-24 M2) — never the stored placeholder — so the count agrees with
+    the per-child board regardless of which store produced the rows. Zero-filled
+    over every §4.8 stage (a true partition: each child lands in exactly one).
+    """
+    counts: dict[Stage, int] = dict.fromkeys(Stage, 0)
+    for js in students:
+        stage = derive_stage(
+            FamilyInputs(
+                app_form=js.app_form,
+                enrollment_forms=js.enrollment_forms,
+                stalled_since=js.student.stalled_since,
+            ),
+            params,
+        )
+        counts[stage] += 1
+    return counts
+
+
 class FamilyRepository(ABC):
     """Read interface over the Family Record spine (the NFR-8 store seam).
 
@@ -284,6 +310,16 @@ class FamilyRepository(ABC):
     def pipeline_counts(self) -> dict[Stage, int]:
         """Per-stage tally over ``family_record.current_stage`` (FR-2.1)."""
         raise NotImplementedError
+
+    def student_pipeline_counts(self) -> dict[Stage, int]:
+        """Per-stage tally over CHILDREN (A-24, FR-2.1) — the per-student grain.
+
+        Concrete default (not abstract) so partial test doubles keep working: it
+        counts :meth:`list_students` by each child's DERIVED stage. The base seam
+        returns zero-filled (no children); the real stores rely on this default,
+        which reads their ``list_students`` + params. See :func:`student_stage_counts`.
+        """
+        return dict.fromkeys(Stage, 0)
 
     def household_roll_up(self) -> list[HouseholdRollUp]:
         """Group children by household → one row per household (TODO.md R1).
@@ -514,6 +550,11 @@ class InMemoryFamilyRepository(FamilyRepository):
         # in `core/pipeline.py` so it is defined once. A SQL-backed store maps the
         # same contract to a `GROUP BY current_stage`.
         return core_pipeline_counts(self._families)
+
+    def student_pipeline_counts(self) -> dict[Stage, int]:
+        # Per-CHILD tally (A-24): count each child by its OWN derived stage, so a
+        # multi-child household spans the stages its children are actually in.
+        return student_stage_counts(self.list_students(), self._resolve_params())
 
     def _resolve_params(self) -> Params:
         """The params for stage derivation, lazily loaded + cached (INV-11).

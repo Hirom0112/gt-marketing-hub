@@ -16,10 +16,15 @@ import {
 // stage tinted by its semantic tone.
 
 // Shape of the FastAPI PipelineResponse (backend app/api/schemas.py).
+// `counts`/`total` are the HOUSEHOLD grain; `student_counts`/`total_students` are
+// the per-CHILD grain (A-24) — each child in its own derived stage, so a
+// multi-child household spans every stage its children occupy.
 interface PipelineResponse {
   counts: Record<string, number>;
   total: number;
   seam: Record<string, number>;
+  student_counts?: Record<string, number>;
+  total_students?: number;
 }
 
 // Funnel stages in funnel order (§4.8 Stage) with display labels + the semantic
@@ -83,11 +88,18 @@ export default function PipelineBoard(): JSX.Element {
   }
 
   const { counts } = state.data;
+  const studentCounts = state.data.student_counts ?? {};
+  const hasStudents = (state.data.total_students ?? 0) > 0;
 
   return (
     <section aria-label="Pipeline board" data-testid="pipeline-board">
       <div className="lab" style={{ marginBottom: 'var(--s-2)' }}>
         Pipeline board — the four-stage funnel
+        {hasStudents && (
+          <span data-testid="pipeline-grain-note" style={{ color: 'var(--muted)' }}>
+            {' '}· households + children
+          </span>
+        )}
       </div>
       <h2
         style={{
@@ -136,6 +148,7 @@ export default function PipelineBoard(): JSX.Element {
                 <span
                   className="column-count mono"
                   data-testid="column-count"
+                  title="households in this stage"
                   style={{
                     fontSize: 'var(--fs-stat)',
                     fontWeight: 600,
@@ -146,6 +159,21 @@ export default function PipelineBoard(): JSX.Element {
                   {counts[key] ?? 0}
                 </span>
               </div>
+              {hasStudents && (
+                <div
+                  className="column-student-count mono"
+                  data-testid="column-student-count"
+                  title="children (per-child grain) in this stage"
+                  style={{
+                    marginTop: 'var(--s-1)',
+                    fontSize: 'var(--fs-chip)',
+                    color: 'var(--muted)',
+                  }}
+                >
+                  {studentCounts[key] ?? 0}{' '}
+                  {(studentCounts[key] ?? 0) === 1 ? 'child' : 'children'}
+                </div>
+              )}
               <div
                 aria-hidden
                 style={{

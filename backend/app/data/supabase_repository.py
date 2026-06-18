@@ -71,6 +71,7 @@ from app.data.repository import (
     OwnerScope,
     _matches_owner,
     roll_up_households,
+    student_stage_counts,
 )
 
 # Re-exported for back-compat: these moved to `app.data.repository` (the shared
@@ -536,6 +537,12 @@ class SupabaseFamilyRepository(FamilyRepository):
         for joined in self._fetch_joined():
             counts[self._derived_stage(joined)] += 1
         return counts
+
+    def student_pipeline_counts(self) -> dict[Stage, int]:
+        # Per-CHILD tally (A-24): each child by its OWN derived stage. list_students
+        # already derives + round-trips the stage; the shared counter re-derives
+        # idempotently so both stores agree.
+        return student_stage_counts(self.list_students(), self._params)
 
     # ----------------------------------------------------------- write seam
     @staticmethod

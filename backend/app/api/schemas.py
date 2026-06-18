@@ -49,11 +49,18 @@ class PipelineResponse(BaseModel):
     of ``counts`` — handy for the dashboard's "of N families" copy. ``seam`` is
     the §4.7 Supabase↔HubSpot seam summary (synced/unsynced/conflict), surfaced
     read-only on the landing dashboard.
+
+    ``student_counts`` is the per-CHILD grain (A-24): each child placed in its OWN
+    derived stage, so a multi-child household spans every stage its children are in
+    (Rivera → one in ``enroll``, one in ``tuition``). ``total_students`` is its sum.
+    Both zero-filled. The board can show households AND children per column.
     """
 
     counts: dict[Stage, int]
     total: int
     seam: dict[SeamStatus, int]
+    student_counts: dict[Stage, int]
+    total_students: int
 
 
 class FamilyDetailResponse(BaseModel):

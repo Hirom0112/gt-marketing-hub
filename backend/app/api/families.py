@@ -446,7 +446,16 @@ def get_pipeline(repository: RepositoryDep) -> PipelineResponse:
     counts = repository.pipeline_counts()
     # Seam summary derived through the same store seam (every status zero-filled).
     seam = {status: len(repository.list_families(seam_status=status)) for status in SeamStatus}
-    return PipelineResponse(counts=counts, total=sum(counts.values()), seam=seam)
+    # Per-child grain (A-24): each child placed in its own derived stage, so a
+    # multi-child household spans every stage its children occupy.
+    student_counts = repository.student_pipeline_counts()
+    return PipelineResponse(
+        counts=counts,
+        total=sum(counts.values()),
+        seam=seam,
+        student_counts=student_counts,
+        total_students=sum(student_counts.values()),
+    )
 
 
 @router.get("/families", response_model=list[FamilyRecord])

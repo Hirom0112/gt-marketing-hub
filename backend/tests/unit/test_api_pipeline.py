@@ -90,3 +90,52 @@ def test_get_unknown_family_returns_404() -> None:
     """An unknown family_id yields a 404 (read-only, no leakage)."""
     missing = client.get("/families/00000000-0000-4000-8000-000000000000")
     assert missing.status_code == 404
+
+
+def test_pipeline_carries_per_child_grain() -> None:
+    """GET /pipeline ALSO returns the per-CHILD grain (A-24): each child placed in
+    its own derived stage, so a multi-child household spans every stage its children
+    occupy. Driven over the 12-household demo cohort (13 children — only the Rivera
+    household has 2, at DIFFERENT derived stages)."""
+    from app.api import deps
+    from app.data.models import Stage
+    from app.data.repository import InMemoryFamilyRepository, student_stage_counts
+    from app.data.synthetic import generate_demo_cohort
+
+    repo = InMemoryFamilyRepository(generate_demo_cohort(params=deps._params), params=deps._params)
+    app.dependency_overrides[deps.get_repository] = lambda: repo
+    try:
+        body = client.get("/pipeline").json()
+        # Household grain unchanged: 12 households.
+        assert body["total"] == 12
+        # Per-child grain present and a partition of all 13 children.
+        assert set(_STAGE_KEYS) <= set(body["student_counts"])
+        assert body["total_students"] == 13
+        assert sum(body["student_counts"][s] for s in _STAGE_KEYS) == 13
+        # A DIFFERENT grain than households (13 children ≠ 12 households).
+        assert body["total_students"] != body["total"]
+        # Matches the deterministic per-child derivation over the same cohort.
+        expected = student_stage_counts(repo.list_students(), deps._params)
+        for stage in _STAGE_KEYS:
+            assert body["student_counts"][stage] == expected[Stage(stage)]
+        # The one 2-child household (Rivera) splits across ≥2 derived stages — proof
+        # a household genuinely spans columns at the child grain.
+        from app.core.stage_machine import FamilyInputs, derive_stage
+
+        rivera = [
+            js for js in repo.list_students() if js.family.display_name == "The Rivera Family"
+        ]
+        rivera_stages = {
+            derive_stage(
+                FamilyInputs(
+                    app_form=js.app_form,
+                    enrollment_forms=js.enrollment_forms,
+                    stalled_since=js.student.stalled_since,
+                ),
+                deps._params,
+            )
+            for js in rivera
+        }
+        assert len(rivera) == 2 and len(rivera_stages) >= 2
+    finally:
+        app.dependency_overrides.pop(deps.get_repository, None)

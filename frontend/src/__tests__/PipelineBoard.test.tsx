@@ -11,6 +11,10 @@ const PIPELINE_PAYLOAD = {
   counts: { interest: 83, apply: 65, enroll: 31, tuition: 21 },
   total: 200,
   seam: { synced: 116, unsynced: 67, conflict: 17 },
+  // Per-child grain (A-24): more children than households (multi-child households
+  // span stages), so e.g. tuition has more children than household deals.
+  student_counts: { interest: 90, apply: 70, enroll: 35, tuition: 28 },
+  total_students: 223,
 };
 
 describe('PipelineBoard', () => {
@@ -45,6 +49,18 @@ describe('PipelineBoard', () => {
         String(count),
       );
     }
+  });
+
+  it('renders the per-child count under each column (A-24 grain)', async () => {
+    render(<PipelineBoard />);
+    for (const [stage, count] of Object.entries(PIPELINE_PAYLOAD.student_counts)) {
+      const column = await screen.findByTestId(`pipeline-column-${stage}`);
+      const child = within(column).getByTestId('column-student-count');
+      expect(child).toHaveTextContent(String(count));
+      expect(child).toHaveTextContent(/child|children/);
+    }
+    // The header flags that the board now carries both grains.
+    expect(screen.getByTestId('pipeline-grain-note')).toBeInTheDocument();
   });
 
   it('calls the configured /pipeline endpoint read-only (GET)', async () => {
