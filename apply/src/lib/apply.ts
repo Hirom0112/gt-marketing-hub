@@ -142,6 +142,11 @@ export interface ApplySession {
   familyId: string;
   identity: SyntheticIdentity;
   enrollmentFormId: string;
+  // The CHILD this application is FOR (A-24). Every application is per-child: the
+  // app_form / enrollment_forms are written with this `student_id` and linked back
+  // onto the student, so each child runs its own funnel. createFamily creates the
+  // first child; "Add Another Child" opens a fresh session for the next.
+  studentId: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -232,7 +237,11 @@ export async function createFamily(
     attribution_utm: {},
   });
   if (error) throw new Error(`family_record insert: ${error.message}`);
-  return { familyId, identity, enrollmentFormId: uuid() };
+  // A-24: the first child IS a student under this household, so its application
+  // runs the per-child funnel like any sibling (no special "household applicant"
+  // grain). createFamily owns it, so the apply flow always has a studentId.
+  const studentId = await addStudent(sb, familyId);
+  return { familyId, identity, enrollmentFormId: uuid(), studentId };
 }
 
 /**
@@ -309,13 +318,23 @@ export async function submitApply(
   session: ApplySession,
   reportedRepId?: string | null,
 ): Promise<void> {
+  // Per-child (A-24): write THIS child's own application (student_id) and link it
+  // back onto the student, so the cockpit embeds the child's own funnel. The match
+  // for funding/SIS still keys off the household — this only scopes the packet.
+  const appFormId = uuid();
   const { error } = await sb.from('app_form').insert({
-    app_form_id: uuid(),
+    app_form_id: appFormId,
     family_id: session.familyId,
+    student_id: session.studentId,
     submitted_at: new Date().toISOString(),
     completion_pct: 100,
   });
   if (error) throw new Error(`app_form insert: ${error.message}`);
+  const { error: linkErr } = await sb
+    .from('student')
+    .update({ app_form_id: appFormId })
+    .eq('student_id', session.studentId);
+  if (linkErr) throw new Error(`student app_form link: ${linkErr.message}`);
 
   if (reportedRepId) {
     const { error: repErr } = await sb
@@ -336,14 +355,21 @@ export async function submitEnroll(
   session: ApplySession,
   forms_signed: number,
 ): Promise<void> {
+  // Per-child (A-24): this child's own enrollment packet + the link onto the student.
   const { error } = await sb.from('enrollment_forms').insert({
     enrollment_form_id: session.enrollmentFormId,
     family_id: session.familyId,
+    student_id: session.studentId,
     forms_total: 6,
     forms_signed,
     tuition_step_unlocked: false,
   });
   if (error) throw new Error(`enrollment_forms insert: ${error.message}`);
+  const { error: linkErr } = await sb
+    .from('student')
+    .update({ enrollment_form_id: session.enrollmentFormId })
+    .eq('student_id', session.studentId);
+  if (linkErr) throw new Error(`student enrollment link: ${linkErr.message}`);
 }
 
 /**
@@ -360,14 +386,24 @@ export async function submitTuition(
   // represented by a fresh row keyed on a NEW id capturing the final state.
   // (The cockpit reads the most-complete row; this keeps the write-only flow
   // honest without an UPDATE path.)
+  const tuitionEnrollId = uuid();
   const { error: efErr } = await sb.from('enrollment_forms').insert({
-    enrollment_form_id: uuid(),
+    enrollment_form_id: tuitionEnrollId,
     family_id: session.familyId,
+    student_id: session.studentId,
     forms_total: 6,
     forms_signed: 6,
     tuition_step_unlocked: true,
   });
   if (efErr) throw new Error(`enrollment_forms (tuition) insert: ${efErr.message}`);
+  // Re-point the student at its FINAL (tuition-unlocked) packet + its funding type,
+  // so the child's own funnel derives `tuition` (A-24). funding_state stays DERIVED
+  // / GT-gated (INV-10) — the SPA never self-reports a confirmed voucher.
+  const { error: linkErr } = await sb
+    .from('student')
+    .update({ enrollment_form_id: tuitionEnrollId, funding_type })
+    .eq('student_id', session.studentId);
+  if (linkErr) throw new Error(`student tuition link: ${linkErr.message}`);
 
   const { error: cpErr } = await sb.from('community_profiles').insert({
     community_profile_id: uuid(),

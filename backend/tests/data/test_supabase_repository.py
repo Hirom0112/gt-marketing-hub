@@ -276,6 +276,30 @@ def test_family_grain_ignores_a_childs_enrollment_packet() -> None:
     assert jf.enrollment_forms.forms_signed == 1  # the household packet, not the child's 6
 
 
+def test_family_grain_falls_back_to_child_packet_when_no_household_packet() -> None:
+    """A LIVE per-child application writes ONLY child packets (student_id set) — no
+    household-grain packet. The household grain then falls back to the FURTHEST child
+    packet so the household still derives sensible progress (A-24), instead of an
+    empty `interest`. (Synthetic households keep their own household packet, so this
+    fallback only fires when there is none — proven by the test above.)"""
+    child_app = _app_form(_FID_TUITION, submitted=True)
+    child_app["student_id"] = "00000000-0000-0000-0000-0000000000f2"
+    child_enroll = _enrollment(_FID_TUITION, signed=6, unlocked=True)
+    child_enroll["student_id"] = "00000000-0000-0000-0000-0000000000f2"
+    row = _spine(
+        _FID_TUITION,
+        current_stage="interest",
+        leads_new=[_lead(_FID_TUITION)],
+        app_form=[child_app],  # ONLY a child packet — no household-grain row.
+        enrollment_forms=[child_enroll],
+    )
+    repo = _make_repo(_family_record_handler([row]))
+    # With no household packet, the household derives from the child's packet ⇒ TUITION.
+    assert [f.family_id for f in repo.list_families(stage=Stage.TUITION)] == [UUID(_FID_TUITION)]
+    jf = repo.get_family(UUID(_FID_TUITION))
+    assert jf is not None and jf.app_form is not None and jf.enrollment_forms is not None
+
+
 def test_partial_family_without_lead_is_excluded() -> None:
     """A family_record with no leads_new is invisible (the INNER-join rule)."""
     partial = _spine("00000000-0000-0000-0000-0000000000ff")  # no leads_new embed

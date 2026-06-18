@@ -309,6 +309,19 @@ class SupabaseFamilyRepository(FamilyRepository):
         return [r for r in rows if isinstance(r, dict) and r.get("student_id") is None]
 
     @staticmethod
+    def _child_only(rows: object) -> list[dict[str, Any]]:
+        """Keep only per-CHILD rows (``student_id`` set) from an embedded list.
+
+        The complement of :meth:`_household_only`: the household grain uses this ONLY
+        as a fallback when a family has no household-grain packet at all (a per-child
+        LIVE application, A-24) — picking the furthest child's packet so the household
+        still shows aggregate progress instead of an empty ``interest``.
+        """
+        if not isinstance(rows, list):
+            return []
+        return [r for r in rows if isinstance(r, dict) and r.get("student_id") is not None]
+
+    @staticmethod
     def _best_enrollment(rows: object) -> dict[str, Any] | None:
         """The MOST-ADVANCED ``enrollment_forms`` row when several exist.
 
@@ -347,12 +360,19 @@ class SupabaseFamilyRepository(FamilyRepository):
         # app_form / enrollment_forms hold BOTH the household packet and the per-child
         # packets (all share family_id); the HOUSEHOLD grain reads only its own
         # (student_id NULL) — never a child's — so a multi-child family doesn't borrow
-        # a child's progress (the Rivera forms-cleared/recovered bug).
-        app_row = self._first(self._household_only(row.get("app_form")))
-        # enrollment_forms can also have >1 HOUSEHOLD row under the insert-only flow;
-        # take the most-advanced household packet so a completed family derives
-        # `tuition`, not `enroll`.
-        enroll_row = self._best_enrollment(self._household_only(row.get("enrollment_forms")))
+        # a child's progress (the Rivera forms-cleared/recovered bug). When there is NO
+        # household packet (a per-child LIVE application writes only child packets,
+        # A-24), the household grain falls back to the FURTHEST child packet so the
+        # household still shows sensible aggregate progress — the fallback only fires
+        # when no household-grain row exists, so synthetic households are unaffected.
+        app_rows = row.get("app_form")
+        app_row = self._first(self._household_only(app_rows)) or self._first(
+            self._child_only(app_rows)
+        )
+        enroll_rows = row.get("enrollment_forms")
+        enroll_row = self._best_enrollment(
+            self._household_only(enroll_rows)
+        ) or self._best_enrollment(self._child_only(enroll_rows))
         community_row = self._first(row.get("community_profiles"))
         return JoinedFamily(
             family=family,

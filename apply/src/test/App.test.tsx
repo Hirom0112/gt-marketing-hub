@@ -244,16 +244,18 @@ describe('mock apply SPA — acceptance', () => {
 
     await waitFor(() => screen.getByText('My Applications'));
     expect(sb.rowsFor('family_record')).toHaveLength(1);
-    expect(sb.rowsFor('student')).toHaveLength(0);
+    // A-24: the first child IS a student (createFamily), so one already exists.
+    expect(sb.rowsFor('student')).toHaveLength(1);
     const householdFamilyId = sb.rowsFor('family_record')[0]!.family_id as string;
+    const firstChildId = sb.rowsFor('student')[0]!.student_id as string;
 
     await userEvent.click(screen.getByText('+ Add Another Child'));
 
-    // A `student` row was inserted — NOT a second family_record.
-    await waitFor(() => expect(sb.rowsFor('student')).toHaveLength(1));
+    // A SECOND `student` row was inserted — NOT a second family_record.
+    await waitFor(() => expect(sb.rowsFor('student')).toHaveLength(2));
     expect(sb.rowsFor('family_record')).toHaveLength(1);
 
-    const student = sb.rowsFor('student')[0]!;
+    const student = sb.rowsFor('student').find((s) => s.student_id !== firstChildId)!;
     // The child is a child of the EXISTING household (FK family_id → the spine).
     expect(student.family_id).toBe(householdFamilyId);
     // Synthetic-shaped child identity only (INV-1/INV-6): a name, a grade, a
@@ -261,9 +263,9 @@ describe('mock apply SPA — acceptance', () => {
     expect(student.synthetic_first_name).toBeDefined();
     expect(student.grade).toBeDefined();
     expect(student.display_label).toBeDefined();
-    // The new child surfaces on the dashboard as a household child.
+    // Both children surface on the dashboard as household children.
     await waitFor(() =>
-      expect(screen.getByLabelText('student_card')).toBeInTheDocument(),
+      expect(screen.getAllByLabelText('student_card')).toHaveLength(2),
     );
   });
 
@@ -281,15 +283,19 @@ describe('mock apply SPA — acceptance', () => {
     await waitFor(() => screen.getByText('My Applications'));
 
     await userEvent.click(screen.getByText('+ Add Another Child'));
-    await waitFor(() => expect(sb.rowsFor('student')).toHaveLength(1));
+    await waitFor(() => expect(sb.rowsFor('student')).toHaveLength(2));
 
+    // Two student inserts: the first child (createFamily) + the added one — both
+    // ordinary owner-scoped anon inserts.
     const studentInserts = sb.inserts.filter((i) => i.table === 'student');
-    expect(studentInserts).toHaveLength(1);
-    // No service_role / privileged column ever leaves the client.
-    for (const row of studentInserts[0]!.rows) {
-      for (const key of Object.keys(row)) {
-        expect(key.toLowerCase()).not.toContain('service_role');
-        expect(key.toLowerCase()).not.toContain('user_id'); // ownership is via the FK
+    expect(studentInserts).toHaveLength(2);
+    // No service_role / privileged column ever leaves the client, on EITHER insert.
+    for (const insert of studentInserts) {
+      for (const row of insert.rows) {
+        for (const key of Object.keys(row)) {
+          expect(key.toLowerCase()).not.toContain('service_role');
+          expect(key.toLowerCase()).not.toContain('user_id'); // ownership is via the FK
+        }
       }
     }
   });

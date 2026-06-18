@@ -229,16 +229,19 @@ describe('addStudent (R1 — per-child grain under an existing household)', () =
   it('inserts a synthetic-shaped student keyed to the household family_id (no new family_record)', async () => {
     const sb = makeMockSupabase();
     const uid = await ensureAnonSession(sb);
+    // A-24: createFamily now creates the FIRST child as a student, threaded on the
+    // session, so every application is per-child from the start.
     const session = await createFamily(sb, uid, 'direct');
-    const before = sb.rowsFor('family_record').length;
+    const familiesBefore = sb.rowsFor('family_record').length;
+    expect(sb.rowsFor('student')).toHaveLength(1); // the first child
+    expect(session.studentId).toBe(sb.rowsFor('student')[0]!.student_id);
 
-    const studentId = await addStudent(sb, session.familyId);
+    const studentId = await addStudent(sb, session.familyId); // a SECOND child
 
-    expect(sb.rowsFor('family_record')).toHaveLength(before); // no new family
+    expect(sb.rowsFor('family_record')).toHaveLength(familiesBefore); // no new family
     const students = sb.rowsFor('student');
-    expect(students).toHaveLength(1);
-    const s = students[0]!;
-    expect(s.student_id).toBe(studentId);
+    expect(students).toHaveLength(2); // first + added, both under the one household
+    const s = students.find((x) => x.student_id === studentId)!;
     expect(s.family_id).toBe(session.familyId); // FK → the household spine
     expect(s.current_stage).toBe('interest'); // write-time placeholder
     expect(s.funding_state).toBe('none'); // fail-closed default (INV-10)
@@ -251,10 +254,42 @@ describe('addStudent (R1 — per-child grain under an existing household)', () =
   });
 
   it('surfaces a student insert failure to the caller', async () => {
+    // createFamily creates the first child (a student insert), so a student-insert
+    // failure surfaces from it (the per-child grain starts at sign-up).
     const sb = makeMockSupabase({ failInsertOn: 'student' });
     const uid = await ensureAnonSession(sb);
+    await expect(createFamily(sb, uid, 'direct')).rejects.toThrow(/student/);
+  });
+});
+
+describe('per-child apply writes (A-24 — packets keyed + linked to the student)', () => {
+  it('writes app_form/enrollment with the child student_id and links the student', async () => {
+    const sb = makeMockSupabase();
+    const uid = await ensureAnonSession(sb);
     const session = await createFamily(sb, uid, 'direct');
-    await expect(addStudent(sb, session.familyId)).rejects.toThrow(/student/);
+    await submitApply(sb, session);
+    await submitEnroll(sb, session, 6);
+    await submitTuition(sb, session, 'self_pay');
+
+    // Every packet carries THIS child's student_id (the per-child grain).
+    for (const af of sb.rowsFor('app_form')) {
+      expect(af.student_id).toBe(session.studentId);
+      expect(af.family_id).toBe(session.familyId);
+    }
+    const enrolls = sb.rowsFor('enrollment_forms');
+    expect(enrolls.length).toBeGreaterThan(0);
+    for (const ef of enrolls) {
+      expect(ef.student_id).toBe(session.studentId);
+    }
+
+    // The student is LINKED to its own packets + funding (so the cockpit embeds the
+    // child's own funnel). funding_state is NOT written here (DERIVED/GT-gated, INV-10).
+    const studentUpdates = sb.updates.filter((u) => u.table === 'student');
+    const linked = Object.assign({}, ...studentUpdates.map((u) => u.values));
+    expect(linked.app_form_id).toBeDefined();
+    expect(linked.enrollment_form_id).toBeDefined();
+    expect(linked.funding_type).toBe('self_pay');
+    expect('funding_state' in linked).toBe(false);
   });
 });
 
