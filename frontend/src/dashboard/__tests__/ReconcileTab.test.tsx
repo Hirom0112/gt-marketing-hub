@@ -74,7 +74,7 @@ describe('ReconcileTab', () => {
     render(<ReconcileTab onSelectIssue={onSelectIssue} />);
     await screen.findByTestId('reconcile-seam-rows');
 
-    fireEvent.click(screen.getAllByTestId('reconcile-row')[1]);
+    fireEvent.click(screen.getAllByTestId('reconcile-row')[1] as HTMLElement);
     expect(onSelectIssue).toHaveBeenCalledWith({
       kind: 'seam',
       family_id: 'fam-b',
@@ -90,7 +90,7 @@ describe('ReconcileTab', () => {
 
     fireEvent.click(screen.getByText('SIS Reconcile'));
     const sisRows = await screen.findAllByTestId('reconcile-sis-row');
-    fireEvent.click(sisRows[0]);
+    fireEvent.click(sisRows[0] as HTMLElement);
 
     expect(onSelectIssue).toHaveBeenCalledWith(
       expect.objectContaining({ kind: 'sis', family_id: 'fam-x' }),

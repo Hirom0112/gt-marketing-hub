@@ -42,7 +42,7 @@ function dayOfYear(date: Date): number {
 // at render is acceptable (D-11). Deterministic for the whole calendar day.
 function quoteForToday(): string {
   const idx = dayOfYear(new Date()) % QUOTES.length;
-  return QUOTES[idx];
+  return QUOTES[idx] ?? QUOTES[0] ?? '';
 }
 
 // Read a stored custom quote for this agent (null when none / storage absent).
