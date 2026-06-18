@@ -293,6 +293,63 @@ describe('per-child apply writes (A-24 — packets keyed + linked to the student
   });
 });
 
+describe('household guardians (A-36 — both parents on the ONE household)', () => {
+  it('persists guardian #1 relationship and a synthetic guardian #2 onto family_record', async () => {
+    const sb = makeMockSupabase();
+    const uid = await ensureAnonSession(sb);
+    const session = await createFamily(sb, uid, 'referral');
+    await submitApply(sb, session, null, {
+      relationship1: 'mother',
+      guardian2: { relationship: 'father' },
+    });
+
+    // A single owner-scoped UPDATE on the household's OWN row carries both guardians.
+    const hhUpdates = sb.updates.filter(
+      (u) => u.table === 'family_record' && 'guardian_1_relationship' in u.values,
+    );
+    expect(hhUpdates.length).toBe(1);
+    const values = hhUpdates[0]!.values as Record<string, unknown>;
+    expect(values.guardian_1_relationship).toBe('mother');
+    expect(values.guardian_2_relationship).toBe('father');
+    // Guardian #2 is a fully synthetic contact — name present, email reserved-domain.
+    expect(typeof values.secondary_contact_name).toBe('string');
+    expect(values.secondary_contact_name).not.toBe('');
+    expect(String(values.secondary_contact_synthetic_email)).toMatch(/@example\.invalid$/);
+    // The update is owner-scoped by family_id (RLS), never by a child.
+    expect(hhUpdates[0]!.filter).toEqual({ family_id: session.familyId });
+  });
+
+  it('omits all guardian #2 fields when no second guardian is listed', async () => {
+    const sb = makeMockSupabase();
+    const uid = await ensureAnonSession(sb);
+    const session = await createFamily(sb, uid, 'referral');
+    await submitApply(sb, session, null, { relationship1: 'guardian', guardian2: null });
+
+    const hhUpdates = sb.updates.filter(
+      (u) => u.table === 'family_record' && 'guardian_1_relationship' in u.values,
+    );
+    expect(hhUpdates.length).toBe(1);
+    const values = hhUpdates[0]!.values as Record<string, unknown>;
+    expect(values.guardian_1_relationship).toBe('guardian');
+    // No second-guardian keys leak in when none was listed.
+    expect('secondary_contact_name' in values).toBe(false);
+    expect('secondary_contact_synthetic_email' in values).toBe(false);
+    expect('guardian_2_relationship' in values).toBe(false);
+  });
+
+  it('writes no household guardian update when guardians are not supplied (back-compat)', async () => {
+    const sb = makeMockSupabase();
+    const uid = await ensureAnonSession(sb);
+    const session = await createFamily(sb, uid, 'referral');
+    await submitApply(sb, session); // legacy 2-arg call
+
+    const hhUpdates = sb.updates.filter(
+      (u) => u.table === 'family_record' && 'guardian_1_relationship' in u.values,
+    );
+    expect(hhUpdates.length).toBe(0);
+  });
+});
+
 describe('deriveInterestAnswers (S18 candidacy — derive uncollected columns)', () => {
   it('derives every leads_new column the candidacy modal does not collect, from the closed option sets', () => {
     const a = deriveInterestAnswers('11111111-1111-4111-8111-111111111111', 'direct');

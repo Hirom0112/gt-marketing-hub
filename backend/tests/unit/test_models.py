@@ -105,6 +105,36 @@ def test_synthetic_email_field_named_synthetic() -> None:
     assert lead.product_interest.value == "campus"
 
 
+def test_family_record_carries_both_household_guardians() -> None:
+    """A-36: BOTH parents live on the ONE household, synthetic, never child-keyed."""
+    # The guardian columns exist on the spine (mirrors migration 0022).
+    for field in (
+        "guardian_1_relationship",
+        "secondary_contact_name",
+        "secondary_contact_synthetic_email",
+        "guardian_2_relationship",
+    ):
+        assert field in FamilyRecord.model_fields, field
+
+    # They default to None (nullable — a row predating the field stays valid).
+    bare = FamilyRecord(**_valid_family_record_kwargs())  # type: ignore[arg-type]
+    assert bare.guardian_1_relationship is None
+    assert bare.secondary_contact_synthetic_email is None
+
+    # A household listing two guardians round-trips both on the SAME family_id
+    # (household-grained, INV-6 — no student_id anywhere).
+    with_two = FamilyRecord(
+        **_valid_family_record_kwargs(),  # type: ignore[arg-type]
+        guardian_1_relationship="mother",
+        secondary_contact_name="Birch Rivera",
+        secondary_contact_synthetic_email="birch.rivera.synthetic@example.invalid",
+        guardian_2_relationship="father",
+    )
+    assert with_two.guardian_1_relationship == "mother"
+    assert with_two.guardian_2_relationship == "father"
+    assert with_two.secondary_contact_synthetic_email.endswith("@example.invalid")
+
+
 def test_source_table_models_present() -> None:
     """The four §4.2–§4.5 source-table models exist and accept their columns."""
     family_id = uuid4()

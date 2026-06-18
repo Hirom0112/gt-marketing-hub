@@ -168,6 +168,19 @@ class FamilyRecord(BaseModel):
     # `reported_rep_id uuid REFERENCES sales_agent` column (0017).
     reported_rep_id: UUID | None = None
 
+    # --- Household guardians (A-36). BOTH parents live on the ONE household, never
+    # keyed to a child (INV-6). All SYNTHETIC (INV-1); nullable so rows predating
+    # the field stay valid. Mirrors the columns added in 0022_household_guardians. ---
+    # The PRIMARY contact's relationship to the child — a closed-option-set pick on
+    # the apply form (mother/father/guardian/…), never free text. NULL ⇒ unstated.
+    guardian_1_relationship: str | None = None
+    # An OPTIONAL second parent on the same household: a synthetic name + a synthetic
+    # @example.invalid email (the 0022 CHECK enforces the domain) + their relationship.
+    # NULL ⇒ no second guardian listed. Household-grained — never tied to a student.
+    secondary_contact_name: str | None = None
+    secondary_contact_synthetic_email: str | None = None
+    guardian_2_relationship: str | None = None
+
     # Join keys, nullable until the related record exists (§4.1).
     lead_id: UUID | None = None
     app_form_id: UUID | None = None

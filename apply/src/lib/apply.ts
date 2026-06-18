@@ -20,6 +20,7 @@ import type {
   NumChildren,
   ProductInterest,
   Region,
+  Relationship,
 } from './options';
 
 // ---------------------------------------------------------------------------
@@ -312,11 +313,29 @@ export async function submitInterest(
  * then PROMOTES a resolved value to `assigned_rep_id` server-side (the client
  * never writes deal ownership — INV-5). A stable agent_id (or `null` for
  * "not sure") — never free text, so a mistype is structurally impossible.
+ *
+ * Also optionally persists the household `guardians` (A-36): guardian #1's
+ * relationship and, when listed, a synthetic guardian #2 (name + email +
+ * relationship) onto the SAME `family_record` — both inputs share the one
+ * owner-scoped household UPDATE.
  */
+/**
+ * The household's parents/guardians, as chosen on the apply form (A-36). Guardian
+ * #1 is the primary contact (already on the family_record); we persist only their
+ * RELATIONSHIP here. Guardian #2 is OPTIONAL — when listed, we mint a SYNTHETIC
+ * second contact (name + @example.invalid email) so BOTH parents sit on the ONE
+ * household. Both are household-grained — never tied to a child (INV-6).
+ */
+export interface GuardianInfo {
+  relationship1: Relationship;
+  guardian2: { relationship: Relationship } | null;
+}
+
 export async function submitApply(
   sb: MinimalSupabase,
   session: ApplySession,
   reportedRepId?: string | null,
+  guardians?: GuardianInfo | null,
 ): Promise<void> {
   // Per-child (A-24): write THIS child's own application (student_id) and link it
   // back onto the student, so the cockpit embeds the child's own funnel. The match
@@ -336,12 +355,28 @@ export async function submitApply(
     .eq('student_id', session.studentId);
   if (linkErr) throw new Error(`student app_form link: ${linkErr.message}`);
 
-  if (reportedRepId) {
-    const { error: repErr } = await sb
+  // One owner-scoped UPDATE on the family's OWN row (anon+RLS, INV-5) for the
+  // applicant-supplied inputs: the self-reported prior agent (A-30) and the
+  // household guardians (A-36). Both are inputs, never deterministic-core writes.
+  const householdUpdate: Record<string, unknown> = {};
+  if (reportedRepId) householdUpdate.reported_rep_id = reportedRepId;
+  if (guardians) {
+    householdUpdate.guardian_1_relationship = guardians.relationship1;
+    if (guardians.guardian2) {
+      // A fully synthetic second contact (INV-1). The email lands in the reserved
+      // @example.invalid domain the 0022 CHECK enforces.
+      const g2 = generateSyntheticIdentity();
+      householdUpdate.secondary_contact_name = `${g2.firstName} ${g2.lastName}`;
+      householdUpdate.secondary_contact_synthetic_email = g2.email;
+      householdUpdate.guardian_2_relationship = guardians.guardian2.relationship;
+    }
+  }
+  if (Object.keys(householdUpdate).length > 0) {
+    const { error: hhErr } = await sb
       .from('family_record')
-      .update({ reported_rep_id: reportedRepId })
+      .update(householdUpdate)
       .eq('family_id', session.familyId);
-    if (repErr) throw new Error(`family_record reported_rep_id update: ${repErr.message}`);
+    if (hhErr) throw new Error(`family_record household update: ${hhErr.message}`);
   }
 }
 

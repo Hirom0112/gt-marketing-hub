@@ -625,7 +625,18 @@ function ApplyStep({
     }
     setBusy(true);
     try {
-      await submitApply(supabase, session, reportedRep === 'not_sure' ? null : reportedRep);
+      // A-36: persist both guardians onto the household. relationship1 is validated
+      // above; guardian #2 is included only when the applicant toggled it on (its
+      // relationship is likewise validated). Names are minted synthetic server-side.
+      await submitApply(
+        supabase,
+        session,
+        reportedRep === 'not_sure' ? null : reportedRep,
+        {
+          relationship1: relationship1 as Relationship,
+          guardian2: hasGuardian2 ? { relationship: relationship2 as Relationship } : null,
+        },
+      );
       t.stepCompleted();
       onNext();
     } catch (e) {
