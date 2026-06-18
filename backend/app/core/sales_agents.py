@@ -1,7 +1,7 @@
 """The app-layer sales-agent registry — the rank→agent static lookup (M1).
 
 This module MIRRORS the deterministic demo seed in
-``supabase/migrations/0013_sales_agents.sql``: the SQL seed is authoritative for
+``backend/app/data/migrations/0013_sales_agents.sql``: the SQL seed is authoritative for
 the cloud DB; this is the app-layer / in-memory + demo-principal lookup. The two
 MUST agree — the agent uuids, ranks, synthetic names, and tiers here are the same
 stable per-rank literals the migration inserts (rank→agent survives re-seeding).
