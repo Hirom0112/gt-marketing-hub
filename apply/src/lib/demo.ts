@@ -100,7 +100,7 @@ export function asDemoSupabase(
   client: DemoSessionClient,
   sessions: DemoSessions,
 ): DemoSupabase {
-  const demo: DemoSupabase = Object.assign(client, {
+  return Object.assign(client, {
     async signInAsUid(uid: string): Promise<void> {
       const tokens = sessions[uid];
       if (!tokens) {
@@ -108,16 +108,27 @@ export function asDemoSupabase(
           `no seeded demo session for uid ${uid} — VITE_DEMO_SESSIONS is inconsistent with VITE_DEMO_FAMILIES`,
         );
       }
-      const { error } = await client.auth.setSession({
-        access_token: tokens.access_token,
-        refresh_token: tokens.refresh_token,
-      });
+      const { error } = await client.auth.setSession(tokens);
       if (error) {
         throw new Error(`demo session restore failed for uid ${uid}: ${error.message}`);
       }
     },
   });
-  return demo;
+}
+
+/**
+ * Shared fail-safe envelope for the demo-only `VITE_*` JSON env loaders: read the
+ * var, `JSON.parse` it, and hand the parsed value to `extract`. ANY failure — unset,
+ * malformed JSON, or a shape `extract` rejects — collapses to `empty`. Keeps the two
+ * loaders' identical read/parse/fail-safe skeleton in one place (synthetic-only, INV-1).
+ */
+function parseDemoEnv<T>(raw: string | undefined, extract: (parsed: unknown) => T, empty: T): T {
+  if (!raw) return empty;
+  try {
+    return extract(JSON.parse(raw) as unknown);
+  } catch {
+    return empty;
+  }
 }
 
 /**
@@ -129,31 +140,22 @@ export function asDemoSupabase(
  * switcher then has no DemoSupabase and renders its honest "no seeded families" state.
  */
 export function loadDemoSessions(): DemoSessions {
-  const raw = import.meta.env.VITE_DEMO_SESSIONS as string | undefined;
-  if (!raw) return {};
-  try {
-    const parsed = JSON.parse(raw) as unknown;
-    if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
-      return {};
-    }
-    const out: DemoSessions = {};
-    for (const [uid, value] of Object.entries(parsed as Record<string, unknown>)) {
-      if (
-        typeof value === 'object' &&
-        value !== null &&
-        typeof (value as DemoSessionTokens).access_token === 'string' &&
-        typeof (value as DemoSessionTokens).refresh_token === 'string'
-      ) {
-        out[uid] = {
-          access_token: (value as DemoSessionTokens).access_token,
-          refresh_token: (value as DemoSessionTokens).refresh_token,
-        };
+  return parseDemoEnv(
+    import.meta.env.VITE_DEMO_SESSIONS as string | undefined,
+    (parsed) => {
+      const out: DemoSessions = {};
+      if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) return out;
+      for (const [uid, value] of Object.entries(parsed as Record<string, unknown>)) {
+        if (typeof value !== 'object' || value === null) continue;
+        const { access_token, refresh_token } = value as Partial<DemoSessionTokens>;
+        if (typeof access_token === 'string' && typeof refresh_token === 'string') {
+          out[uid] = { access_token, refresh_token };
+        }
       }
-    }
-    return out;
-  } catch {
-    return {};
-  }
+      return out;
+    },
+    {},
+  );
 }
 
 /**
@@ -173,27 +175,26 @@ export const COCKPIT_URL: string =
  * is empty and the switcher renders its honest "no seeded families" state.
  */
 export function loadDemoFamilies(): DemoFamily[] {
-  const raw = import.meta.env.VITE_DEMO_FAMILIES as string | undefined;
-  if (!raw) return [];
-  try {
-    const parsed = JSON.parse(raw) as unknown;
-    if (!Array.isArray(parsed)) return [];
-    return parsed
-      .filter(
-        (f): f is DemoFamily =>
-          typeof f === 'object' &&
-          f !== null &&
-          typeof (f as DemoFamily).uid === 'string' &&
-          typeof (f as DemoFamily).familyId === 'string' &&
-          typeof (f as DemoFamily).label === 'string',
-      )
-      .map((f) => ({
-        uid: f.uid,
-        familyId: f.familyId,
-        label: f.label,
-        hint: typeof f.hint === 'string' ? f.hint : undefined,
-      }));
-  } catch {
-    return [];
-  }
+  return parseDemoEnv(
+    import.meta.env.VITE_DEMO_FAMILIES as string | undefined,
+    (parsed) => {
+      if (!Array.isArray(parsed)) return [];
+      return parsed
+        .filter(
+          (f): f is DemoFamily =>
+            typeof f === 'object' &&
+            f !== null &&
+            typeof (f as DemoFamily).uid === 'string' &&
+            typeof (f as DemoFamily).familyId === 'string' &&
+            typeof (f as DemoFamily).label === 'string',
+        )
+        .map((f) => ({
+          uid: f.uid,
+          familyId: f.familyId,
+          label: f.label,
+          hint: typeof f.hint === 'string' ? f.hint : undefined,
+        }));
+    },
+    [],
+  );
 }

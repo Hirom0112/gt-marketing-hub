@@ -152,7 +152,17 @@ def main() -> None:
             row = json.loads(model.model_dump_json())
             if extra:
                 row.update(extra)
-            return {k: v for k, v in row.items() if k in cols(table)}
+            table_cols = cols(table)
+            # Warn (don't silently drop) on a model field with no DB column — that is
+            # model/DDL drift (a missing migration), the exact failure 0016 fixed. The
+            # demo would otherwise look fine while the column is absent.
+            missing = set(row) - table_cols
+            if missing:
+                print(
+                    f"WARN: {table} has no column(s) for {sorted(missing)} — drift?",
+                    file=sys.stderr,
+                )
+            return {k: v for k, v in row.items() if k in table_cols}
 
         # family_record — inject user_id (the minted anon uid) so RLS owner-scoping holds.
         _post_rows(
@@ -164,29 +174,16 @@ def main() -> None:
                 for f in ds.families
             ],
         )
-        _post_rows(url, service_key, "leads_new", [shape(x, "leads_new") for x in ds.leads])
-        _post_rows(
-            url,
-            service_key,
-            "app_form",
-            [shape(x, "app_form") for x in (*ds.app_forms, *ds.student_app_forms)],
-        )
-        _post_rows(
-            url,
-            service_key,
-            "enrollment_forms",
-            [
-                shape(x, "enrollment_forms")
-                for x in (*ds.enrollment_forms, *ds.student_enrollment_forms)
-            ],
-        )
-        _post_rows(
-            url,
-            service_key,
-            "community_profiles",
-            [shape(x, "community_profiles") for x in ds.community_profiles],
-        )
-        _post_rows(url, service_key, "student", [shape(x, "student") for x in ds.students])
+        # The rest are plain shape-and-post, in FK order (table → source models).
+        plain: list[tuple[str, list[Any]]] = [
+            ("leads_new", list(ds.leads)),
+            ("app_form", [*ds.app_forms, *ds.student_app_forms]),
+            ("enrollment_forms", [*ds.enrollment_forms, *ds.student_enrollment_forms]),
+            ("community_profiles", list(ds.community_profiles)),
+            ("student", list(ds.students)),
+        ]
+        for table, items in plain:
+            _post_rows(url, service_key, table, [shape(x, table) for x in items])
 
         # Persist the SIS verdicts to sis_status (the 🔴/🟡/✅ buckets the cockpit +
         # apply "Closed — pending SIS" read). Reconcile the seeded cloud repo against

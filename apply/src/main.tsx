@@ -17,7 +17,7 @@ const client = getSupabase();
 // DemoSupabase so `isDemoSupabase` is true and the switcher works live; otherwise
 // inject the bare client exactly as before so the switcher stays disabled (the
 // honest "no seeded families" state). Anon-only either way (INV-5).
-const sessions = client ? loadDemoSessions() : {};
+const sessions = loadDemoSessions();
 const sb =
   client && Object.keys(sessions).length > 0
     ? asDemoSupabase(client as unknown as DemoSessionClient, sessions)
