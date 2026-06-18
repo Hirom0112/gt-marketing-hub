@@ -205,6 +205,11 @@ interface DealViewProps {
   // leave the active board). DealView POSTs the event itself and re-fetches its own
   // deal_view; this is purely the board-refresh signal. Optional (standalone-safe).
   onChanged?: () => void;
+  // The lens (A-35; the founder's "they do not need all that"). 'rep' cuts the
+  // admin/CRM-ops chrome — Seed-to-HubSpot, the CRM seam badge, the seam-status and
+  // marketing-attribution fields — keeping only the close essentials (why-stalled,
+  // the conversion/close signal, the rep's log-outcome + dismiss). Default 'admin'.
+  variant?: 'admin' | 'rep';
 }
 
 // The structured 'log a call outcome' taxonomy (mirrors the backend
@@ -593,7 +598,10 @@ export default function DealView({
   dismissReasons,
   onDismiss,
   onChanged,
+  variant = 'admin',
 }: DealViewProps): JSX.Element {
+  // The rep lens hides the admin/CRM-ops chrome (A-35).
+  const repView = variant === 'rep';
   const [state, setState] = useState<LoadState>({ status: 'loading' });
   const [seed, setSeed] = useState<SeedState>({ status: 'idle' });
   // The "Dismiss this family" reason picker (closed by default).
@@ -1026,24 +1034,31 @@ export default function DealView({
           score={deal.conversion_score ?? null}
           topFactorLabel={deal.conversion_top_factor_label ?? null}
         />
-        <DealField
-          label="Attribution source"
-          value={deal.attribution_source}
-          testId="deal-attribution"
-        />
-        <SeamField
-          status={
-            seed.status === 'captured'
-              ? seed.data.seam_status
-              : deal.crm_seam_status
-          }
-        />
+        {/* Attribution + CRM seam are admin/marketing chrome — hidden for the rep
+            lens (A-35: a rep closes deals, they don't reconcile the CRM seam). */}
+        {!repView && (
+          <DealField
+            label="Attribution source"
+            value={deal.attribution_source}
+            testId="deal-attribution"
+          />
+        )}
+        {!repView && (
+          <SeamField
+            status={
+              seed.status === 'captured'
+                ? seed.data.seam_status
+                : deal.crm_seam_status
+            }
+          />
+        )}
       </dl>
 
       {/* CRM seam indicator (S14 W4) — surfaces the HubSpot kill switch / CRM mode
           so the operator can SEE the seam state and the live-push fails closed when
-          the kill switch is on (INV-3 pattern; INV-8). NO secret is shown. */}
-      <CrmSeamBadge crm={crm} />
+          the kill switch is on (INV-3 pattern; INV-8). NO secret is shown. Admin
+          chrome — hidden for the rep lens (A-35). */}
+      {!repView && <CrmSeamBadge crm={crm} />}
 
       {/* "Seed to HubSpot" (S10 W3) — push this synthetic family live into the
           real portal, then surface the captured Deal + Contact ids as deep links.
@@ -1059,37 +1074,43 @@ export default function DealView({
           flexWrap: 'wrap',
         }}
       >
-        <Button
-          variant="primary"
-          icon={UploadCloud}
-          data-testid="seed-hubspot"
-          onClick={seedToHubSpot}
-          disabled={seed.status === 'seeding' || killSwitchOn}
-          title={
-            killSwitchOn
-              ? 'HubSpot kill switch is ON — live sync is disabled (INV-8). Clear HUBSPOT_KILL_SWITCH to re-enable.'
-              : undefined
-          }
-        >
-          {seed.status === 'seeding' ? 'Seeding…' : 'Seed to HubSpot'}
-        </Button>
-        {killSwitchOn && (
-          <span
-            data-testid="seed-kill-switch-note"
-            role="status"
-            style={{ fontSize: 'var(--fs-sm)', color: 'var(--signal-ink)' }}
-          >
-            Kill switch ON — live sync disabled
-          </span>
-        )}
-        {seed.status === 'error' && (
-          <span
-            data-testid="seed-error"
-            role="alert"
-            style={{ fontSize: 'var(--fs-sm)', color: 'var(--signal-ink)' }}
-          >
-            {seed.message}
-          </span>
+        {/* Seed-to-HubSpot is an admin/CRM-ops action — hidden for the rep lens
+            (A-35); the rep's actions (dismiss + log-outcome) stay. */}
+        {!repView && (
+          <>
+            <Button
+              variant="primary"
+              icon={UploadCloud}
+              data-testid="seed-hubspot"
+              onClick={seedToHubSpot}
+              disabled={seed.status === 'seeding' || killSwitchOn}
+              title={
+                killSwitchOn
+                  ? 'HubSpot kill switch is ON — live sync is disabled (INV-8). Clear HUBSPOT_KILL_SWITCH to re-enable.'
+                  : undefined
+              }
+            >
+              {seed.status === 'seeding' ? 'Seeding…' : 'Seed to HubSpot'}
+            </Button>
+            {killSwitchOn && (
+              <span
+                data-testid="seed-kill-switch-note"
+                role="status"
+                style={{ fontSize: 'var(--fs-sm)', color: 'var(--signal-ink)' }}
+              >
+                Kill switch ON — live sync disabled
+              </span>
+            )}
+            {seed.status === 'error' && (
+              <span
+                data-testid="seed-error"
+                role="alert"
+                style={{ fontSize: 'var(--fs-sm)', color: 'var(--signal-ink)' }}
+              >
+                {seed.message}
+              </span>
+            )}
+          </>
         )}
         {/* Dismiss this family (S12 W4; A-19) — an audited remove from the active
             board. The WRITE is the parent's (one route); this only opens the
@@ -1173,7 +1194,9 @@ export default function DealView({
           </div>
         )}
 
-      {seed.status === 'captured' && <CapturePanel data={seed.data} />}
+      {!repView && seed.status === 'captured' && (
+        <CapturePanel data={seed.data} />
+      )}
 
       {/* Rep close-loop (A-35) — "log a call outcome" + the confirm-presumed-lost
           gate. Hidden once a family is closed out (won/dismissed/lost/dormant): no

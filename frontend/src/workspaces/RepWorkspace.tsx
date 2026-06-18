@@ -360,6 +360,7 @@ export default function RepWorkspace(): JSX.Element {
           dismissReasons={DISMISS_REASONS}
           onDismiss={dismissOne}
           onChanged={handleActionApproved}
+          variant="rep"
         />
         <div className="work-panel-rule" aria-hidden />
         <ActionPanel

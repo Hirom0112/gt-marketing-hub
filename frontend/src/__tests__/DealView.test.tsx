@@ -607,6 +607,45 @@ describe('DealView — rep close-loop write UI', () => {
 });
 
 // --------------------------------------------------------------------------- #
+// Rep variant (A-35; the founder's "they do not need all that"). variant="rep"
+// cuts the admin/CRM-ops chrome from the deal panel — Seed-to-HubSpot, the CRM
+// seam badge, the seam-status field, and the marketing attribution field — while
+// keeping the close essentials (why-stalled, the conversion/close signal, and the
+// rep's own log-outcome + dismiss actions). The default (admin) keeps everything.
+// --------------------------------------------------------------------------- #
+
+describe('DealView — rep variant chrome cut', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+
+  it('rep variant hides admin/CRM chrome but keeps the close essentials', async () => {
+    vi.stubGlobal('fetch', closeLoopFetch('stalled'));
+    render(<DealView familyId="fam-123" variant="rep" />);
+
+    await screen.findByTestId('deal-recovery-state');
+    // Admin / CRM-ops chrome is gone for the rep.
+    expect(screen.queryByTestId('seed-hubspot')).toBeNull();
+    expect(screen.queryByTestId('deal-attribution')).toBeNull();
+    expect(screen.queryByTestId('deal-seam-status')).toBeNull();
+    // The close essentials remain — including the rep's own log-outcome action.
+    expect(screen.getByTestId('deal-stall-reason')).toBeInTheDocument();
+    expect(screen.getByTestId('deal-conversion')).toBeInTheDocument();
+    expect(screen.getByTestId('deal-outcome-submit')).toBeInTheDocument();
+  });
+
+  it('default (admin) variant keeps the seam status, attribution, and seed action', async () => {
+    mockFetch(ENROLLED_PAYLOAD);
+    render(<DealView familyId="fam-123" />);
+
+    expect(await screen.findByTestId('deal-seam-status')).toBeInTheDocument();
+    expect(screen.getByTestId('deal-attribution')).toBeInTheDocument();
+    expect(screen.getByTestId('seed-hubspot')).toBeInTheDocument();
+  });
+});
+
+// --------------------------------------------------------------------------- #
 // S14 W4 — CRM seam badge + live-push kill switch. The deal view reads GET
 // /crm/status and FAILS CLOSED (INV-3 pattern; INV-8): a positive kill_switch
 // disables the "Seed to HubSpot" live-push and shows the operator a reason. An
