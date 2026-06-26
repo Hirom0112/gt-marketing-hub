@@ -24,6 +24,7 @@ from app.api.geo import router as geo_router
 from app.api.marketing import router as marketing_router
 from app.api.merge import router as merge_router
 from app.api.notes import router as notes_router
+from app.api.payments import router as payments_router
 from app.api.publish import router as publish_router
 from app.api.scoreboard import router as scoreboard_router
 from app.api.seam import router as seam_router
@@ -119,6 +120,14 @@ app.include_router(enrollment_router)
 # TEFA math + the §5.4 funding-state machine; the signal is GT-controlled (INV-10),
 # never an Odyssey API.
 app.include_router(funding_router)
+
+# Stripe webhook (A3; PLAN_v2 §A3; RESEARCH_v2 §II.2) — /payments/webhook POST. Reads
+# the RAW body, verifies the Stripe-Signature (forged/expired ⇒ 400, never a 2xx),
+# dedupes on event.id, runs the deterministic decision, and on FULFILL records the
+# payment + advances the GT funding signal one legal §5.4 step (INV-10 — the receipt IS
+# the GT-controlled signal; never written from the payload), logging each (NFR-6).
+# Dispatch/verify is simulated v1 (INV-9); a fast 2xx in every processed case.
+app.include_router(payments_router)
 
 # Supabase↔HubSpot seam (FR-1.3/2.6; ARCH §4.7/§6) — /seam GET +
 # /seam/{id}/reconcile POST. The reconcile is human-gated and LOGGED (NFR-6); a
