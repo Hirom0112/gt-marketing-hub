@@ -21,7 +21,7 @@ the build (CLAUDE.md §4.1). ``now`` is INJECTED — the pure core never calls
 from __future__ import annotations
 
 import math
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from app.core.crm_sync import (
@@ -34,8 +34,6 @@ from app.core.params import load_params
 
 # The committed example file is the authoritative source for these tests.
 EXAMPLE_PARAMS = Path(__file__).resolve().parents[3] / "params" / "params.example.yaml"
-
-UTC = timezone.utc
 
 
 def test_watermark_advances_and_chunks_past_cap() -> None:
@@ -85,7 +83,7 @@ def test_watermark_advances_and_chunks_past_cap() -> None:
     assert windows[-1].end == now
     for w in windows:
         assert w.start < w.end  # every window is forward in time
-    for prev, nxt in zip(windows, windows[1:], strict=True):
+    for prev, nxt in zip(windows[:-1], windows[1:], strict=True):
         assert prev.end == nxt.start  # contiguous, no gap, no overlap
 
     # No single sub-window exceeds chunk_days (so no query risks the 10k cap).

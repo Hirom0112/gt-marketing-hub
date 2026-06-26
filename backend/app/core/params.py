@@ -940,6 +940,41 @@ class Crm(_StrictModel):
         return self
 
 
+class CrmSync(_StrictModel):
+    """A2 CRM-as-truth incremental-poll tunables (RESEARCH_v2 §II.1; INV-11).
+
+    The single canonical home for the CRM Search incremental poll's magic
+    numbers — the pure planner (``core/crm_sync.py``) and the poller read them
+    here, never a code literal:
+
+    * ``page_size`` — the CRM Search page size; HubSpot caps a page at 200
+      (RESEARCH_v2 §II.1), so a value above 200 is config drift and fails to load.
+    * ``result_cap`` — the 10,000-result cap per query; the window-chunking exists
+      precisely so no single query approaches it.
+    * ``chunk_days`` — the per-sub-window span (whole days) the [watermark, now]
+      window is split into so one query stays under ``result_cap``.
+    * ``search_qps`` — the CRM Search request-rate budget (queries/sec) the poller
+      throttles to (HubSpot Search is more rate-limited than other CRM reads).
+    """
+
+    page_size: int
+    result_cap: int
+    chunk_days: int
+    search_qps: int
+
+    @model_validator(mode="after")
+    def _bounds_valid(self) -> CrmSync:
+        if not 1 <= self.page_size <= 200:
+            raise ValueError(
+                f"crm_sync.page_size must be 1..200 (HubSpot page max), got {self.page_size!r}"
+            )
+        for name in ("result_cap", "chunk_days", "search_qps"):
+            value = getattr(self, name)
+            if value < 1:
+                raise ValueError(f"crm_sync.{name} must be >= 1, got {value!r}")
+        return self
+
+
 class Security(_StrictModel):
     """M7 security/observability detection thresholds (MULTI_AGENT_COCKPIT §7; INV-11).
 
@@ -1196,6 +1231,7 @@ class Params(_StrictModel):
     kpi: Kpi
     scheduler: Scheduler
     crm: Crm
+    crm_sync: CrmSync
     security: Security
 
 

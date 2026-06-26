@@ -374,6 +374,12 @@ crm:                        # S10 — HubSpot CRM seam (ANALYSIS/hubspot-complem
     object_type: "p_gt_social_post"
     id_property: gt_synthetic_id
 
+crm_sync:                   # A2 — CRM-as-truth incremental poll tunables (RESEARCH_v2 §II.1; INV-11)
+  page_size: 200                    # CRM Search page max (HubSpot caps a page at 200)
+  result_cap: 10000                 # 10,000-result cap per query — window-chunking keeps any one query under it
+  chunk_days: 30                    # per-sub-window span (days) the [watermark, now] window splits into
+  search_qps: 4                     # CRM Search request-rate budget (queries/sec) the poller throttles to
+
 security:                   # M7 — detection thresholds for the edge middleware (MULTI_AGENT_COCKPIT §7; INV-11). DETECTION, not inline blocking.
   oversized_result_rows: 200        # a list response at/above this many rows ⇒ oversized_result (API4:2023 Unrestricted Resource Consumption)
   auth_failure_burst: 5             # at/above this many 401/403 from one actor within the window ⇒ auth_failure_burst (A07:2021 Identification & Auth Failures)
