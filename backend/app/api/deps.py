@@ -42,6 +42,11 @@ from app.data.repository import (
     OwnerScope,
 )
 from app.data.supabase_repository import build_supabase_repository
+from app.data.watermark_store import (
+    InMemoryWatermarkStore,
+    WatermarkStore,
+    build_supabase_watermark_store,
+)
 from app.evals.suite import EvalSuiteResult
 from app.marketing.library import ContentLibrary, SqliteContentLibrary
 from app.observability.log_store import InMemoryObservabilityLog, ObservabilityLog
@@ -199,6 +204,39 @@ _params: Params = _load_params_with_fallback()
 # cohort; ``COCKPIT_SCENARIO=back_to_school`` swaps the volume cohort (A-21).
 # Production swaps this for a Supabase-backed FamilyRepository.
 _repository: FamilyRepository = _build_repository(_params)
+
+
+def _build_watermark_store() -> WatermarkStore:
+    """Bind the A2 CRM-poll watermark store, MIRRORING ``_build_repository``'s mode.
+
+    The same ``COCKPIT_REPO`` / ``SUPABASE_URL`` selection as the family store, so
+    the two never disagree on which backend is live:
+
+    - ``synthetic`` ⇒ FORCE the in-memory store (never Supabase).
+    - ``supabase`` ⇒ REQUIRE the live store; a missing ``SUPABASE_URL`` is a
+      misconfig ⇒ raise (fail loud, the family-store posture).
+    - ``auto`` (default) ⇒ Supabase when ``SUPABASE_URL`` is configured, else the
+      in-memory v1 fallback (A-3).
+    """
+    repo_mode = Settings.from_env().cockpit_repo
+    if repo_mode == "synthetic":
+        return InMemoryWatermarkStore()
+    if repo_mode == "supabase":
+        supabase = build_supabase_watermark_store()
+        if supabase is None:
+            raise RuntimeError(
+                "COCKPIT_REPO=supabase requires SUPABASE_URL (+ "
+                "SUPABASE_SERVICE_ROLE_KEY) for the CRM-sync watermark store; none "
+                "was configured. Set them, or use COCKPIT_REPO=synthetic / auto."
+            )
+        return supabase
+    return build_supabase_watermark_store() or InMemoryWatermarkStore()
+
+
+# Singleton CRM-poll watermark store (A2) — the durable per-program incremental-poll
+# state behind the same NFR-8 seam as ``_repository``. Default v1 = in-memory (A-3);
+# production swaps the Supabase-backed impl over the 0025 table.
+_watermark_store: WatermarkStore = _build_watermark_store()
 
 # Singleton env snapshot, read once at import (TECH_STACK §5; INV-11). Tests that
 # need a different env override `get_settings_dep`; named so it never clashes with
@@ -499,6 +537,11 @@ _brand_rules: list[BrandRule] = _build_brand_rules()
 def get_repository() -> FamilyRepository:
     """FastAPI dependency yielding the active repository (the store seam)."""
     return _repository
+
+
+def get_watermark_store() -> WatermarkStore:
+    """FastAPI dependency yielding the active CRM-poll watermark store (A2 seam)."""
+    return _watermark_store
 
 
 # ===========================================================================
