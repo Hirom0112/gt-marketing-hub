@@ -9,12 +9,13 @@ Going to production = rebinding :data:`_repository` to a Supabase-backed impl
 
 from __future__ import annotations
 
-from datetime import timedelta
+from collections.abc import Callable
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Annotated, Literal
 from uuid import UUID
 
-from fastapi import Header
+from fastapi import Depends, Header, HTTPException
 from pydantic import BaseModel
 
 from app.adapters import registry
@@ -30,6 +31,7 @@ from app.adapters.social.base import SocialAdapter
 from app.ai.client import AnthropicLLMClient, LLMClient
 from app.ai.schemas.brand import BrandRule
 from app.core.eval_gate import BrandJudge
+from app.core.jwt_verify import JwtError, verify_hs256
 from app.core.params import Params, load_params
 from app.core.program import Program, resolve_program
 from app.core.sales_agents import lookup as lookup_sales_agent
@@ -732,6 +734,121 @@ def get_active_program() -> Program:
     once the app connects via the non-``BYPASSRLS`` ``app_runtime`` role (A-38).
     """
     return _active_program
+
+
+# ===========================================================================
+# B1 verified-identity principal — the SIGNED successor to the demo principal.
+# This REPLACES the spoofable X-Demo-Role header (the security audit's top
+# finding, S1). The role is taken ONLY from the verified JWT's `app_metadata`
+# (server-controlled in Supabase), NEVER `user_metadata` (client-writable;
+# RESEARCH_v2 §II.5). Default-deny on any missing/forged/expired token. This unit
+# is ADDITIVE — get_demo_principal/DemoPrincipal stay live; T4b migrates consumers.
+# ===========================================================================
+
+# The three verified roles (mirrors the 0027_rbac.sql `app_role` enum +
+# params.rbac.roles): `admin` (full), `leader` (cross-agent leadership view),
+# `operator` (a single rep scoped to its own book). The wire spelling of the
+# verified `app_metadata.role` claim — named constants, not tunables (INV-11).
+Role = Literal["admin", "leader", "operator"]
+
+
+class Principal(BaseModel):
+    """The VERIFIED principal — derived from a signed Supabase JWT (B1; S1 fix).
+
+    ``role`` is the trusted authority (from ``app_metadata.role`` ONLY). ``user_id``
+    is the JWT ``sub`` (the auth user). ``agent_id`` is the operator's rep id (from
+    ``app_metadata.agent_id``; ``None`` for admin/leader). ``tier`` is the operator's
+    closer/setter tier (resolved via the sales-agent registry; ``None`` otherwise).
+    Like :class:`DemoPrincipal` it carries NO db-role/service_role field — scoping is
+    app-layer, never an RLS-bypass DB role (D-RLS-4).
+    """
+
+    role: Role
+    user_id: UUID | None = None
+    agent_id: UUID | None = None
+    tier: str | None = None
+
+
+def _parse_uuid(value: object) -> UUID | None:
+    """Parse a JWT claim into a UUID, or ``None`` when absent/malformed (fail-soft id)."""
+    if not isinstance(value, str):
+        return None
+    try:
+        return UUID(value.strip())
+    except ValueError:
+        return None
+
+
+def get_principal(
+    settings: Annotated[Settings, Depends(get_settings_dep)],
+    authorization: Annotated[str | None, Header(alias="Authorization")] = None,
+) -> Principal:
+    """Resolve the VERIFIED principal from a signed ``Authorization: Bearer`` JWT (B1).
+
+    Default-DENY at every step — the S1 fix (no more default-admin from a spoofable
+    header):
+
+    - No configured ``supabase_jwt_secret`` ⇒ **401** (fail closed; NEVER
+      default-allow when the verifying secret is absent).
+    - Missing/blank Authorization header, a non-``Bearer`` scheme, or a
+      forged/tampered/expired/malformed token ⇒ **401**.
+    - A VALID, unexpired token whose role is absent from ``app_metadata`` (e.g.
+      present only in the client-writable ``user_metadata``) or is not one of the
+      three roles ⇒ **403** (a real identity, but no trusted authority).
+
+    On success it maps the JWT ``sub`` → ``user_id``, ``app_metadata.agent_id`` →
+    ``agent_id`` (operators), and resolves an operator's ``tier`` via the static
+    sales-agent registry (mirroring how :func:`get_demo_principal` does tier). The
+    verifier is the stdlib HS256 check; ``now`` is injected here (the core stays
+    clock-free). NEVER reads/sets ``service_role`` (D-RLS-4).
+    """
+    if settings.supabase_jwt_secret is None:
+        # Fail closed: no verifying secret ⇒ no token can be trusted (never allow).
+        raise HTTPException(status_code=401, detail="JWT verification is not configured")
+    if not authorization or not authorization.strip():
+        raise HTTPException(status_code=401, detail="missing bearer token")
+    scheme, _, token = authorization.strip().partition(" ")
+    if scheme.lower() != "bearer" or not token.strip():
+        raise HTTPException(status_code=401, detail="malformed Authorization header")
+
+    now = int(datetime.now(UTC).timestamp())
+    try:
+        claims = verify_hs256(token.strip(), secret=settings.supabase_jwt_secret, now=now)
+    except JwtError as exc:
+        raise HTTPException(status_code=401, detail="invalid or expired token") from exc
+
+    # Trust the role ONLY from app_metadata (server-controlled). A role in
+    # user_metadata (client-writable) is IGNORED ⇒ default-deny (403).
+    app_metadata = claims.get("app_metadata")
+    raw_role = app_metadata.get("role") if isinstance(app_metadata, dict) else None
+    if raw_role not in ("admin", "leader", "operator"):
+        raise HTTPException(status_code=403, detail="no trusted role in app_metadata")
+    role: Role = raw_role  # narrowed to the Role literal by the membership check above
+
+    user_id = _parse_uuid(claims.get("sub"))
+    agent_id = _parse_uuid(app_metadata.get("agent_id")) if isinstance(app_metadata, dict) else None
+    tier: str | None = None
+    if role == "operator" and agent_id is not None:
+        agent = lookup_sales_agent(agent_id)
+        tier = agent.tier if agent is not None else None
+    return Principal(role=role, user_id=user_id, agent_id=agent_id, tier=tier)
+
+
+def require_role(*roles: Role) -> Callable[[Principal], Principal]:
+    """Dependency FACTORY: gate a route on the verified principal's role (B1).
+
+    Returns a FastAPI dependency that resolves the verified :class:`Principal` (via
+    :func:`get_principal`) and raises ``HTTPException(403)`` unless its role is one
+    of ``roles``. (B2's leader-gated routes consume this.) A 401 from
+    :func:`get_principal` (no/forged/expired token) propagates unchanged.
+    """
+
+    def dependency(principal: Annotated[Principal, Depends(get_principal)]) -> Principal:
+        if principal.role not in roles:
+            raise HTTPException(status_code=403, detail="role not permitted for this resource")
+        return principal
+
+    return dependency
 
 
 # Singleton security-event feed (M7 Panel B) — the append-only suspicious-signal

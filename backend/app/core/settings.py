@@ -140,6 +140,15 @@ class Settings(BaseModel):
     # the migration backfill (`Program.FALL_ENROLLMENT`); no magic literal (INV-11).
     gt_program_id: str = Program.FALL_ENROLLMENT.value
 
+    # Supabase JWT signing secret (§5.2). The HS256 shared secret Supabase signs
+    # its end-user JWTs with; the API verifies the ``Authorization: Bearer`` token
+    # against it (``app.core.jwt_verify.verify_hs256``) to derive the VERIFIED
+    # principal from ``app_metadata.role`` — the replacement for the spoofable
+    # ``X-Demo-Role`` header (S1). Defaults to ``None`` — absence is first-class and
+    # fails closed: with no secret, JWT auth cannot validate any token (401), it
+    # NEVER default-allows. Server-side only — never shipped to the client.
+    supabase_jwt_secret: str | None = None
+
     # HubSpot live-adapter config (§5.4). The token defaults to ``None`` —
     # absence is a first-class state: with no token the CRM edge can only run
     # `simulate` (the adapter agent's registry fails loud on `live` w/o a token).
@@ -222,6 +231,15 @@ class Settings(BaseModel):
         if not gt_program_id or gt_program_id.startswith("<"):
             gt_program_id = Program.FALL_ENROLLMENT.value
 
+        # SUPABASE_JWT_SECRET: the HS256 verifying secret; a placeholder/sentinel
+        # (the .env.example angle-bracket form or an empty string) counts as "unset"
+        # ⇒ None ⇒ JWT auth fails closed (401). Same posture as ANTHROPIC_API_KEY.
+        jwt_secret = os.environ.get("SUPABASE_JWT_SECRET")
+        if jwt_secret is not None and (
+            jwt_secret.strip() == "" or jwt_secret.strip().startswith("<")
+        ):
+            jwt_secret = None
+
         # A placeholder/sentinel token (the .env.example angle-bracket form or an
         # empty string) counts as "unset" — same posture as ANTHROPIC_API_KEY.
         hs_token = os.environ.get("HUBSPOT_PRIVATE_APP_TOKEN")
@@ -286,6 +304,7 @@ class Settings(BaseModel):
             stripe_calls_per_run_cap=stripe_calls_per_run_cap,
             cockpit_repo=cockpit_repo,  # type: ignore[arg-type]
             gt_program_id=gt_program_id,
+            supabase_jwt_secret=jwt_secret,
             hubspot_private_app_token=hs_token,
             hubspot_calls_per_run_cap=_env_int("HUBSPOT_CALLS_PER_RUN_CAP", 200),
             hubspot_kill_switch=_env_bool("HUBSPOT_KILL_SWITCH", False),
