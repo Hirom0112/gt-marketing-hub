@@ -35,9 +35,9 @@ from app.core.seam import MirrorState
 from app.data.models import FamilyRecord, Stage
 
 
-def _family() -> FamilyRecord:
+def _family(*, updated_at: datetime | None = None) -> FamilyRecord:
     """A minimal valid family record for push/read happy-paths."""
-    now = datetime(2026, 1, 2, tzinfo=UTC)
+    now = updated_at or datetime(2026, 1, 2, tzinfo=UTC)
     return FamilyRecord(
         family_id=uuid4(),
         display_name="Synthetic Household",
@@ -121,6 +121,28 @@ def test_read_mirror_returns_seam_mirrorstate(monkeypatch: pytest.MonkeyPatch) -
     mirror = adapter.read_mirror(record.family_id)
     assert isinstance(mirror, MirrorState)
     assert mirror.stage == record.current_stage
+
+
+def test_simulated_search_modified_since_filters_and_sorts() -> None:
+    """A2 twin: search_modified_since returns mirrors modified strictly after the
+    watermark, ascending — reconstructed purely from the in-memory recorder (INV-9).
+    """
+    adapter = SimulatedCRMAdapter()
+    before = _family(updated_at=datetime(2026, 1, 1, tzinfo=UTC))
+    # Two families AFTER the watermark, recorded newest-first so the sort is load-bearing.
+    later = _family(updated_at=datetime(2026, 1, 10, tzinfo=UTC))
+    earlier = _family(updated_at=datetime(2026, 1, 5, tzinfo=UTC))
+    adapter.push_family(before)
+    adapter.push_family(later)
+    adapter.push_family(earlier)
+
+    watermark_ms = int(datetime(2026, 1, 3, tzinfo=UTC).timestamp() * 1000)
+    records = adapter.search_modified_since("deals", watermark_ms)
+
+    # Only the two strictly-after the watermark, ascending by modified-at.
+    assert [fid for fid, _ in records] == [earlier.family_id, later.family_id]
+    assert all(isinstance(mirror, MirrorState) for _, mirror in records)
+    assert before.family_id not in {fid for fid, _ in records}
 
 
 # A-24 — per-child push (one application per child ⇒ one per-child CRM object).

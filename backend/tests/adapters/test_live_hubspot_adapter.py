@@ -608,6 +608,108 @@ def test_read_mirror_unmapped_stage_does_not_crash() -> None:
 
 
 # ===========================================================================
+# search_modified_since — the CRM-as-truth incremental pull (A2)
+# ===========================================================================
+
+
+def test_search_modified_since_filters_and_sorts() -> None:
+    """A2: search_modified_since issues the grounded HubSpot CRM-Search incremental pull.
+
+    Asserts the OUTBOUND request shape (RESEARCH_v2 §II.1):
+
+    - POST ``/crm/v3/objects/{obj}/search``;
+    - filter ``hs_lastmodifieddate`` ``GT`` <watermark-epoch-ms> (the modified
+      timestamp, strictly-after);
+    - exactly ONE sort, ``hs_lastmodifieddate`` ASCENDING (HubSpot rejects >1);
+    - pagination follows ``paging.next.after`` across two mocked pages then stops;
+
+    and that the returned records reflect BOTH pages, ascending. Every call rides
+    the guard-3 per-run budget (it goes through ``_request``).
+    """
+    crm = _crm()
+    watermark_ms = 1_700_000_000_000
+    captured: list[dict[str, Any]] = []
+    fam1, fam2 = uuid4(), uuid4()
+
+    page1 = {
+        "results": [
+            {
+                "id": "deal-1",
+                "properties": {
+                    "gt_synthetic_id": str(fam1),
+                    "dealstage": crm.stage_map["apply"],
+                    "hs_lastmodifieddate": "2026-01-02T00:00:00Z",
+                    # PII the firewall must drop — never requested, never surfaced.
+                    "_pii_probe_name": "Margaret Realparent",
+                },
+            }
+        ],
+        "paging": {"next": {"after": "200"}},
+    }
+    page2 = {
+        "results": [
+            {
+                "id": "deal-2",
+                "properties": {
+                    "gt_synthetic_id": str(fam2),
+                    "dealstage": crm.stage_map["enroll"],
+                    "hs_lastmodifieddate": "2026-01-03T00:00:00Z",
+                },
+            }
+        ],
+        # No paging.next.after ⇒ the loop stops after this page.
+    }
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/crm/v3/objects/deals/search"
+        body: dict[str, Any] = json.loads(request.content)
+        captured.append(body)
+        return httpx.Response(200, json=page1 if body.get("after") is None else page2)
+
+    client = httpx.Client(
+        transport=httpx.MockTransport(handler), base_url="https://api.hubapi.com"
+    )
+    adapter = LiveHubSpotCRMAdapter(
+        client=client,
+        token=_TOKEN,
+        crm=crm,
+        award_amounts=_award_amounts(),
+        calls_per_run_cap=200,
+    )
+
+    records = adapter.search_modified_since("deals", watermark_ms)
+
+    # --- two pages were fetched (paging.next.after followed, then stopped) ---
+    assert len(captured) == 2, "expected exactly two paged search requests"
+    first = captured[0]
+
+    # --- the filter: hs_lastmodifieddate GT <watermark-epoch-ms> ---
+    filters = first["filterGroups"][0]["filters"]
+    assert len(filters) == 1
+    assert filters[0]["propertyName"] == "hs_lastmodifieddate"
+    assert filters[0]["operator"] == "GT"
+    assert str(filters[0]["value"]) == str(watermark_ms)
+
+    # --- exactly ONE sort, hs_lastmodifieddate ASCENDING (HubSpot rejects >1) ---
+    assert first["sorts"] == [
+        {"propertyName": "hs_lastmodifieddate", "direction": "ASCENDING"}
+    ]
+
+    # --- page 1 carried no cursor; page 2 carried paging.next.after = "200" ---
+    assert first.get("after") is None
+    assert captured[1].get("after") == "200"
+
+    # --- guard 2: only PII-free tracked scalars were requested ---
+    assert "_pii_probe_name" not in first.get("properties", [])
+
+    # --- the returned records reflect BOTH pages, ascending by modified-at ---
+    assert len(records) == 2
+    assert [fid for fid, _ in records] == [fam1, fam2]
+    assert [mirror.stage for _, mirror in records] == [Stage.APPLY, Stage.ENROLL]
+    assert "Margaret Realparent" not in repr(records)
+
+
+# ===========================================================================
 # GUARD 3 — cap + kill-switch (INV-8): passing + BLOCKING
 # ===========================================================================
 
