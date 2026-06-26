@@ -25,15 +25,24 @@ from typing import Annotated
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 
+from app.adapters.hubspot.crm_adapter import CRMAdapter
 from app.adapters.registry import effective_crm_mode
-from app.api.deps import get_settings_dep
+from app.api.deps import get_params, get_repository, get_seam_crm_adapter_dep, get_settings_dep
+from app.core.params import Params
+from app.core.parity import compute_parity
 from app.core.settings import CrmMode, Settings
+from app.data.repository import FamilyRepository
 
 router = APIRouter(tags=["crm"])
 
-# Dependency alias (Annotated keeps the call in the type — ruff B008; the idiomatic
+# Dependency aliases (Annotated keeps the call in the type — ruff B008; the idiomatic
 # FastAPI style matching app/api/scoreboard.py + app/api/seam.py).
 SettingsDep = Annotated[Settings, Depends(get_settings_dep)]
+RepositoryDep = Annotated[FamilyRepository, Depends(get_repository)]
+# The SAME seam CRM adapter the §4.7 seam endpoints read (R1): its mirror carries
+# real multi-field data, so parity measures DB-vs-real-mirror agreement.
+CRMAdapterDep = Annotated[CRMAdapter, Depends(get_seam_crm_adapter_dep)]
+ParamsDep = Annotated[Params, Depends(get_params)]
 
 
 class CrmStatus(BaseModel):
@@ -50,28 +59,58 @@ class CrmStatus(BaseModel):
     effective_mode: CrmMode
     token_configured: bool
     calls_per_run_cap: int
+    # A4 — the active-program cohort's sync-parity + the data-confidence banner.
+    parity_overall: float
+    parity_by_field: dict[str, float]
+    data_confidence_banner: bool
 
 
 @router.get("/crm/status", response_model=CrmStatus)
-def get_crm_status(settings: SettingsDep) -> CrmStatus:
-    """The effective CRM seam state, no secrets (S14 W4; INV-3/INV-8 surfaced).
+def get_crm_status(
+    settings: SettingsDep,
+    repository: RepositoryDep,
+    crm_adapter: CRMAdapterDep,
+    params: ParamsDep,
+) -> CrmStatus:
+    """The effective CRM seam state + the A4 sync-parity surface, no secrets.
 
-    Derived purely from the §5 env settings: ``crm_mode`` (the configured
-    ``CRM_MODE``), ``kill_switch`` (``HUBSPOT_KILL_SWITCH``), ``effective_mode``
-    (what :func:`app.adapters.registry.effective_crm_mode` — the one canonical
-    precedence, INV-11 — would actually select: ``simulate`` when the kill switch
-    is on even though ``CRM_MODE=live``), ``token_configured`` (a bool — the token
-    is NEVER returned), and ``calls_per_run_cap`` (the INV-8 per-run ceiling).
+    The pure-settings half is unchanged (S14 W4; INV-3/INV-8 surfaced): ``crm_mode``
+    (the configured ``CRM_MODE``), ``kill_switch`` (``HUBSPOT_KILL_SWITCH``),
+    ``effective_mode`` (what :func:`app.adapters.registry.effective_crm_mode` — the
+    one canonical precedence, INV-11 — would actually select: ``simulate`` when the
+    kill switch is on even though ``CRM_MODE=live``), ``token_configured`` (a bool —
+    the token is NEVER returned), and ``calls_per_run_cap`` (the INV-8 per-run
+    ceiling).
+
+    The A4 half computes the active-program cohort's sync-parity
+    (:func:`app.core.parity.compute_parity`) over the SAME ``(record, mirror)``
+    pairing the §4.7 seam endpoints use: every family from
+    ``repository.list_families`` (already program-scoped at the repo layer, A1) paired
+    with the seam CRM adapter's ``read_mirror`` (the seeded simulated mirror in v1, the
+    live portal mirror under ``CRM_MODE=live`` — INV-9). ``parity_overall`` is the
+    fraction of rows fully ``synced``, ``parity_by_field`` the per-tracked-field
+    agreement, and ``data_confidence_banner`` is raised when overall parity drops
+    below ``params.data_confidence.min_parity`` (INV-11 — the single threshold home),
+    so a meaningfully out-of-sync cohort is surfaced rather than silently trusted. The
+    O(n) mirror reads are acknowledged in the PLAN — computed over the program cohort,
+    no caching (YAGNI).
 
     Read-only by design: the kill switch's MECHANISM stays a server env var. This
     endpoint SURFACES state and the frontend fail-closes the live-push action on it;
     it does NOT add a browser-writable kill toggle (flipping a server secret from
     the browser would be unsafe).
     """
+    pairs = [
+        (record, crm_adapter.read_mirror(record.family_id)) for record in repository.list_families()
+    ]
+    parity = compute_parity(pairs)
     return CrmStatus(
         crm_mode=settings.crm_mode,
         kill_switch=settings.hubspot_kill_switch,
         effective_mode=effective_crm_mode(settings),
         token_configured=settings.hubspot_private_app_token is not None,
         calls_per_run_cap=settings.hubspot_calls_per_run_cap,
+        parity_overall=parity.overall,
+        parity_by_field=parity.by_field,
+        data_confidence_banner=parity.overall < params.data_confidence.min_parity,
     )
