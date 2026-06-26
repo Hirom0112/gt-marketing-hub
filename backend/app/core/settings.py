@@ -39,6 +39,12 @@ CrmMode = Literal["simulate", "live"]
 # SIS. Both impls are M5 — M0 ships only the seam, so the registry selector currently
 # fails loud on either value (no impl yet). Separate from the `send_mode` lock.
 SisMode = Literal["simulate", "live"]
+# STRIPE_MODE is the payments boundary seam (A3, INV-9): it selects the
+# PaymentsAdapter impl the fulfillment core reads. v1 default `simulate` (no live
+# Stripe call); `live` selects the production Stripe adapter behind the INV-8 cap
+# + kill switch. Separate from the `send_mode` lock — the payments seam keys on
+# its own var, mirroring CRM_MODE.
+StripeMode = Literal["simulate", "live"]
 # COCKPIT_REPO is the explicit data-source override (TECH_STACK §5.1). It chooses
 # the FamilyRepository the cockpit reads — it does NOT change either repo's
 # behavior (doctrine-neutral). `auto` keeps the A-24 M5 default (SUPABASE_URL set
@@ -146,6 +152,19 @@ class Settings(BaseModel):
     # the CRM edge degrades to the simulated adapter regardless of `crm_mode`.
     hubspot_kill_switch: bool = False
 
+    # Stripe payments seam (§5.4; A3, INV-8/INV-9). `stripe_mode` flips to `live`
+    # independently of the send-mode lock so the cockpit can take real (test-key)
+    # payments behind the cap + kill switch. The secret key + webhook secret
+    # default to ``None`` — absence is first-class: with no key the payments edge
+    # can only run `simulate`. `stripe_calls_per_run_cap` is an OPTIONAL env
+    # override of the params cap (mirrors HubSpot's cap posture); ``None`` ⇒ use
+    # the params value. `stripe_kill_switch` disables all live Stripe calls (INV-8).
+    stripe_mode: StripeMode = "simulate"
+    stripe_secret_key: str | None = None
+    stripe_webhook_secret: str | None = None
+    stripe_kill_switch: bool = False
+    stripe_calls_per_run_cap: int | None = None
+
     # Browser origins allowed to call the API (CORS; §5.1). The React app runs on
     # a separate origin (Vite dev server / built host) so it must be allow-listed
     # explicitly — never `*`, which would let any site call the API. Defaults to
@@ -186,6 +205,7 @@ class Settings(BaseModel):
         social_mode = os.environ.get("SOCIAL_POST_MODE", "simulate").strip() or "simulate"
         crm_mode = os.environ.get("CRM_MODE", "simulate").strip() or "simulate"
         sis_mode = os.environ.get("SIS_MODE", "simulate").strip() or "simulate"
+        stripe_mode = os.environ.get("STRIPE_MODE", "simulate").strip() or "simulate"
 
         # COCKPIT_REPO: lower-cased; empty / unset / a `<…>` sentinel ⇒ `auto` (the
         # current behavior). Any other value flows through to pydantic, which
@@ -207,6 +227,30 @@ class Settings(BaseModel):
         hs_token = os.environ.get("HUBSPOT_PRIVATE_APP_TOKEN")
         if hs_token is not None and (hs_token.strip() == "" or hs_token.strip().startswith("<")):
             hs_token = None
+
+        # Stripe secret key + webhook secret: a placeholder/sentinel (the
+        # .env.example angle-bracket form or an empty string) counts as "unset" —
+        # same first-class-absence posture as ANTHROPIC_API_KEY / the HubSpot token.
+        stripe_key = os.environ.get("STRIPE_SECRET_KEY")
+        if stripe_key is not None and (
+            stripe_key.strip() == "" or stripe_key.strip().startswith("<")
+        ):
+            stripe_key = None
+        stripe_webhook_secret = os.environ.get("STRIPE_WEBHOOK_SECRET")
+        if stripe_webhook_secret is not None and (
+            stripe_webhook_secret.strip() == "" or stripe_webhook_secret.strip().startswith("<")
+        ):
+            stripe_webhook_secret = None
+
+        # STRIPE_CALLS_PER_RUN_CAP: an OPTIONAL env override of the params cap;
+        # empty / unset ⇒ None ⇒ the params value is used (mirrors HubSpot's cap
+        # posture but defaults to deferring to params rather than a hardcoded int).
+        stripe_cap_raw = os.environ.get("STRIPE_CALLS_PER_RUN_CAP")
+        stripe_calls_per_run_cap = (
+            int(stripe_cap_raw)
+            if stripe_cap_raw is not None and stripe_cap_raw.strip() != ""
+            else None
+        )
 
         # The posted-catalog root: empty / unset / a `<…>` sentinel ⇒ None (fall back to
         # the library gallery + skip the static media mount). Same posture as the secrets.
@@ -235,6 +279,11 @@ class Settings(BaseModel):
             social_post_mode=social_mode,  # type: ignore[arg-type]
             crm_mode=crm_mode,  # type: ignore[arg-type]
             sis_mode=sis_mode,  # type: ignore[arg-type]
+            stripe_mode=stripe_mode,  # type: ignore[arg-type]
+            stripe_secret_key=stripe_key,
+            stripe_webhook_secret=stripe_webhook_secret,
+            stripe_kill_switch=_env_bool("STRIPE_KILL_SWITCH", False),
+            stripe_calls_per_run_cap=stripe_calls_per_run_cap,
             cockpit_repo=cockpit_repo,  # type: ignore[arg-type]
             gt_program_id=gt_program_id,
             hubspot_private_app_token=hs_token,

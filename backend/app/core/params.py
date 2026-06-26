@@ -972,6 +972,42 @@ class CrmSync(_StrictModel):
         return self
 
 
+class Stripe(_StrictModel):
+    """A3 Stripe payments seam config (RESEARCH_v2 §II.2; INV-8/INV-11).
+
+    The single canonical home for the Stripe boundary's magic numbers — the pure
+    fulfillment core and the payments adapter read them here, never a code
+    literal:
+
+    * ``calls_per_run_cap`` — the hard per-run ceiling on outbound Stripe API
+      calls (INV-8 guard, mirroring HubSpot's ``hubspot_calls_per_run_cap``): a
+      breach degrades to the simulated adapter rather than a silent overspend.
+    * ``tolerance_seconds`` — the webhook signature timestamp tolerance (Stripe's
+      default 300 = 5 min, RESEARCH_v2 §II.2): a signed event whose timestamp is
+      older than this is rejected as a replay.
+    * ``fulfill_event_types`` — the Stripe event types that trigger fulfillment
+      (e.g. ``checkout.session.completed``); any other event type is ignored.
+    """
+
+    calls_per_run_cap: int
+    tolerance_seconds: int
+    fulfill_event_types: list[str]
+
+    @model_validator(mode="after")
+    def _bounds_valid(self) -> Stripe:
+        if self.calls_per_run_cap < 1:
+            raise ValueError(
+                f"stripe.calls_per_run_cap must be >= 1, got {self.calls_per_run_cap!r}"
+            )
+        if self.tolerance_seconds < 1:
+            raise ValueError(
+                f"stripe.tolerance_seconds must be >= 1, got {self.tolerance_seconds!r}"
+            )
+        if not self.fulfill_event_types:
+            raise ValueError("stripe.fulfill_event_types must be non-empty")
+        return self
+
+
 class Security(_StrictModel):
     """M7 security/observability detection thresholds (MULTI_AGENT_COCKPIT §7; INV-11).
 
@@ -1229,6 +1265,7 @@ class Params(_StrictModel):
     scheduler: Scheduler
     crm: Crm
     crm_sync: CrmSync
+    stripe: Stripe
     security: Security
 
 
