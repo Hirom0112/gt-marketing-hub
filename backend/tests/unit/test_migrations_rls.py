@@ -1039,3 +1039,105 @@ def test_crm_sync_watermark_rls() -> None:
 
     # --- D-RLS-7: no security-definer helper in the exposed schema ---
     assert not _SECURITY_DEFINER.search(sql), "0025 must not use SECURITY DEFINER (D-RLS-7)"
+
+
+# ---------------------------------------------------------------------------
+# 0026 stripe_events + payment (A3) — the Stripe webhook's two APPEND-ONLY,
+# program-scoped tables (built separately; this migration only adds the schema):
+#   * `stripe_events` — the inbound-event DEDUPE LEDGER (idempotency). The webhook
+#     inserts the Stripe `evt_…` id (`event_id text PRIMARY KEY`) and skips an
+#     already-seen event id (RESEARCH_v2 §II.2: log processed event ids, don't
+#     reprocess). Also records event_type, object_id (the rarer two-Event dedupe),
+#     received_at, and the program_id tenancy tag.
+#   * `payment` — the money LEDGER: one row per fulfilled payment (amount_cents,
+#     currency, status), keyed to the source Stripe event_id and the family.
+# Both are NEW CREATE TABLEs that (per the static RLS guard) MUST ENABLE *and*
+# FORCE RLS (D-RLS-1) and carry a null-guarded policy. Following A1/A2 (0024/0025),
+# each carries the `AS RESTRICTIVE` program-isolation policy keyed on the caller's
+# app_metadata.program_id JWT claim AND the `(SELECT auth.uid()) IS NOT NULL` null
+# guard — keeping the global CREATE==ENABLE==FORCE + one-guard-per-policy invariants
+# green (this migration adds +2 tables / +2 ENABLE / +2 FORCE). CRITICAL:
+# APPEND-ONLY — no FOR UPDATE/DELETE policy and no GRANT UPDATE/DELETE on either
+# table (the immutable-once-written posture of 0010/0015). D-RLS-7: no
+# security-definer helper in the exposed schema.
+# ---------------------------------------------------------------------------
+
+
+def _stripe_payments_sql() -> str:
+    """The 0026 stripe_events + payment migration DDL (comments stripped)."""
+    return _strip_comments(
+        (MIGRATIONS_DIR / "0026_stripe_payments.sql").read_text(encoding="utf-8")
+    )
+
+
+def test_stripe_events_and_payment_append_only() -> None:
+    """A3: 0026 adds the append-only, program-scoped stripe_events (event_id PK
+    dedupe ledger) + payment (money ledger) tables — both ENABLE+FORCE RLS, an
+    AS RESTRICTIVE program-isolation policy keyed on app_metadata.program_id with
+    the auth.uid() null guard, GRANT SELECT+INSERT only (no UPDATE/DELETE
+    grant/policy), and no SECURITY DEFINER — keeping the global RLS count
+    invariants green (+2 tables / +2 ENABLE / +2 FORCE).
+    """
+    sql = _stripe_payments_sql()
+
+    # --- both tables created ---
+    assert re.search(r"CREATE\s+TABLE\s+stripe_events\b", sql, re.IGNORECASE), (
+        "0026 must CREATE TABLE stripe_events"
+    )
+    assert re.search(r"CREATE\s+TABLE\s+payment\b", sql, re.IGNORECASE), (
+        "0026 must CREATE TABLE payment"
+    )
+
+    # --- stripe_events.event_id is the dedupe PRIMARY KEY (the Stripe evt_… id) ---
+    assert re.search(r"event_id\s+text\s+PRIMARY\s+KEY", sql, re.IGNORECASE), (
+        "stripe_events must have `event_id text PRIMARY KEY` (the idempotency dedupe key)"
+    )
+
+    # --- both program-scoped (the 0024 tenancy tag) ---
+    for table in ("stripe_events", "payment"):
+        assert re.search(
+            rf"CREATE\s+TABLE\s+{table}\b.*?\bprogram_id\b", sql, re.IGNORECASE | re.DOTALL
+        ), f"{table} must carry a program_id column (program-scoped)"
+
+    # --- both ENABLE + FORCE RLS (D-RLS-1) ---
+    for table in ("stripe_events", "payment"):
+        assert re.search(
+            rf"ALTER\s+TABLE\s+{table}\s+ENABLE\s+ROW\s+LEVEL\s+SECURITY", sql, re.IGNORECASE
+        ), f"0026 must ENABLE RLS on {table} (D-RLS-1)"
+        assert re.search(
+            rf"ALTER\s+TABLE\s+{table}\s+FORCE\s+ROW\s+LEVEL\s+SECURITY", sql, re.IGNORECASE
+        ), f"0026 must FORCE RLS on {table} (owner-role escape hatch, D-RLS-1)"
+
+    # --- each carries an AS RESTRICTIVE program-isolation policy keyed on
+    #     app_metadata.program_id + the auth.uid() null guard (the 0024/0025 pattern) ---
+    for table in ("stripe_events", "payment"):
+        policy = re.search(
+            rf"CREATE\s+POLICY\s+\w+\s+ON\s+{table}\b[^;]*AS\s+RESTRICTIVE[^;]*;",
+            sql,
+            re.IGNORECASE | re.DOTALL,
+        )
+        assert policy, f"0026 must add an AS RESTRICTIVE program-isolation policy on {table}"
+        body = policy.group(0)
+        assert re.search(r"app_metadata", body, re.IGNORECASE) and re.search(
+            r"\bprogram_id\b", body, re.IGNORECASE
+        ), f"{table}'s RESTRICTIVE policy must key on the app_metadata program_id claim"
+        assert _NULL_GUARD.search(body), (
+            f"{table}'s RESTRICTIVE policy must carry the auth.uid() null guard (D-RLS-2)"
+        )
+
+    # --- APPEND-ONLY: no FOR UPDATE/DELETE policy, no GRANT UPDATE/DELETE ---
+    assert not _FOR_DELETE.search(sql), (
+        "0026 must not add a DELETE policy (append-only — the ledgers are immutable)"
+    )
+    assert not _FOR_UPDATE.search(sql), (
+        "0026 must not add an UPDATE policy (append-only — the ledgers are immutable)"
+    )
+    assert not re.search(r"GRANT\s+UPDATE\b", sql, re.IGNORECASE), (
+        "0026 must NOT grant UPDATE (append-only ledgers)"
+    )
+    assert not re.search(r"GRANT\s+DELETE\b", sql, re.IGNORECASE), (
+        "0026 must NOT grant DELETE (append-only ledgers)"
+    )
+
+    # --- D-RLS-7: no security-definer helper in the exposed schema ---
+    assert not _SECURITY_DEFINER.search(sql), "0026 must not use SECURITY DEFINER (D-RLS-7)"
