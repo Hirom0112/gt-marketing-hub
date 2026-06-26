@@ -222,6 +222,132 @@ def test_all_tracked_fields_match_is_synced() -> None:
 
 
 # ---------------------------------------------------------------------------
+# A2 — flip the seam to CRM-as-source-of-truth for the human/pipeline-edited
+# fields (`stage`, `owner`) via last-write-wins (TODO_v2 §A2; RESEARCH_v2 §II.1).
+# HubSpot has no native last-write-wins, so we implement it: the mirror's
+# `mirror_updated_at` (the HubSpot `hs_lastmodifieddate`) is compared against the
+# local `updated_at`. `funding_state` stays DB-authoritative (INV-10 — GT owns it,
+# never overwritten by the CRM). Ambiguous recency (equal/missing) still flags a
+# conflict (INV-4 fail-closed).
+# ---------------------------------------------------------------------------
+
+
+def test_crm_wins_when_mirror_strictly_newer() -> None:
+    """A2: `stage`/`owner` are CRM-as-truth via last-write-wins on the timestamps.
+
+    For a CRM-authoritative tracked field that diverges, the strictly-newer side
+    wins:
+
+    - mirror `mirror_updated_at` (HubSpot `hs_lastmodifieddate`) strictly newer
+      than local `updated_at` ⇒ CRM wins ⇒ propose `ACCEPT_MIRROR`;
+    - local strictly newer ⇒ propose `push_local`;
+    - equal instant ⇒ ambiguous ⇒ `flag_conflict` (INV-4 fail-closed).
+    """
+    # --- stage divergence ---
+    # (a) mirror strictly newer ⇒ CRM wins ⇒ accept_mirror.
+    crm_newer = _family_record(updated_at=_T0, crm_synced_at=_AFTER, current_stage=Stage.APPLY)
+    proposal = propose_reconcile(crm_newer, MirrorState(stage=Stage.ENROLL, mirror_updated_at=_AFTER))
+    assert proposal is not None
+    assert proposal.direction is ReconcileDirection.ACCEPT_MIRROR
+
+    # (b) local strictly newer ⇒ push_local.
+    local_newer = _family_record(updated_at=_T0, crm_synced_at=_BEFORE, current_stage=Stage.APPLY)
+    proposal = propose_reconcile(
+        local_newer, MirrorState(stage=Stage.ENROLL, mirror_updated_at=_BEFORE)
+    )
+    assert proposal is not None
+    assert proposal.direction is ReconcileDirection.PUSH_LOCAL
+
+    # (c) equal instant ⇒ ambiguous ⇒ flag_conflict (no clear winner).
+    ambiguous = _family_record(updated_at=_T0, crm_synced_at=_AFTER, current_stage=Stage.APPLY)
+    proposal = propose_reconcile(ambiguous, MirrorState(stage=Stage.ENROLL, mirror_updated_at=_T0))
+    assert proposal is not None
+    assert proposal.direction is ReconcileDirection.FLAG_CONFLICT
+
+    # --- owner divergence (same last-write-wins rule) ---
+    rep = uuid4()
+    owner_crm_newer = _family_record(
+        updated_at=_T0,
+        crm_synced_at=_AFTER,
+        current_stage=Stage.APPLY,
+        assigned_rep_id=rep,
+        assigned_at=_T0,
+    )
+    mirror_owner_newer = MirrorState(
+        stage=Stage.APPLY,
+        owner="hubspot-edited-owner",
+        mirror_updated_at=_AFTER,  # CRM edited the owner AFTER local ⇒ CRM wins.
+    )
+    proposal = propose_reconcile(owner_crm_newer, mirror_owner_newer)
+    assert proposal is not None
+    assert proposal.direction is ReconcileDirection.ACCEPT_MIRROR
+
+
+def test_funding_state_never_accepted_from_mirror() -> None:
+    """A2/INV-10: `funding_state` is GT-controlled — NEVER accepted from the CRM.
+
+    Even when the mirror's `funding_state` diverges AND the mirror is strictly
+    newer (which for `stage`/`owner` would yield `ACCEPT_MIRROR`), `funding_state`
+    stays DB-authoritative: the proposal is never `accept_mirror`. The GT value
+    wins and is pushed to the CRM (`push_local`), never overwritten by it.
+    """
+    record = _family_record(
+        updated_at=_T0,
+        crm_synced_at=_BEFORE,
+        current_stage=Stage.APPLY,
+        funding_state=FundingState.GT_CONFIRMED,
+    )
+    # Mirror is strictly newer AND holds a diverging funding_state.
+    mirror = MirrorState(
+        stage=Stage.APPLY,
+        funding_state=FundingState.APPLIED,
+        mirror_updated_at=_AFTER,  # strictly newer than local updated_at.
+    )
+    proposal = propose_reconcile(record, mirror)
+    assert proposal is not None
+    assert proposal.direction is not ReconcileDirection.ACCEPT_MIRROR
+    assert proposal.direction is ReconcileDirection.PUSH_LOCAL
+
+
+def test_accept_mirror_writes_crm_value_into_record() -> None:
+    """A2: `apply_reconcile(ACCEPT_MIRROR)` adopts the CRM stage, re-derives synced.
+
+    A CRM-newer `stage` divergence proposes `ACCEPT_MIRROR`; applying it returns a
+    record whose `current_stage` equals the mirror's value (the CRM value written
+    into the record) and a mirror that agrees, so the seam re-derives `synced`.
+    `funding_state` is untouched (DB-authoritative, INV-10).
+    """
+    rep = uuid4()
+    record = _family_record(
+        updated_at=_T0,
+        crm_synced_at=_AFTER,
+        current_stage=Stage.APPLY,
+        funding_state=FundingState.GT_CONFIRMED,
+        assigned_rep_id=rep,
+        assigned_at=_T0,
+    )
+    mirror = MirrorState(
+        stage=Stage.ENROLL,  # diverging stage…
+        owner=str(rep),  # …owner agrees (the CRM owner adoption is a later unit).
+        mirror_updated_at=_AFTER,  # CRM strictly newer ⇒ accept_mirror.
+    )
+    proposal = propose_reconcile(record, mirror)
+    assert proposal is not None
+    assert proposal.direction is ReconcileDirection.ACCEPT_MIRROR
+
+    result = apply_reconcile(record, proposal)
+    assert result.applied is True
+    # The CRM value is written into the record.
+    assert result.record.current_stage is Stage.ENROLL
+    assert result.mirror.stage is Stage.ENROLL
+    # funding_state is GT-controlled — the DB value is kept (never the mirror's).
+    assert result.record.funding_state is FundingState.GT_CONFIRMED
+    # Record and mirror now agree ⇒ re-derives synced.
+    assert result.seam_status is SeamStatus.SYNCED
+    assert derive_seam_status(result.record, result.mirror) is SeamStatus.SYNCED
+
+
+# ---------------------------------------------------------------------------
 # Reconcile flow (FR-2.6; ARCH §4.7). Deterministic, human-gated, simulated v1.
 # Proposal is computed by the core; application is only ever invoked via the
 # human-approved API path — these tests pin the pure post-reconcile state.
