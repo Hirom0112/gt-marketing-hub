@@ -971,3 +971,71 @@ def test_program_id_restrictive_isolation() -> None:
         "0024 must not grant BYPASSRLS to any role (only NOBYPASSRLS is permitted)"
     )
     assert not _SECURITY_DEFINER.search(sql), "0024 must not use SECURITY DEFINER (D-RLS-7)"
+
+
+# ---------------------------------------------------------------------------
+# 0025 crm_sync_watermark (A2) — durable per-program incremental-poll state for
+# the CRM poller. One row per (program_id, object_type) holding the last-synced
+# HubSpot `hs_lastmodifieddate` watermark; the poller reads it, pulls records
+# modified strictly after it, and advances it to the max seen. A new CREATE TABLE
+# that (per the static RLS guard) MUST ENABLE *and* FORCE RLS (D-RLS-1) and carry
+# a null-guarded policy. Following A1's (0024) pattern, the single policy is the
+# `AS RESTRICTIVE` program-isolation policy keyed on the caller's
+# app_metadata.program_id JWT claim AND carrying the `(SELECT auth.uid()) IS NOT
+# NULL` null guard — keeping the global CREATE==ENABLE==FORCE + one-guard-per-policy
+# invariants green.
+# ---------------------------------------------------------------------------
+
+
+def _crm_sync_watermark_sql() -> str:
+    """The 0025 crm_sync_watermark migration DDL (comments stripped)."""
+    return _strip_comments(
+        (MIGRATIONS_DIR / "0025_crm_sync_watermark.sql").read_text(encoding="utf-8")
+    )
+
+
+def test_crm_sync_watermark_rls() -> None:
+    """A2: crm_sync_watermark is program-scoped, ENABLE+FORCE RLS, RESTRICTIVE
+    program-isolation policy keyed on the app_metadata program_id claim, carrying
+    the auth.uid() null guard — keeping the global RLS count invariants green.
+    """
+    sql = _crm_sync_watermark_sql()
+
+    # --- the table + program_id tenancy tag ---
+    assert re.search(r"CREATE\s+TABLE\s+crm_sync_watermark\b", sql, re.IGNORECASE), (
+        "0025 must CREATE TABLE crm_sync_watermark"
+    )
+    assert re.search(r"\bprogram_id\b", sql, re.IGNORECASE), (
+        "crm_sync_watermark must carry a program_id column (program-scoped state)"
+    )
+
+    # --- ENABLE *and* FORCE RLS (D-RLS-1) ---
+    assert re.search(
+        r"ALTER\s+TABLE\s+crm_sync_watermark\s+ENABLE\s+ROW\s+LEVEL\s+SECURITY",
+        sql,
+        re.IGNORECASE,
+    ), "0025 must ENABLE RLS on crm_sync_watermark (D-RLS-1)"
+    assert re.search(
+        r"ALTER\s+TABLE\s+crm_sync_watermark\s+FORCE\s+ROW\s+LEVEL\s+SECURITY",
+        sql,
+        re.IGNORECASE,
+    ), "0025 must FORCE RLS on crm_sync_watermark (owner-role escape hatch, D-RLS-1)"
+
+    # --- an AS RESTRICTIVE program-isolation policy keyed on app_metadata.program_id,
+    #     carrying the auth.uid() null guard (the 0024 pattern) ---
+    policy = re.search(
+        r"CREATE\s+POLICY\s+\w+\s+ON\s+crm_sync_watermark\b[^;]*AS\s+RESTRICTIVE[^;]*;",
+        sql,
+        re.IGNORECASE | re.DOTALL,
+    )
+    assert policy, "0025 must add an AS RESTRICTIVE program-isolation policy on crm_sync_watermark"
+    body = policy.group(0)
+    assert re.search(r"app_metadata", body, re.IGNORECASE) and re.search(
+        r"\bprogram_id\b", body, re.IGNORECASE
+    ), "crm_sync_watermark's RESTRICTIVE policy must key on the app_metadata program_id claim"
+    assert _NULL_GUARD.search(body), (
+        "crm_sync_watermark's RESTRICTIVE policy must carry the auth.uid() null guard (D-RLS-2)"
+    )
+
+    # --- D-RLS-7: no security-definer helper in the exposed schema ---
+    assert not _SECURITY_DEFINER.search(sql), "0025 must not use SECURITY DEFINER (D-RLS-7)"
