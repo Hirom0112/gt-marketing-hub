@@ -705,6 +705,72 @@ def test_search_modified_since_filters_and_sorts() -> None:
     assert "Margaret Realparent" not in repr(records)
 
 
+def test_search_modified_since_bounded_by_until() -> None:
+    """A2: an ``until_ms`` upper bound AND-s a second ``hs_lastmodifieddate LT`` filter.
+
+    The window-chunking planner (``plan_sync_windows``) emits ordered [start,end]
+    sub-windows; for each query to actually stay under HubSpot's 10k cap, the
+    adapter must bound it on BOTH sides. When ``until_ms`` is passed the outbound
+    search body's single filter group carries BOTH:
+
+    - ``hs_lastmodifieddate`` ``GT`` <watermark_ms> (strictly-after the watermark);
+    - ``hs_lastmodifieddate`` ``LT`` <until_ms> (strictly-before the window end);
+
+    AND-ed in the SAME filter group (HubSpot ANDs filters within a group). The
+    single ASC sort and the ``paging.next.after`` pagination are preserved.
+    """
+    crm = _crm()
+    watermark_ms = 1_700_000_000_000
+    until_ms = 1_700_500_000_000
+    captured: list[dict[str, Any]] = []
+    fam1 = uuid4()
+
+    page = {
+        "results": [
+            {
+                "id": "deal-1",
+                "properties": {
+                    "gt_synthetic_id": str(fam1),
+                    "dealstage": crm.stage_map["apply"],
+                    "hs_lastmodifieddate": "2026-01-02T00:00:00Z",
+                },
+            }
+        ],
+        # No paging.next.after ⇒ a single page.
+    }
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/crm/v3/objects/deals/search"
+        captured.append(json.loads(request.content))
+        return httpx.Response(200, json=page)
+
+    client = httpx.Client(transport=httpx.MockTransport(handler), base_url="https://api.hubapi.com")
+    adapter = LiveHubSpotCRMAdapter(
+        client=client,
+        token=_TOKEN,
+        crm=crm,
+        award_amounts=_award_amounts(),
+        calls_per_run_cap=200,
+    )
+
+    records = adapter.search_modified_since("deals", watermark_ms, until_ms=until_ms)
+
+    assert len(captured) == 1
+    filters = captured[0]["filterGroups"][0]["filters"]
+    # BOTH bounds, AND-ed in the one filter group.
+    assert len(filters) == 2
+    by_op = {f["operator"]: f for f in filters}
+    assert by_op["GT"]["propertyName"] == "hs_lastmodifieddate"
+    assert str(by_op["GT"]["value"]) == str(watermark_ms)
+    assert by_op["LT"]["propertyName"] == "hs_lastmodifieddate"
+    assert str(by_op["LT"]["value"]) == str(until_ms)
+    # The single ASC sort and the returned record are unchanged.
+    assert captured[0]["sorts"] == [
+        {"propertyName": "hs_lastmodifieddate", "direction": "ASCENDING"}
+    ]
+    assert [fid for fid, _ in records] == [fam1]
+
+
 # ===========================================================================
 # GUARD 3 — cap + kill-switch (INV-8): passing + BLOCKING
 # ===========================================================================

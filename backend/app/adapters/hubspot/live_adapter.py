@@ -394,7 +394,7 @@ class LiveHubSpotCRMAdapter(CRMAdapter):
         )
 
     def search_modified_since(
-        self, object_type: str, watermark_ms: int
+        self, object_type: str, watermark_ms: int, until_ms: int | None = None
     ) -> list[tuple[UUID, MirrorState]]:
         """Page HubSpot CRM Search for records modified strictly after the watermark.
 
@@ -409,23 +409,29 @@ class LiveHubSpotCRMAdapter(CRMAdapter):
         lifted); a result whose ``gt_synthetic_id`` is absent/non-UUID is skipped
         (the cockpit keys mirrors by family UUID). Results arrive ascending, so the
         poller can advance its watermark to the last entry's modified-at.
+
+        ``until_ms`` is the OPTIONAL strict upper bound (A2): when supplied, a second
+        ``hs_lastmodifieddate LT <until_ms>`` filter is AND-ed into the SAME filter
+        group (HubSpot ANDs filters within a group), so each window-chunked query is
+        bounded on both sides and stays under the 10k-result cap. ``None`` leaves the
+        query unbounded above (the original v1 contract).
         """
         object_path = f"/crm/v3/objects/{object_type}"
+        # The strictly-after-watermark filter, with an AND-ed strictly-before-until
+        # bound when the poller passes a window end (A2 window-chunking). Both sit in
+        # the ONE filter group so HubSpot ANDs them.
+        filters: list[dict[str, Any]] = [
+            {"propertyName": _HS_LASTMODIFIED, "operator": "GT", "value": str(watermark_ms)}
+        ]
+        if until_ms is not None:
+            filters.append(
+                {"propertyName": _HS_LASTMODIFIED, "operator": "LT", "value": str(until_ms)}
+            )
         out: list[tuple[UUID, MirrorState]] = []
         after: str | None = None
         while True:
             payload: dict[str, Any] = {
-                "filterGroups": [
-                    {
-                        "filters": [
-                            {
-                                "propertyName": _HS_LASTMODIFIED,
-                                "operator": "GT",
-                                "value": str(watermark_ms),
-                            }
-                        ]
-                    }
-                ],
+                "filterGroups": [{"filters": filters}],
                 "sorts": [{"propertyName": _HS_LASTMODIFIED, "direction": "ASCENDING"}],
                 "properties": _TRACKED_DEAL_PROPERTIES,
                 "limit": _SEARCH_PAGE_SIZE,

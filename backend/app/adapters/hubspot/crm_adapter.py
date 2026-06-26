@@ -130,7 +130,7 @@ class CRMAdapter(ABC):
 
     @abstractmethod
     def search_modified_since(
-        self, object_type: str, watermark_ms: int
+        self, object_type: str, watermark_ms: int, until_ms: int | None = None
     ) -> list[tuple[UUID, MirrorState]]:
         """Pull every record modified strictly after ``watermark_ms`` (A2; §4.7).
 
@@ -142,10 +142,17 @@ class CRMAdapter(ABC):
         ONLY the PII-free tracked scalars — same inbound firewall as
         :meth:`read_mirror` (guard 2, INV-1): NO contact name/phone/real email.
 
-        The live impl pages HubSpot CRM Search (``hs_lastmodifieddate GT``, a
-        single ASC sort, ``paging.next.after``) through its budgeted call path
-        (guard 3, INV-8); the simulated impl reconstructs the answer purely from
-        its in-memory recorder (INV-9 — no network client).
+        ``until_ms`` is an OPTIONAL strict upper bound (epoch-ms): when supplied,
+        only records modified strictly BEFORE it are returned. The poller passes
+        one window-end per ``plan_sync_windows`` sub-window so each query is bounded
+        on both sides and stays under HubSpot's 10k-result cap (A2). ``None`` (the
+        default) leaves the read unbounded above — the original v1 contract.
+
+        The live impl pages HubSpot CRM Search (``hs_lastmodifieddate GT`` plus an
+        AND-ed ``hs_lastmodifieddate LT`` when bounded, a single ASC sort,
+        ``paging.next.after``) through its budgeted call path (guard 3, INV-8); the
+        simulated impl reconstructs the answer purely from its in-memory recorder
+        (INV-9 — no network client).
         """
 
     @abstractmethod
@@ -305,7 +312,7 @@ class SimulatedCRMAdapter(CRMAdapter):
         return entry
 
     def search_modified_since(
-        self, object_type: str, watermark_ms: int
+        self, object_type: str, watermark_ms: int, until_ms: int | None = None
     ) -> list[tuple[UUID, MirrorState]]:
         """Return recorded mirrors modified strictly after the watermark, ascending.
 
@@ -315,13 +322,22 @@ class SimulatedCRMAdapter(CRMAdapter):
         ascending by that instant so the result matches the live impl's contract. A
         mirror with no ``mirror_updated_at`` (never pushed) is skipped. ``object_type``
         is accepted for interface parity; the recorder keys on family, not object type.
+
+        ``until_ms`` (epoch-ms) is the OPTIONAL strict upper bound (A2): when given,
+        only mirrors modified strictly BEFORE it are returned (strictly-after the
+        watermark AND strictly-before until) — the in-memory twin of the live impl's
+        AND-ed ``hs_lastmodifieddate LT`` filter. ``None`` leaves it unbounded above.
         """
         watermark = datetime.fromtimestamp(watermark_ms / 1000, tz=UTC)
+        until = None if until_ms is None else datetime.fromtimestamp(until_ms / 1000, tz=UTC)
         matches: list[tuple[datetime, UUID, MirrorState]] = []
         for family_id, mirror in self._mirror.items():
             modified_at = mirror.mirror_updated_at
-            if modified_at is not None and modified_at > watermark:
-                matches.append((modified_at, family_id, mirror))
+            if modified_at is None or modified_at <= watermark:
+                continue
+            if until is not None and modified_at >= until:
+                continue
+            matches.append((modified_at, family_id, mirror))
         matches.sort(key=lambda item: item[0])
         return [(family_id, mirror) for _, family_id, mirror in matches]
 
