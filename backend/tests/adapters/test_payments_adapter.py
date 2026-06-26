@@ -20,6 +20,8 @@ from __future__ import annotations
 import hashlib
 import hmac
 import json
+from pathlib import Path
+from uuid import UUID
 
 import httpx
 import pytest
@@ -31,7 +33,16 @@ from app.adapters.payments.base import (
 from app.adapters.payments.live import LivePaymentsAdapter
 from app.adapters.payments.simulated import SimulatedPaymentsAdapter
 from app.adapters.registry import effective_payments_mode, get_payments_adapter
+from app.core.params import Resilience, load_params
 from app.core.settings import Settings
+
+_EXAMPLE_PARAMS = Path(__file__).resolve().parents[3] / "params" / "params.example.yaml"
+
+
+def _resilience() -> Resilience:
+    """The A5 retry/backoff params block the registry injects (INV-11)."""
+    return load_params(_EXAMPLE_PARAMS).resilience
+
 
 # A synthetic test webhook secret + a synthetic event body (INV-1: nothing real).
 _SECRET = "whsec_test_secret_synthetic"
@@ -104,6 +115,7 @@ def _live_adapter(*, cap: int) -> LivePaymentsAdapter:
         webhook_secret=_SECRET,
         calls_per_run_cap=cap,
         tolerance_seconds=300,
+        resilience=_resilience(),
     )
 
 
@@ -135,6 +147,56 @@ def test_cap_and_kill_switch_degrade(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("STRIPE_WEBHOOK_SECRET", raising=False)
     with pytest.raises(RuntimeError):
         get_payments_adapter()
+
+
+def test_outbound_retries_idempotency_key() -> None:
+    """A 429-then-200 create_payment_intent retries with a STABLE V4 Idempotency-Key (A5).
+
+    Stripe outbound idempotency (RESEARCH_v2 §II.2(a)): one ``uuid.uuid4()`` key is
+    generated ONCE (outside the retry thunk) and reused on every retried POST, so a
+    self-healed call never double-charges. Both POST sends carry the SAME
+    ``Idempotency-Key`` header and it is a valid V4 UUID. A ``sleep`` spy proves the
+    backoff slept via the injected clock, not the wall clock.
+    """
+    keys: list[str | None] = []
+    slept: list[float] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        keys.append(request.headers.get("Idempotency-Key"))
+        # The FIRST send is a transient 429; the retry succeeds with a 200.
+        if len(keys) == 1:
+            return httpx.Response(429, headers={"Retry-After": "0"}, json={"error": "rate"})
+        return httpx.Response(
+            200,
+            json={
+                "id": "pi_synthetic_1",
+                "amount": 1000,
+                "currency": "usd",
+                "status": "requires_payment_method",
+            },
+        )
+
+    client = httpx.Client(transport=httpx.MockTransport(handler), base_url="https://api.stripe.com")
+    adapter = LivePaymentsAdapter(
+        client=client,
+        secret_key="sk_test_synthetic",
+        webhook_secret=_SECRET,
+        calls_per_run_cap=5,
+        tolerance_seconds=300,
+        resilience=_resilience(),
+        sleep=slept.append,
+    )
+
+    result = adapter.create_payment_intent(amount_cents=1000)
+
+    assert result.intent_id == "pi_synthetic_1"
+    assert len(keys) == 2, "with_retry should retry the 429 then succeed on the 200"
+    # The SAME idempotency key rode both the original POST and the retry.
+    assert keys[0] is not None
+    assert keys[0] == keys[1], "the Idempotency-Key must be stable across retries"
+    # ...and it is a valid V4 UUID (RESEARCH_v2 §II.2(a)).
+    assert UUID(keys[0]).version == 4
+    assert slept, "the backoff must sleep via the injected spy, not the wall clock"
 
 
 def test_simulated_records_never_sends() -> None:
