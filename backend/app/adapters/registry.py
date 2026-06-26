@@ -31,13 +31,16 @@ from app.adapters.hubspot.crm_adapter import CRMAdapter, SimulatedCRMAdapter
 from app.adapters.hubspot.live_adapter import LiveHubSpotCRMAdapter
 from app.adapters.media.base import MediaGenAdapter
 from app.adapters.media.placeholder import PlaceholderMediaGenAdapter
+from app.adapters.payments.base import PaymentsAdapter
+from app.adapters.payments.live import LivePaymentsAdapter
+from app.adapters.payments.simulated import SimulatedPaymentsAdapter
 from app.adapters.sentiment.base import SentimentAdapter
 from app.adapters.sentiment.placeholder import PlaceholderSentimentAdapter
 from app.adapters.sis.base import EnrollmentSystemAdapter
 from app.adapters.social.base import SocialAdapter
 from app.adapters.social.simulated import SimulatedSocialAdapter
 from app.core.params import AwardAmounts, Crm, Params, load_params
-from app.core.settings import CrmMode, Settings, get_settings
+from app.core.settings import CrmMode, Settings, StripeMode, get_settings
 
 # Default on-disk home for the persistent brand-memory store when no override is
 # supplied (ASSUMPTIONS A-11). The path is a config seam (env > default), not a
@@ -46,6 +49,9 @@ _DEFAULT_BRAND_MEMORY_DB_PATH = "data/brand_memory.db"
 
 # HubSpot CRM v3 base URL — the fixed third-party API host (not a tunable).
 _HUBSPOT_BASE_URL = "https://api.hubapi.com"
+
+# Stripe API base URL — the fixed third-party API host (not a tunable; A3).
+_STRIPE_BASE_URL = "https://api.stripe.com"
 
 # Committed example params, used as a fallback when no local params.yaml exists
 # (it is gitignored / absent in this env). Resolved relative to the repo root:
@@ -160,6 +166,101 @@ def get_crm_adapter() -> CRMAdapter:
         crm=_load_crm_params(),
         award_amounts=_load_award_amounts(),
         calls_per_run_cap=settings.hubspot_calls_per_run_cap,
+    )
+
+
+def effective_payments_mode(settings: Settings) -> StripeMode:
+    """The payments mode the registry would ACTUALLY select for ``settings`` (pure).
+
+    The canonical home for the A3/INV-8 precedence, mirroring
+    :func:`effective_crm_mode` so a read-only status surface can REPORT the
+    effective seam state without constructing a live Stripe adapter (or an httpx
+    client). :func:`get_payments_adapter` consumes this; nothing here does I/O.
+
+    - ``STRIPE_MODE=simulate`` ⇒ ``"simulate"`` (the v1 default recorder; INV-9).
+    - ``STRIPE_MODE=live`` + webhook secret + **kill switch on** ⇒ ``"simulate"`` —
+      INV-8 degrades to the recorder; never a live call when the kill switch is on.
+    - ``STRIPE_MODE=live`` + webhook secret + no kill switch ⇒ ``"live"``.
+    - ``STRIPE_MODE=live`` + **no webhook secret** ⇒ ``"live"`` — a live INTENT that
+      is misconfigured; :func:`get_payments_adapter` fails loud (``RuntimeError``)
+      rather than silently degrade (mirrors the CRM live-without-token precedent).
+      Reported as ``"live"`` so the misconfig stays visible, not hidden behind a
+      false ``"simulate"``.
+    """
+    if settings.stripe_mode == "simulate":
+        return "simulate"
+    # STRIPE_MODE == "live": the kill switch forces simulate even with a secret
+    # (INV-8). A missing webhook secret is a live INTENT that fails loud at
+    # construction (get_payments_adapter) — reported here as the "live" intent.
+    if settings.stripe_webhook_secret is not None and settings.stripe_kill_switch:
+        return "simulate"
+    return "live"
+
+
+def get_payments_adapter() -> PaymentsAdapter:
+    """Return the payments adapter impl for the current ``STRIPE_MODE`` (A3; INV-8/9).
+
+    The payments boundary keys on its own ``STRIPE_MODE`` seam, independent of the
+    v1 ``SEND_MODE`` lock (mirroring ``CRM_MODE``):
+
+    - ``simulate`` (default) ⇒ a fresh :class:`SimulatedPaymentsAdapter` (records,
+      never sends; still verifies webhooks offline; INV-9).
+    - ``live`` + webhook secret + **kill switch set** ⇒ degrade to
+      :class:`SimulatedPaymentsAdapter` (INV-8) — never a live call when the kill
+      switch is on.
+    - ``live`` + webhook secret + no kill switch ⇒ :class:`LivePaymentsAdapter`
+      (real Stripe behind the per-run cap).
+    - ``live`` + **no webhook secret** ⇒ ``RuntimeError`` — fail loud on misconfig
+      rather than silently degrading (the CRM live-without-token precedent).
+
+    The cap is the env override ``stripe_calls_per_run_cap`` when set, else the
+    canonical ``params.stripe.calls_per_run_cap`` (INV-11); the signature tolerance
+    is always ``params.stripe.tolerance_seconds``. Both are injected — the adapters
+    read no settings/params themselves.
+
+    Raises:
+        RuntimeError: when ``STRIPE_MODE=live`` but no webhook secret is configured.
+    """
+    settings = get_settings()
+    stripe_params = _load_params().stripe
+
+    # STRIPE_MODE == "live" + no webhook secret ⇒ fail loud on misconfig. The
+    # construction-time RuntimeError lives here; effective_payments_mode reports
+    # the live INTENT (mirrors get_crm_adapter's live-without-token guard).
+    if settings.stripe_mode == "live" and settings.stripe_webhook_secret is None:
+        raise RuntimeError(
+            "STRIPE_MODE='live' requires STRIPE_WEBHOOK_SECRET — none is configured. "
+            "Fail loud on misconfig rather than silently degrade to simulated "
+            "(INV-8/INV-9). Set the secret or use STRIPE_MODE='simulate'."
+        )
+
+    # Single canonical precedence: simulate (default), or live degraded to simulate
+    # by the kill switch (INV-8). The simulated adapter still verifies webhooks, so
+    # it is handed the configured webhook secret + the params tolerance.
+    if effective_payments_mode(settings) == "simulate":
+        return SimulatedPaymentsAdapter(
+            webhook_secret=settings.stripe_webhook_secret,
+            tolerance_seconds=stripe_params.tolerance_seconds,
+        )
+
+    # A live result implies a webhook secret — the no-secret case raised above.
+    webhook_secret = settings.stripe_webhook_secret
+    if webhook_secret is None:  # pragma: no cover — unreachable past the fail-loud guard
+        raise RuntimeError(
+            "STRIPE_MODE='live' requires STRIPE_WEBHOOK_SECRET — none is configured."
+        )
+    cap = (
+        settings.stripe_calls_per_run_cap
+        if settings.stripe_calls_per_run_cap is not None
+        else stripe_params.calls_per_run_cap
+    )
+    client = httpx.Client(base_url=_STRIPE_BASE_URL)
+    return LivePaymentsAdapter(
+        client=client,
+        secret_key=settings.stripe_secret_key,
+        webhook_secret=webhook_secret,
+        calls_per_run_cap=cap,
+        tolerance_seconds=stripe_params.tolerance_seconds,
     )
 
 
