@@ -389,3 +389,6 @@ security:                   # M7 — detection thresholds for the edge middlewar
   oversized_result_rows: 200        # a list response at/above this many rows ⇒ oversized_result (API4:2023 Unrestricted Resource Consumption)
   auth_failure_burst: 5             # at/above this many 401/403 from one actor within the window ⇒ auth_failure_burst (A07:2021 Identification & Auth Failures)
   auth_failure_window_seconds: 60   # rolling window (seconds) over which the auth-failure burst is counted
+
+data_confidence:            # A4 — cross-module data-confidence threshold (INV-11)
+  min_parity: 0.95                  # overall sync-parity below this ⇒ data-confidence banner (A4). High bar (boring default) so a meaningfully out-of-sync cohort trips the banner.

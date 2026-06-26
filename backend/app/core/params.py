@@ -1039,6 +1039,30 @@ class Security(_StrictModel):
         return self
 
 
+class DataConfidence(_StrictModel):
+    """A4 cross-module data-confidence threshold (INV-11).
+
+    The single canonical home for the sync-parity floor below which the
+    cross-module data-confidence banner activates: when overall sync-parity
+    drops below ``min_parity`` the API surfaces the banner so a meaningfully
+    out-of-sync cohort is visible rather than silently trusted. The API unit
+    reads this value; this block only owns the threshold, never a code literal.
+
+    ``min_parity`` is a FRACTION, so it MUST sit in [0.0, 1.0]; an out-of-range
+    value is config drift and fails the build (CLAUDE.md §4.1).
+    """
+
+    min_parity: float
+
+    @model_validator(mode="after")
+    def _min_parity_is_fraction(self) -> DataConfidence:
+        if not 0.0 <= self.min_parity <= 1.0:
+            raise ValueError(
+                f"data_confidence.min_parity must be in [0.0, 1.0], got {self.min_parity!r}"
+            )
+        return self
+
+
 class ConversionWeights(_StrictModel):
     """conversion.weights — the five conversion-likelihood dimension weights (DH-1).
 
@@ -1267,6 +1291,7 @@ class Params(_StrictModel):
     crm_sync: CrmSync
     stripe: Stripe
     security: Security
+    data_confidence: DataConfidence
 
 
 def _resolve_path(path: Path | None) -> Path:
