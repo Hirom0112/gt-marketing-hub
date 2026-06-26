@@ -1098,6 +1098,54 @@ class Resilience(_StrictModel):
         return self
 
 
+class Rbac(_StrictModel):
+    """B1 role-based access-control matrix — the single home (CLAUDE.md §7; INV-11).
+
+    The one canonical home for the three-role permission matrix the authz core
+    (``core/authz.py``) and the API ``require_role`` read; this block ONLY owns
+    the surface, never a code literal:
+
+    * ``roles`` — the closed set of roles. MUST be non-empty and contain the three
+      canonical roles ``admin`` / ``leader`` / ``operator`` (a missing canonical
+      role is config drift and fails the build, CLAUDE.md §4.1).
+    * ``permissions`` — maps a NAMED PERMISSION → the list of roles that hold it
+      (permission → roles). This direction is chosen so a ``permits`` lookup is the
+      cleanest possible ``role in permissions.get(perm, [])`` (default-deny: an
+      unknown permission grants nobody). Every role referenced here MUST be a
+      declared role — a dangling/renamed role fails the build.
+    """
+
+    _CANONICAL_ROLES = ("admin", "leader", "operator")
+
+    roles: list[str]
+    # permission name → roles that hold it (permission → roles; see docstring).
+    permissions: dict[str, list[str]]
+
+    @model_validator(mode="after")
+    def _roles_complete(self) -> Rbac:
+        if not self.roles:
+            raise ValueError("rbac.roles must be non-empty")
+        missing = [r for r in self._CANONICAL_ROLES if r not in self.roles]
+        if missing:
+            raise ValueError(
+                f"rbac.roles must contain the canonical roles {list(self._CANONICAL_ROLES)!r}, "
+                f"missing {missing!r}"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _no_dangling_role(self) -> Rbac:
+        declared = set(self.roles)
+        for perm, granted in self.permissions.items():
+            dangling = [r for r in granted if r not in declared]
+            if dangling:
+                raise ValueError(
+                    f"rbac.permissions[{perm!r}] references unknown role(s) {dangling!r}; "
+                    f"every role must be declared in rbac.roles {self.roles!r}"
+                )
+        return self
+
+
 class ConversionWeights(_StrictModel):
     """conversion.weights — the five conversion-likelihood dimension weights (DH-1).
 
@@ -1328,6 +1376,7 @@ class Params(_StrictModel):
     security: Security
     data_confidence: DataConfidence
     resilience: Resilience
+    rbac: Rbac
 
 
 def _resolve_path(path: Path | None) -> Path:

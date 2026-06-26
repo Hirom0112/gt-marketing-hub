@@ -397,3 +397,10 @@ resilience:                 # A5 — retry/backoff tunables for retryable adapte
   max_attempts: 3                   # total attempts (1 initial + 2 retries) for a retryable call — boring default, ~Stripe sandbox
   base_delay_ms: 200                # exponential-backoff base
   max_delay_ms: 5000                # backoff ceiling
+
+rbac:                       # B1 — role-based access-control matrix; single home for the three-role permission grid (CLAUDE.md §7; INV-11)
+  roles: [admin, leader, operator]  # the closed role set; the three canonical roles MUST be present
+  permissions:                      # permission name → roles that hold it (permission → roles); permits = role in permissions[perm]
+    decision_queue.view: [admin, leader]        # the leadership decision queue — leaders/admins only, NOT operators
+    budget.view: [admin, leader]                # budget/spend visibility — leaders/admins only
+    families.view: [admin, leader, operator]    # family records — every role can view
