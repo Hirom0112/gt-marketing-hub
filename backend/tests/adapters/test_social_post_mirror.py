@@ -32,7 +32,7 @@ from app.adapters.hubspot.live_adapter import (
     LiveHubSpotCRMAdapter,
 )
 from app.ai.schemas.content import Channel
-from app.core.params import AwardAmounts, Crm, load_params
+from app.core.params import AwardAmounts, Crm, Resilience, load_params
 from app.marketing.schemas.publish import (
     MirrorStatus,
     PlatformDispatch,
@@ -51,6 +51,11 @@ def _crm() -> Crm:
 
 def _award_amounts() -> AwardAmounts:
     return load_params(_EXAMPLE_PARAMS).funding.award_amounts
+
+
+def _resilience() -> Resilience:
+    """The A5 retry/backoff params block the registry injects (INV-11)."""
+    return load_params(_EXAMPLE_PARAMS).resilience
 
 
 def _request(*, request_id: UUID | None = None) -> PublishRequest:
@@ -147,6 +152,7 @@ def _live(fake: _FakeHubSpot, *, cap: int = 200, crm: Crm | None = None) -> Live
         crm=crm or _crm(),
         award_amounts=_award_amounts(),
         calls_per_run_cap=cap,
+        resilience=_resilience(),
     )
 
 

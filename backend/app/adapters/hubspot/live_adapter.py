@@ -32,12 +32,15 @@ a socket in a test.
 from __future__ import annotations
 
 import logging
+import time
+from collections.abc import Callable
 from datetime import UTC, datetime
 from typing import Any
 from uuid import UUID
 
 import httpx
 
+from app.adapters._resilience import with_retry
 from app.adapters.hubspot.crm_adapter import (
     CRMAdapter,
     SendResult,
@@ -51,7 +54,7 @@ from app.adapters.hubspot.stage_map import (
     hubspot_id_to_cockpit_stage,
 )
 from app.core.funding_gate import award_for_tier
-from app.core.params import AwardAmounts, Crm
+from app.core.params import AwardAmounts, Crm, Resilience
 from app.core.seam import MirrorState
 from app.data.models import FamilyRecord, FundingState, Stage, Student
 from app.marketing.schemas.publish import PlatformDispatch, PublishRequest
@@ -114,6 +117,12 @@ class LiveHubSpotCRMAdapter(CRMAdapter):
             property (INV-11; the number flows from the funding tier, never a
             literal here).
         calls_per_run_cap: The guard-3 per-run HubSpot call budget (INV-8).
+        resilience: The injected ``params.resilience`` block (A5) — the retry
+            wrapper's ``max_attempts`` / ``base_delay_ms`` / ``max_delay_ms``. The
+            adapter reads these from config, never a code literal (INV-11).
+        sleep: The injected clock (seconds) the backoff sleeps on. Production
+            passes ``time.sleep`` (the default); a test passes a spy so the retry
+            never touches the wall clock (repo clock-injection discipline).
     """
 
     def __init__(
@@ -124,11 +133,15 @@ class LiveHubSpotCRMAdapter(CRMAdapter):
         crm: Crm,
         award_amounts: AwardAmounts,
         calls_per_run_cap: int,
+        resilience: Resilience,
+        sleep: Callable[[float], None] = time.sleep,
     ) -> None:
         self._client = client
         self._crm = crm
         self._award_amounts = award_amounts
         self._cap = calls_per_run_cap
+        self._resilience = resilience
+        self._sleep = sleep
         self._calls_made = 0
         # Default Bearer auth on every request; explicit per-call headers merge.
         self._client.headers.update(
@@ -145,7 +158,11 @@ class LiveHubSpotCRMAdapter(CRMAdapter):
         """One budgeted HubSpot call — guard 3 (INV-8) trips on the (cap+1)th.
 
         The budget is checked BEFORE the call, so an exhausted budget never reaches
-        the network (fail closed). A non-2xx response raises via ``raise_for_status``.
+        the network (fail closed). The budget is charged ONCE per LOGICAL call: the
+        check+increment is OUTER, and :func:`with_retry` wraps ONLY the raw send (A5),
+        so a 429/5xx/transport retry self-heals without re-charging the budget — a
+        429-then-200 makes 2 HTTP sends but spends 1 unit of quota. A non-2xx
+        response (after retries are exhausted) raises via ``raise_for_status``.
         """
         if self._calls_made >= self._cap:
             raise HubSpotBudgetExceededError(
@@ -153,7 +170,13 @@ class LiveHubSpotCRMAdapter(CRMAdapter):
                 f"degrade to simulated (INV-8) rather than overspend the shared quota."
             )
         self._calls_made += 1
-        response = self._client.request(method, path, json=json)
+        response = with_retry(
+            lambda: self._client.request(method, path, json=json),
+            max_attempts=self._resilience.max_attempts,
+            base_delay_ms=self._resilience.base_delay_ms,
+            max_delay_ms=self._resilience.max_delay_ms,
+            sleep=self._sleep,
+        )
         response.raise_for_status()
         return response
 

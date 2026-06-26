@@ -166,6 +166,7 @@ def get_crm_adapter() -> CRMAdapter:
         crm=_load_crm_params(),
         award_amounts=_load_award_amounts(),
         calls_per_run_cap=settings.hubspot_calls_per_run_cap,
+        resilience=_load_params().resilience,
     )
 
 
@@ -261,6 +262,7 @@ def get_payments_adapter() -> PaymentsAdapter:
         webhook_secret=webhook_secret,
         calls_per_run_cap=cap,
         tolerance_seconds=stripe_params.tolerance_seconds,
+        resilience=_load_params().resilience,
     )
 
 

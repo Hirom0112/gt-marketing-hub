@@ -46,7 +46,7 @@ from app.adapters.hubspot.live_adapter import (
 )
 from app.adapters.registry import get_crm_adapter
 from app.core.funding_gate import award_for_tier
-from app.core.params import AwardAmounts, Crm, load_params
+from app.core.params import AwardAmounts, Crm, Resilience, load_params
 from app.core.seam import MirrorState
 from app.data.models import FamilyRecord, FundingType, Stage
 
@@ -69,6 +69,11 @@ def _crm() -> Crm:
 
 def _award_amounts() -> AwardAmounts:
     return load_params(_EXAMPLE_PARAMS).funding.award_amounts
+
+
+def _resilience() -> Resilience:
+    """The A5 retry/backoff params block the registry injects (INV-11)."""
+    return load_params(_EXAMPLE_PARAMS).resilience
 
 
 def _family(
@@ -233,6 +238,7 @@ def _adapter(
         crm=crm or _crm(),
         award_amounts=_award_amounts(),
         calls_per_run_cap=cap,
+        resilience=_resilience(),
     )
 
 
@@ -673,6 +679,7 @@ def test_search_modified_since_filters_and_sorts() -> None:
         crm=crm,
         award_amounts=_award_amounts(),
         calls_per_run_cap=200,
+        resilience=_resilience(),
     )
 
     records = adapter.search_modified_since("deals", watermark_ms)
@@ -751,6 +758,7 @@ def test_search_modified_since_bounded_by_until() -> None:
         crm=crm,
         award_amounts=_award_amounts(),
         calls_per_run_cap=200,
+        resilience=_resilience(),
     )
 
     records = adapter.search_modified_since("deals", watermark_ms, until_ms=until_ms)
@@ -791,6 +799,49 @@ def test_guard3_exceeding_cap_raises() -> None:
     with pytest.raises(HubSpotBudgetExceededError):
         # push_family makes > 2 calls (search contact, search deal, create …).
         adapter.push_family(_family())
+
+
+def test_request_retries_within_budget() -> None:
+    """A 429-then-200 self-heals via with_retry, charging the INV-8 budget ONCE (A5).
+
+    The budget guard is OUTER and ``with_retry`` wraps ONLY the raw send, so a
+    retried logical call makes 2 HTTP sends but charges ``calls_per_run_cap``
+    exactly once. With cap=1 the retried call SUCCEEDS (the retry doesn't re-charge),
+    and a SECOND distinct logical call then trips the cap. A ``sleep`` spy proves the
+    backoff slept via the injected clock, never the wall clock.
+    """
+    sends: list[str] = []
+    slept: list[float] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        sends.append(request.url.path)
+        # The FIRST send is a transient 429; every subsequent send is a 200.
+        if len(sends) == 1:
+            return httpx.Response(429, headers={"Retry-After": "0"}, json={"message": "rate"})
+        return httpx.Response(200, json={"total": 0, "results": []})
+
+    client = httpx.Client(transport=httpx.MockTransport(handler), base_url="https://api.hubapi.com")
+    adapter = LiveHubSpotCRMAdapter(
+        client=client,
+        token=_TOKEN,
+        crm=_crm(),
+        award_amounts=_award_amounts(),
+        calls_per_run_cap=1,
+        resilience=_resilience(),
+        sleep=slept.append,
+    )
+
+    family_id = uuid4()
+    # One LOGICAL call (read_mirror → one budgeted _request). 429-then-200 ⇒ 2 sends,
+    # 1 budget charge — so cap=1 does NOT raise.
+    mirror = adapter.read_mirror(family_id)
+    assert mirror.stage is None  # empty mirror (no deal) — the point is it SUCCEEDED
+    assert len(sends) == 2, "with_retry should retry the 429 then succeed on the 200"
+    assert slept, "the backoff must sleep via the injected spy, not the wall clock"
+
+    # The budget was charged exactly ONCE: a SECOND distinct logical call hits cap=1.
+    with pytest.raises(HubSpotBudgetExceededError):
+        adapter.read_mirror(family_id)
 
 
 def test_guard3_kill_switch_degrades_registry_to_simulated(
