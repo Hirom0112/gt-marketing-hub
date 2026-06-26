@@ -22,6 +22,8 @@ from typing import Any, Literal
 import yaml
 from pydantic import BaseModel, ConfigDict, field_validator, model_validator
 
+from app.core.program import Program
+
 # Default location of the params file, relative to the repo root, when neither
 # an explicit path nor the PARAMS_PATH env var is supplied.
 _DEFAULT_PARAMS_PATH = Path("params/params.yaml")
@@ -1127,9 +1129,47 @@ class Nurture(_StrictModel):
     long_horizon: LongHorizon
 
 
+class Programs(_StrictModel):
+    """A1 program-isolation config — the active programs of the single DB (INV-11).
+
+    The single hardened database is multi-program; this block is the one
+    canonical home for which programs are live and which one THIS deployment
+    serves. Each id is validated against the :class:`~app.core.program.Program`
+    enum (a stray/renamed token fails to load), and ``active_program_id`` MUST be
+    one of ``active_program_ids`` — a selected program absent from the active list
+    is config drift and fails the build (CLAUDE.md §4.1). The resolved
+    ``active_program_id`` is the ``program_id`` the API layer stamps/filters on;
+    it is NEVER taken from a client header (it is deployment config, A1).
+    """
+
+    active_program_ids: list[Program]
+    active_program_id: Program
+
+    @model_validator(mode="after")
+    def _active_id_in_list(self) -> Programs:
+        if self.active_program_id not in self.active_program_ids:
+            raise ValueError(
+                f"programs.active_program_id {self.active_program_id.value!r} must be one of "
+                f"active_program_ids {[p.value for p in self.active_program_ids]!r}"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _active_ids_non_empty_unique(self) -> Programs:
+        if not self.active_program_ids:
+            raise ValueError("programs.active_program_ids must be non-empty")
+        if len(set(self.active_program_ids)) != len(self.active_program_ids):
+            raise ValueError(
+                f"programs.active_program_ids must be unique, got "
+                f"{[p.value for p in self.active_program_ids]!r}"
+            )
+        return self
+
+
 class Params(_StrictModel):
     """Typed view of the whole params file — one field per §8 top-level block."""
 
+    programs: Programs
     work_queue: WorkQueue
     conversion: Conversion
     enrollment: Enrollment

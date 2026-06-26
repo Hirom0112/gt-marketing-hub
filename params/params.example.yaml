@@ -1,5 +1,11 @@
 # params/params.yaml — every magic number lives here. Cited as ARCHITECTURE.md §8.
 
+programs:                   # A1 — program-isolation config for the single hardened DB (INV-11). Each id validates against the Program enum (app/core/program.py).
+  active_program_ids:       # the programs live in this deployment (a stamped/filtered program_id per tenant row)
+    - fall_enrollment       # the enrollment cockpit (default program)
+    - summer_camp           # the summer-camp program (D2 net-new module)
+  active_program_id: fall_enrollment   # which program THIS deployment serves; MUST be one of active_program_ids. Deployment config (GT_PROGRAM_ID), NEVER a client header.
+
 work_queue:                 # FR-2.5 — score = w_recoverability·recoverability + w_value·value + w_deadline·deadline_proximity
   w_recoverability: 0.6
   w_value: 0.4
