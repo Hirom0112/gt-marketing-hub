@@ -25,6 +25,7 @@ log), provable without mocking sockets. This module imports nothing from
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from datetime import UTC, datetime
 from typing import Any
 from uuid import UUID, uuid4
 
@@ -126,6 +127,26 @@ class CRMAdapter(ABC):
     @abstractmethod
     def read_mirror(self, family_id: UUID) -> MirrorState:
         """Read the CRM mirror for one family, for §4.7 seam derivation."""
+
+    @abstractmethod
+    def search_modified_since(
+        self, object_type: str, watermark_ms: int
+    ) -> list[tuple[UUID, MirrorState]]:
+        """Pull every record modified strictly after ``watermark_ms`` (A2; §4.7).
+
+        The CRM-as-truth incremental read: given an object type and a watermark
+        (epoch-ms — the HubSpot ``hs_lastmodifieddate`` version stamp,
+        RESEARCH_v2 §II.1), return one ``(family_id, MirrorState)`` per modified
+        record, **ascending** by modified-at, so the poller can reconcile each and
+        advance its watermark to the max seen. The :class:`MirrorState` carries
+        ONLY the PII-free tracked scalars — same inbound firewall as
+        :meth:`read_mirror` (guard 2, INV-1): NO contact name/phone/real email.
+
+        The live impl pages HubSpot CRM Search (``hs_lastmodifieddate GT``, a
+        single ASC sort, ``paging.next.after``) through its budgeted call path
+        (guard 3, INV-8); the simulated impl reconstructs the answer purely from
+        its in-memory recorder (INV-9 — no network client).
+        """
 
     @abstractmethod
     def send_message(self, message: dict[str, Any]) -> SendResult:
@@ -282,6 +303,27 @@ class SimulatedCRMAdapter(CRMAdapter):
         if entry is None:
             return MirrorState(stage=None, mirror_updated_at=None)
         return entry
+
+    def search_modified_since(
+        self, object_type: str, watermark_ms: int
+    ) -> list[tuple[UUID, MirrorState]]:
+        """Return recorded mirrors modified strictly after the watermark, ascending.
+
+        Pure in-memory reconstruction from ``self._mirror`` (INV-9 — no network):
+        the watermark (epoch-ms) is compared against each mirror's
+        ``mirror_updated_at``; only entries strictly after it are returned, sorted
+        ascending by that instant so the result matches the live impl's contract. A
+        mirror with no ``mirror_updated_at`` (never pushed) is skipped. ``object_type``
+        is accepted for interface parity; the recorder keys on family, not object type.
+        """
+        watermark = datetime.fromtimestamp(watermark_ms / 1000, tz=UTC)
+        matches: list[tuple[datetime, UUID, MirrorState]] = []
+        for family_id, mirror in self._mirror.items():
+            modified_at = mirror.mirror_updated_at
+            if modified_at is not None and modified_at > watermark:
+                matches.append((modified_at, family_id, mirror))
+        matches.sort(key=lambda item: item[0])
+        return [(family_id, mirror) for _, family_id, mirror in matches]
 
     def send_message(self, message: dict[str, Any]) -> SendResult:
         """Record an outbound send (email/nudge) and return it. No live send."""

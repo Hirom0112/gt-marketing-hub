@@ -99,6 +99,13 @@ class _RecordingAdapter(CRMAdapter):
                 return MirrorState(stage=record.current_stage, mirror_updated_at=record.updated_at)
         return MirrorState(stage=None, mirror_updated_at=None)
 
+    def search_modified_since(
+        self, object_type: str, watermark_ms: int
+    ) -> list[tuple[UUID, MirrorState]]:
+        # A2 incremental-poll surface — not exercised on the enrollment-seed path;
+        # present only so this CRMAdapter double stays instantiable after the merge.
+        return []
+
     def send_message(self, message: dict[str, Any]) -> SendResult:
         return SendResult(simulated=False, recorded_id="note-1", channel="email")
 

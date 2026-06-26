@@ -666,9 +666,7 @@ def test_search_modified_since_filters_and_sorts() -> None:
         captured.append(body)
         return httpx.Response(200, json=page1 if body.get("after") is None else page2)
 
-    client = httpx.Client(
-        transport=httpx.MockTransport(handler), base_url="https://api.hubapi.com"
-    )
+    client = httpx.Client(transport=httpx.MockTransport(handler), base_url="https://api.hubapi.com")
     adapter = LiveHubSpotCRMAdapter(
         client=client,
         token=_TOKEN,
@@ -691,9 +689,7 @@ def test_search_modified_since_filters_and_sorts() -> None:
     assert str(filters[0]["value"]) == str(watermark_ms)
 
     # --- exactly ONE sort, hs_lastmodifieddate ASCENDING (HubSpot rejects >1) ---
-    assert first["sorts"] == [
-        {"propertyName": "hs_lastmodifieddate", "direction": "ASCENDING"}
-    ]
+    assert first["sorts"] == [{"propertyName": "hs_lastmodifieddate", "direction": "ASCENDING"}]
 
     # --- page 1 carried no cursor; page 2 carried paging.next.after = "200" ---
     assert first.get("after") is None

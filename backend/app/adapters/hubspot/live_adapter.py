@@ -53,7 +53,7 @@ from app.adapters.hubspot.stage_map import (
 from app.core.funding_gate import award_for_tier
 from app.core.params import AwardAmounts, Crm
 from app.core.seam import MirrorState
-from app.data.models import FamilyRecord, FundingState, Student
+from app.data.models import FamilyRecord, FundingState, Stage, Student
 from app.marketing.schemas.publish import PlatformDispatch, PublishRequest
 
 logger = logging.getLogger(__name__)
@@ -65,6 +65,21 @@ _DEALS = "/crm/v3/objects/deals"
 _NOTES = "/crm/v3/objects/notes"
 # The idempotency property — the upsert key (guard 1). NEVER email.
 _GT_SYNTHETIC_ID = "gt_synthetic_id"
+# The HubSpot version stamp the incremental poll filters/sorts on (A2; §4.7).
+_HS_LASTMODIFIED = "hs_lastmodifieddate"
+# The PII-free tracked scalars the §4.7 deriver reads — the ONLY properties the
+# inbound firewall (guard 2) requests on a mirror read/search. No contact identity.
+_TRACKED_DEAL_PROPERTIES = [
+    "dealstage",
+    _HS_LASTMODIFIED,
+    "gt_funding_state",
+    "hubspot_owner_id",
+    _GT_SYNTHETIC_ID,
+]
+# HubSpot CRM Search hard page max (200) and per-query result cap (10,000) — fixed
+# API limits, not tunables (INV-11 governs OUR knobs, not a third party's ceilings;
+# the poller handles chunking past the cap, the adapter just pages one window).
+_SEARCH_PAGE_SIZE = 200
 
 
 class SyntheticWriteLockError(RuntimeError):
@@ -337,53 +352,39 @@ class LiveHubSpotCRMAdapter(CRMAdapter):
         # Read ONLY the four PII-free tracked scalars — never a contact/identity
         # property (guard 2). ``hubspot_owner_id`` is a HubSpot staff/user id, not
         # contact PII; ``gt_funding_state`` is the funding-gate enum value.
-        match = self._search_by_gt_id(
-            _DEALS,
-            gt_id,
-            [
-                "dealstage",
-                "hs_lastmodifieddate",
-                "gt_funding_state",
-                "hubspot_owner_id",
-                _GT_SYNTHETIC_ID,
-            ],
-        )
+        match = self._search_by_gt_id(_DEALS, gt_id, _TRACKED_DEAL_PROPERTIES)
         if match is None:
             return MirrorState(stage=None, mirror_updated_at=None)
+        return self._mirror_from_properties(match.get("properties", {}))
 
-        # Pull ONLY the safe scalars off the payload — never the whole dict, so any
-        # stray contact PII the portal returned never enters app memory/logs.
-        properties = match.get("properties", {})
+    def _mirror_from_properties(self, properties: dict[str, Any]) -> MirrorState:
+        """Lift ONLY the PII-free tracked scalars off a deal payload (guard 2).
+
+        Shared by :meth:`read_mirror` and :meth:`search_modified_since`: pulls just
+        the four reconcile scalars (never the whole dict, so any stray contact PII
+        the portal returned never enters app memory/logs), mapping the HubSpot
+        ``dealstage`` id to a cockpit :class:`Stage`. An absent stage stays
+        ``None``; an unmapped/legacy stage id is caught and surfaced as a
+        divergence-shaped mirror (``stage=None``) rather than crashing (fail closed).
+        """
         stage_id = properties.get("dealstage")
-        mirror_updated_at = _parse_hs_timestamp(properties.get("hs_lastmodifieddate"))
+        mirror_updated_at = _parse_hs_timestamp(properties.get(_HS_LASTMODIFIED))
         funding_state = _parse_funding_state(properties.get("gt_funding_state"))
         owner_raw = properties.get("hubspot_owner_id")
         owner = str(owner_raw) if owner_raw else None
 
-        if not stage_id:
-            return MirrorState(
-                stage=None,
-                mirror_updated_at=mirror_updated_at,
-                funding_state=funding_state,
-                owner=owner,
-            )
-
-        try:
-            stage = hubspot_id_to_cockpit_stage(str(stage_id), self._crm)
-        except StageMappingError:
-            # Legacy/unmapped stage (e.g. a leftover non-funnel stage). Surface a
-            # divergence: stage=None reads as "unsynced/diverged" to the §4.7
-            # deriver — never crash out of read_mirror (fail closed, don't raise).
-            logger.warning(
-                "read_mirror: deal holds an unmapped HubSpot stage id; "
-                "surfacing as divergence (no crash, no PII)."
-            )
-            return MirrorState(
-                stage=None,
-                mirror_updated_at=mirror_updated_at,
-                funding_state=funding_state,
-                owner=owner,
-            )
+        stage: Stage | None = None
+        if stage_id:
+            try:
+                stage = hubspot_id_to_cockpit_stage(str(stage_id), self._crm)
+            except StageMappingError:
+                # Legacy/unmapped stage (e.g. a leftover non-funnel stage). Surface
+                # a divergence: stage=None reads as "unsynced/diverged" to the §4.7
+                # deriver — never crash (fail closed, don't raise).
+                logger.warning(
+                    "read_mirror: deal holds an unmapped HubSpot stage id; "
+                    "surfacing as divergence (no crash, no PII)."
+                )
 
         return MirrorState(
             stage=stage,
@@ -391,6 +392,72 @@ class LiveHubSpotCRMAdapter(CRMAdapter):
             funding_state=funding_state,
             owner=owner,
         )
+
+    def search_modified_since(
+        self, object_type: str, watermark_ms: int
+    ) -> list[tuple[UUID, MirrorState]]:
+        """Page HubSpot CRM Search for records modified strictly after the watermark.
+
+        The CRM-as-truth incremental pull (A2; RESEARCH_v2 §II.1): POST
+        ``/crm/v3/objects/{object}/search`` with a ``hs_lastmodifieddate GT
+        <watermark-epoch-ms>`` filter and a SINGLE ``hs_lastmodifieddate``
+        ASCENDING sort (HubSpot rejects >1 sort), paging via ``paging.next.after``
+        at the 200-row page max until the cursor runs out. Every page rides
+        :meth:`_request`, so the whole window respects the guard-3 per-run budget
+        (INV-8). Each result is reduced to a ``(family_id, MirrorState)`` pair via
+        the shared PII firewall (guard 2 — only tracked scalars requested AND
+        lifted); a result whose ``gt_synthetic_id`` is absent/non-UUID is skipped
+        (the cockpit keys mirrors by family UUID). Results arrive ascending, so the
+        poller can advance its watermark to the last entry's modified-at.
+        """
+        object_path = f"/crm/v3/objects/{object_type}"
+        out: list[tuple[UUID, MirrorState]] = []
+        after: str | None = None
+        while True:
+            payload: dict[str, Any] = {
+                "filterGroups": [
+                    {
+                        "filters": [
+                            {
+                                "propertyName": _HS_LASTMODIFIED,
+                                "operator": "GT",
+                                "value": str(watermark_ms),
+                            }
+                        ]
+                    }
+                ],
+                "sorts": [{"propertyName": _HS_LASTMODIFIED, "direction": "ASCENDING"}],
+                "properties": _TRACKED_DEAL_PROPERTIES,
+                "limit": _SEARCH_PAGE_SIZE,
+            }
+            if after is not None:
+                payload["after"] = after
+            body = self._request("POST", f"{object_path}/search", json=payload).json()
+            for result in body.get("results") or []:
+                record = self._modified_record(result)
+                if record is not None:
+                    out.append(record)
+            after = ((body.get("paging") or {}).get("next") or {}).get("after")
+            if not after:
+                break
+        return out
+
+    def _modified_record(self, result: dict[str, Any]) -> tuple[UUID, MirrorState] | None:
+        """Reduce one search result to ``(family_id, MirrorState)`` (guard 2).
+
+        Parses the ``gt_synthetic_id`` to the family UUID (the cockpit mirror key)
+        and lifts ONLY the PII-free tracked scalars. A missing/non-UUID id ⇒
+        ``None`` (skip) rather than fabricating a key.
+        """
+        properties = result.get("properties", {})
+        raw_id = properties.get(_GT_SYNTHETIC_ID)
+        if not raw_id:
+            return None
+        try:
+            family_id = UUID(str(raw_id))
+        except ValueError:
+            return None
+        return family_id, self._mirror_from_properties(properties)
 
     def send_message(self, message: dict[str, Any]) -> SendResult:
         """Create a Note (``hs_note_body`` + ``hs_timestamp``) and associate it (§7.1).
