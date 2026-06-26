@@ -14,6 +14,7 @@ from app.api.ai_actions import router as ai_actions_router
 from app.api.contact_outcome import router as contact_outcome_router
 from app.api.content import router as content_router
 from app.api.crm_status import router as crm_status_router
+from app.api.crm_sync import router as crm_sync_router
 from app.api.deps import get_params, get_security_event_log
 from app.api.enrollment import router as enrollment_router
 from app.api.evals import router as evals_router
@@ -132,6 +133,14 @@ app.include_router(seam_router)
 # is on (the INV-3 "red eval disables the action in the UI" pattern). The kill
 # switch's MECHANISM stays the server env var; this only surfaces state.
 app.include_router(crm_status_router)
+
+# CRM-as-truth incremental poll (A2; PLAN_v2 §A2; RESEARCH_v2 §II.1) —
+# /crm/sync/poll POST + /crm/sync/status GET. The poll pulls deals modified since
+# the persisted per-program watermark (window-chunked under the 10k cap), reconciles
+# each through the §4.7 seam (CRM wins stage/owner; funding_state stays
+# DB-authoritative, INV-10), advances the watermark, and LOGS each proposal+decision
+# (NFR-6). Dispatch is simulated v1 (INV-9); status is read-only.
+app.include_router(crm_sync_router)
 
 # Content engine (FR-3.1/3.4/3.5; ARCH §5.3) — /ai/content/generate (gated batch),
 # /content/{id}/decision (the sole content state write — keep promotes library +
