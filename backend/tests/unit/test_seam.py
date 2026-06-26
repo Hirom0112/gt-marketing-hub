@@ -104,15 +104,15 @@ def test_derive_conflict() -> None:
 
 
 # ---------------------------------------------------------------------------
-# R1 + M4 — multi-field reconcile with per-field authority (TODO.md R1/M4; §4.7).
-# `funding_state` is DB-authoritative (DB always wins → drift is a pending push,
-# never a conflict). `owner` was CRM-authoritative; the M4 owner-authority flip
-# (USER-RATIFIED 2026-06-17, A-30) makes `owner` DB-AUTHORITATIVE, driven by
-# `assigned_rep_id` (the DB owns assignment now) — UNLESS the mirror's owner
-# changed AFTER our last `assigned_at` (someone edited HubSpot post-assignment),
-# in which case the seam FLAGS a conflict instead of stomping the human edit
-# (INV-4-style fail-closed guard). Row status aggregates per-field results: any
-# conflict ⇒ conflict; else any unsynced ⇒ unsynced; else synced.
+# Multi-field reconcile with per-field authority (§4.7; A2 flip, RESEARCH_v2 §II.1).
+# `funding_state` is DB-authoritative (GT owns it, INV-10 → drift is a pending
+# push, never accepted from the CRM; a conflict only on ambiguous recency). The
+# A2 flip makes the human/pipeline-edited fields `stage` + `owner`
+# CRM-as-source-of-truth via last-write-wins: the mirror's `mirror_updated_at`
+# (HubSpot `hs_lastmodifieddate`) vs the local `updated_at` — mirror newer ⇒
+# accept_mirror, local newer ⇒ push_local, equal/missing ⇒ flag_conflict (INV-4).
+# Row status aggregates per-field results: any conflict/accept ⇒ conflict; else
+# any unsynced ⇒ unsynced; else synced.
 # ---------------------------------------------------------------------------
 
 
@@ -143,23 +143,26 @@ def test_funding_state_drift_is_db_authoritative_unsynced() -> None:
     assert proposal.direction is ReconcileDirection.PUSH_LOCAL
 
 
-def test_owner_db_authority_with_guard() -> None:
-    """`owner` is DB-authoritative (M4 flip) with a post-`assigned_at` guard (A-30).
+def test_owner_crm_last_write_wins() -> None:
+    """`owner` is CRM-as-truth via last-write-wins (A2 flip; RESEARCH_v2 §II.1).
 
-    Two pinned cases:
+    A2 flips ``owner`` from DB-authoritative to CRM-as-source-of-truth, reconciled
+    by last-write-wins on the mirror's ``mirror_updated_at`` (the HubSpot
+    ``hs_lastmodifieddate``) vs the local ``updated_at``. Two pinned cases:
 
-    (a) DB authority + PUSH: the DB owns the assignment (``assigned_rep_id``); a
-        diverging mirror owner that did NOT change after our ``assigned_at`` is a
-        plain pending push (DB wins → ``unsynced``), and ``propose_reconcile``
-        yields ``push_local`` — the DB owner is pushed to the mirror, no conflict.
-    (b) GUARD → CONFLICT: if the mirror's owner changed AFTER our ``assigned_at``
-        (someone edited the HubSpot deal owner post-assignment), the seam FLAGS a
-        conflict instead of stomping that human edit (INV-4-style fail-closed).
+    (a) LOCAL newer → PUSH: a diverging mirror owner whose last change is strictly
+        BEFORE the local ``updated_at`` loses last-write-wins, so it is a plain
+        pending push (local wins → ``unsynced``) and ``propose_reconcile`` yields
+        ``push_local`` — the local owner is pushed to the mirror.
+    (b) CRM newer → ACCEPT_MIRROR: when the mirror owner changed strictly AFTER the
+        local ``updated_at`` (someone edited the HubSpot deal owner more recently),
+        the CRM wins last-write-wins — the seam surfaces a ``conflict`` row and
+        proposes ``accept_mirror`` (adopt the CRM value), not a blind local push.
     """
     rep = uuid4()
 
-    # (a) DB-authoritative push: mirror diverges on owner, but its last change
-    # (mirror_updated_at) is NOT after our assigned_at — DB wins, plain push.
+    # (a) Local newer ⇒ push: mirror diverges on owner, but its last change
+    # (mirror_updated_at) is strictly BEFORE local updated_at — local wins.
     pushable = _family_record(
         updated_at=_T0,
         crm_synced_at=_BEFORE,  # local touched after last push ⇒ unsynced baseline.
@@ -172,16 +175,16 @@ def test_owner_db_authority_with_guard() -> None:
         stage=Stage.APPLY,
         funding_state=FundingState.NONE,
         owner="stale-owner-in-hubspot",
-        mirror_updated_at=_BEFORE,  # mirror changed BEFORE assigned_at ⇒ no guard.
+        mirror_updated_at=_BEFORE,  # mirror older than local ⇒ local wins LWW.
     )
     assert derive_seam_status(pushable, mirror_stale_owner) is SeamStatus.UNSYNCED
     proposal = propose_reconcile(pushable, mirror_stale_owner)
     assert proposal is not None
     assert proposal.direction is ReconcileDirection.PUSH_LOCAL
 
-    # (b) Guard fires: the mirror owner changed AFTER assigned_at ⇒ conflict, not
-    # a blind overwrite (don't stomp a post-assignment HubSpot edit).
-    guarded = _family_record(
+    # (b) CRM newer ⇒ accept_mirror: the mirror owner changed AFTER local
+    # updated_at, so the CRM wins last-write-wins — adopt it, don't stomp it.
+    crm_newer = _family_record(
         updated_at=_T0,
         crm_synced_at=_AFTER,  # timestamps alone would read synced…
         current_stage=Stage.APPLY,
@@ -193,12 +196,12 @@ def test_owner_db_authority_with_guard() -> None:
         stage=Stage.APPLY,
         funding_state=FundingState.NONE,
         owner="someone-changed-it-in-hubspot",
-        mirror_updated_at=_AFTER,  # …but the mirror owner changed AFTER assigned_at.
+        mirror_updated_at=_AFTER,  # …but the mirror owner is newer than local.
     )
-    assert derive_seam_status(guarded, mirror_changed_after) is SeamStatus.CONFLICT
-    proposal = propose_reconcile(guarded, mirror_changed_after)
+    assert derive_seam_status(crm_newer, mirror_changed_after) is SeamStatus.CONFLICT
+    proposal = propose_reconcile(crm_newer, mirror_changed_after)
     assert proposal is not None
-    assert proposal.direction is ReconcileDirection.FLAG_CONFLICT
+    assert proposal.direction is ReconcileDirection.ACCEPT_MIRROR
 
 
 def test_all_tracked_fields_match_is_synced() -> None:
@@ -246,7 +249,9 @@ def test_crm_wins_when_mirror_strictly_newer() -> None:
     # --- stage divergence ---
     # (a) mirror strictly newer ⇒ CRM wins ⇒ accept_mirror.
     crm_newer = _family_record(updated_at=_T0, crm_synced_at=_AFTER, current_stage=Stage.APPLY)
-    proposal = propose_reconcile(crm_newer, MirrorState(stage=Stage.ENROLL, mirror_updated_at=_AFTER))
+    proposal = propose_reconcile(
+        crm_newer, MirrorState(stage=Stage.ENROLL, mirror_updated_at=_AFTER)
+    )
     assert proposal is not None
     assert proposal.direction is ReconcileDirection.ACCEPT_MIRROR
 
