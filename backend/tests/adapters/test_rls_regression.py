@@ -39,6 +39,15 @@ _EMAIL_B = "rls-regression-b@example.invalid"
 # A fixed, recognizably-synthetic family_id for B's seeded row (easy teardown).
 _SEED_FAMILY_ID = "00000000-0000-0000-0000-0000000000b0"
 
+# A1 cross-program regression (PLAN_v2 §A1) — a principal in program A and the two
+# program-tagged rows it (co-)owns: one in its own program (visible), one in another
+# program (invisible despite ownership — the RESTRICTIVE program policy, 0024).
+_EMAIL_PROG = "rls-regression-program@example.invalid"
+_PROGRAM_A = "fall_enrollment"
+_PROGRAM_B = "summer_camp"
+_SEED_FAMILY_ID_PROG_A = "00000000-0000-0000-0000-0000000000a0"
+_SEED_FAMILY_ID_PROG_B = "00000000-0000-0000-0000-0000000000c0"
+
 
 def _admin_headers(service_key: str) -> dict[str, str]:
     return {
@@ -72,6 +81,37 @@ def _ensure_user(client: httpx.Client, service_key: str, email: str) -> str:
         if user.get("email") == email:
             return str(user["id"])
     raise AssertionError(f"could not provision or find synthetic user {email!r}: {created.text}")
+
+
+def _ensure_user_in_program(
+    client: httpx.Client, service_key: str, email: str, program_id: str
+) -> str:
+    """Create (or find) a synthetic user whose ``app_metadata.program_id`` is set.
+
+    The RESTRICTIVE program policy (0024) reads ``auth.jwt() -> 'app_metadata' ->>
+    'program_id'``, so the principal must carry the claim. Idempotent: a re-run
+    updates the existing user's ``app_metadata`` (the program may have changed).
+    """
+    created = client.post(
+        "/auth/v1/admin/users",
+        headers=_admin_headers(service_key),
+        json={
+            "email": email,
+            "password": _PASSWORD,
+            "email_confirm": True,
+            "app_metadata": {"program_id": program_id},
+        },
+    )
+    if created.status_code == 200:
+        return str(created.json()["id"])
+    user_id = _ensure_user(client, service_key, email)
+    # Already existed — force the program claim to the wanted value (PUT is idempotent).
+    client.put(
+        f"/auth/v1/admin/users/{user_id}",
+        headers=_admin_headers(service_key),
+        json={"app_metadata": {"program_id": program_id}},
+    )
+    return user_id
 
 
 def _sign_in(client: httpx.Client, anon_key: str, email: str) -> str:
@@ -175,3 +215,77 @@ def test_foreign_read_returns_zero_rows() -> None:
                 headers=_admin_headers(service_key),
                 params={"family_id": f"eq.{_SEED_FAMILY_ID}"},
             )
+
+
+def test_cross_program_read_is_isolated() -> None:
+    """A program-A principal reads its program-A row but ZERO program-B rows (A1).
+
+    The live proof of program isolation (0024 RESTRICTIVE policy on the
+    ``app_metadata.program_id`` claim): a principal whose JWT claims
+    ``program_id='fall_enrollment'`` co-owns two rows — one tagged ``fall_enrollment``
+    and one tagged ``summer_camp``. Ownership is identical, so ONLY the program tag
+    differs: the program-A row is visible, the program-B row is invisible (the
+    RESTRICTIVE policy is AND-ed on top of the owner policy — isolation tightens,
+    never loosens). Skipped when no live Supabase is configured (A-3).
+    """
+    supabase_url = (os.environ.get("SUPABASE_URL") or "").strip()
+    if not supabase_url or supabase_url.startswith("<"):
+        pytest.skip("no SUPABASE_URL — cross-program regression requires a live Supabase")
+
+    anon_key = os.environ["SUPABASE_ANON_KEY"]
+    service_key = os.environ["SUPABASE_SERVICE_ROLE_KEY"]
+
+    with httpx.Client(base_url=supabase_url, timeout=30.0) as client:
+        # A principal whose JWT carries app_metadata.program_id = fall_enrollment.
+        user_id = _ensure_user_in_program(client, service_key, _EMAIL_PROG, _PROGRAM_A)
+        jwt = _sign_in(client, anon_key, _EMAIL_PROG)
+
+        # service_role seeds two rows the principal OWNS, differing ONLY in program_id.
+        for seed_id, program_id in (
+            (_SEED_FAMILY_ID_PROG_A, _PROGRAM_A),
+            (_SEED_FAMILY_ID_PROG_B, _PROGRAM_B),
+        ):
+            client.request(
+                "DELETE",
+                "/rest/v1/family_record",
+                headers=_admin_headers(service_key),
+                params={"family_id": f"eq.{seed_id}"},
+            )
+            seeded = client.post(
+                "/rest/v1/family_record",
+                headers={**_admin_headers(service_key), "Prefer": "return=representation"},
+                json={
+                    "family_id": seed_id,
+                    "user_id": user_id,
+                    "display_name": f"The Synthetic {program_id} Family",
+                    "primary_contact_synthetic_email": "synthetic-prog@example.invalid",
+                    "current_stage": "interest",
+                    "attribution_source": "rls-regression-seed",
+                    "program_id": program_id,
+                },
+            )
+            assert seeded.status_code in (200, 201), (
+                f"seed of {program_id} row failed: {seeded.text}"
+            )
+
+        try:
+            rows = _select_family_record(client, apikey=anon_key, bearer=jwt)
+            ids = {r.get("family_id") for r in rows}
+            # The program-A row IS visible (owner AND in-program both hold).
+            assert _SEED_FAMILY_ID_PROG_A in ids, (
+                "program-A principal could not read its OWN program-A row — the "
+                "RESTRICTIVE program policy is over-blocking (A1)"
+            )
+            # The program-B row is INVISIBLE despite identical ownership (the isolation).
+            assert _SEED_FAMILY_ID_PROG_B not in ids, (
+                f"CROSS-PROGRAM LEAK (A1): a fall_enrollment principal read the "
+                f"summer_camp row {_SEED_FAMILY_ID_PROG_B} — RESTRICTIVE isolation failed"
+            )
+        finally:
+            for seed_id in (_SEED_FAMILY_ID_PROG_A, _SEED_FAMILY_ID_PROG_B):
+                client.request(
+                    "DELETE",
+                    "/rest/v1/family_record",
+                    headers=_admin_headers(service_key),
+                    params={"family_id": f"eq.{seed_id}"},
+                )
