@@ -29,11 +29,42 @@ _FORCE_RLS = re.compile(r"\bFORCE\s+ROW\s+LEVEL\s+SECURITY\b", re.IGNORECASE)
 _CREATE_POLICY = re.compile(r"\bCREATE\s+POLICY\b", re.IGNORECASE)
 _NULL_GUARD = re.compile(r"auth\.uid\(\)\s*\)?\s*IS\s+NOT\s+NULL", re.IGNORECASE)
 _SECURITY_DEFINER = re.compile(r"\bSECURITY\s+DEFINER\b", re.IGNORECASE)
+# A CREATE FUNCTION's (optionally schema-qualified) name — used to scope the
+# security-definer ban to the EXPOSED schema (D-RLS-7), IDENTICAL to the
+# build-time helper in tests/unit/test_migrations_rls.py.
+_CREATE_FUNCTION = re.compile(
+    r"\bCREATE\s+(?:OR\s+REPLACE\s+)?FUNCTION\s+([A-Za-z_][\w.]*)", re.IGNORECASE
+)
 
 
 def _strip_comments(sql: str) -> str:
     """Drop `-- …` line comments so structural counts match DDL, not prose."""
     return "\n".join(re.sub(r"--.*$", "", line) for line in sql.splitlines())
+
+
+def _security_definer_functions_in_public(sql: str) -> list[str]:
+    """Names of any definer-rights functions defined in the exposed (public) schema.
+
+    Splits the DDL into per-function windows; for each window carrying the
+    definer-rights token, returns its name iff that name resolves to the exposed
+    schema (unqualified ⇒ public, or explicitly `public.`). A name qualified to a
+    non-public schema (e.g. `private.authorize`) is NOT an exposed-schema object,
+    so it is permitted (D-RLS-7 bans definer-rights helpers only in the exposed,
+    internet-reachable schema). IDENTICAL in behavior to the build-time helper in
+    tests/unit/test_migrations_rls.py — the two must never drift.
+    """
+    matches = list(_CREATE_FUNCTION.finditer(sql))
+    offenders: list[str] = []
+    for i, m in enumerate(matches):
+        end = matches[i + 1].start() if i + 1 < len(matches) else len(sql)
+        window = sql[m.end() : end]
+        if not _SECURITY_DEFINER.search(window):
+            continue
+        qualname = m.group(1)
+        schema = qualname.split(".")[0].lower() if "." in qualname else "public"
+        if schema == "public":
+            offenders.append(qualname)
+    return offenders
 
 
 @dataclass(frozen=True, slots=True)
@@ -91,9 +122,12 @@ def evaluate_posture(migrations: list[str] | None = None) -> PostureResult:
     n_force = len(_FORCE_RLS.findall(stripped))
     n_policies = len(_CREATE_POLICY.findall(stripped))
     n_guards = len(_NULL_GUARD.findall(stripped))
-    # Security-definer is checked on the RAW text (the build-time test also reads
-    # the un-stripped concatenation), so a definer helper anywhere fails it.
-    has_definer = bool(_SECURITY_DEFINER.search(raw))
+    # D-RLS-7 is scoped to the EXPOSED schema: a definer-rights helper in
+    # `public`/unqualified is an offender; one in a non-exposed schema (e.g.
+    # `private.`, the documented-safe Supabase RBAC pattern) is permitted. Run the
+    # detection on the comment-STRIPPED text — IDENTICAL to the build-time helper
+    # in tests/unit/test_migrations_rls.py, so the two can never drift.
+    offenders = _security_definer_functions_in_public(stripped)
 
     checks = [
         PostureCheck(
@@ -113,10 +147,13 @@ def evaluate_posture(migrations: list[str] | None = None) -> PostureResult:
         ),
         PostureCheck(
             name="no_security_definer_in_exposed_schema",
-            passed=not has_definer,
+            passed=not offenders,
             detail="no definer-rights helper in the exposed schema (D-RLS-7)"
-            if not has_definer
-            else "a definer-rights helper was found in the exposed schema (D-RLS-7 violated)",
+            if not offenders
+            else (
+                "definer-rights helper(s) found in the exposed schema "
+                f"(D-RLS-7 violated): {offenders}"
+            ),
         ),
     ]
     return PostureResult(green=all(c.passed for c in checks), checks=checks)
