@@ -4,6 +4,7 @@ import LandingDashboard from '../LandingDashboard';
 import PipelineBoard from '../PipelineBoard';
 import Scoreboard from '../Scoreboard';
 import DropOffHeatmap from '../enrollment/DropOffHeatmap';
+import DataConfidenceBanner from '../dashboard/DataConfidenceBanner';
 
 // S11 leadership workspace — the P2-readable view. Per ASSUMPTIONS A-17, the
 // leadership-facing content the operator page used to carry now lives here,
@@ -44,6 +45,10 @@ export default function LeadershipWorkspace(): JSX.Element {
           Leadership · funnel, seam ledger, growth rollup &amp; gate health
         </span>
       </div>
+
+      {/* Cross-module data-confidence banner (A4) — renders only when CRM↔cockpit
+          parity has dropped below the trusted threshold; otherwise nothing. */}
+      <DataConfidenceBanner />
 
       {/* 1. Funnel scoreboard (KPI strip) + CRM-seam ledger — live GET /pipeline. */}
       <LandingDashboard />

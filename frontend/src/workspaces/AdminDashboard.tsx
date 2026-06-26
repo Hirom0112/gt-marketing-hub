@@ -12,6 +12,7 @@ import { summarizeRecovery, type RecoverableRow } from '../enrollment/recency';
 import { fmtUSD } from '../enrollment/format';
 import { DashboardLayout } from '../dashboard/DashboardLayout';
 import { KpiStrip } from '../dashboard/KpiStrip';
+import DataConfidenceBanner from '../dashboard/DataConfidenceBanner';
 import LeadsTab from '../dashboard/LeadsTab';
 import StudentsTab from '../dashboard/StudentsTab';
 import ReconcileTab from '../dashboard/ReconcileTab';
@@ -90,6 +91,9 @@ export default function AdminDashboard(): JSX.Element {
 
   return (
     <section data-testid="admin-dashboard" aria-label="Admin dashboard">
+      {/* Cross-module data-confidence banner (A4) — renders only when CRM↔cockpit
+          parity has dropped below the trusted threshold; otherwise nothing. */}
+      <DataConfidenceBanner />
       <DashboardLayout
         kpiStrip={<KpiStrip metrics={metrics} />}
         tabBar={
