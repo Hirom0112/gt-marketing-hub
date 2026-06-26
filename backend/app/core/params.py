@@ -947,27 +947,24 @@ class CrmSync(_StrictModel):
     numbers — the pure planner (``core/crm_sync.py``) and the poller read them
     here, never a code literal:
 
-    * ``page_size`` — the CRM Search page size; HubSpot caps a page at 200
-      (RESEARCH_v2 §II.1), so a value above 200 is config drift and fails to load.
     * ``result_cap`` — the 10,000-result cap per query; the window-chunking exists
       precisely so no single query approaches it.
     * ``chunk_days`` — the per-sub-window span (whole days) the [watermark, now]
       window is split into so one query stays under ``result_cap``.
     * ``search_qps`` — the CRM Search request-rate budget (queries/sec) the poller
       throttles to (HubSpot Search is more rate-limited than other CRM reads).
+
+    The CRM Search 200-row page max is a FIXED HubSpot protocol ceiling, not a GT
+    tunable, so its one home is the adapter's ``_SEARCH_PAGE_SIZE`` constant — not
+    this params block (A-39).
     """
 
-    page_size: int
     result_cap: int
     chunk_days: int
     search_qps: int
 
     @model_validator(mode="after")
     def _bounds_valid(self) -> CrmSync:
-        if not 1 <= self.page_size <= 200:
-            raise ValueError(
-                f"crm_sync.page_size must be 1..200 (HubSpot page max), got {self.page_size!r}"
-            )
         for name in ("result_cap", "chunk_days", "search_qps"):
             value = getattr(self, name)
             if value < 1:

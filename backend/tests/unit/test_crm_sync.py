@@ -42,7 +42,6 @@ def test_watermark_advances_and_chunks_past_cap() -> None:
     chunk_days = crm_sync.chunk_days
 
     # RESEARCH_v2 §II.1 grounded facts pinned to params (INV-11; drift fails build).
-    assert crm_sync.page_size == 200  # page max 200
     assert crm_sync.result_cap == 10000  # 10,000-result cap per query
     assert chunk_days >= 1
     assert crm_sync.search_qps >= 1
