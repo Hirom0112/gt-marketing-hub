@@ -22,6 +22,8 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict
 
+from app.core.program import Program
+
 SendMode = Literal["simulate", "live"]
 MediaGenMode = Literal["placeholder", "live"]
 SocialPostMode = Literal["simulate", "live"]
@@ -122,6 +124,16 @@ class Settings(BaseModel):
     # `supabase` = require the live repo (fail loud when unbound). Doctrine-neutral.
     cockpit_repo: CockpitRepo = "auto"
 
+    # A1 active-program selector (§5.1). The single hardened database is multi-program
+    # (`fall_enrollment`, `summer_camp`, …); this is the raw `program_id` token THIS
+    # deployment serves — the app stamps/filters every program-scoped row on it as
+    # the app-layer defense-in-depth (the service_role read path bypasses RLS, so
+    # isolation is enforced in code; A1 / PLAN_v2 §A1). It is DEPLOYMENT config, never
+    # a client header (A-37). The raw string is validated fail-closed at the deps layer
+    # via `app.core.program.resolve_program` (an unknown token raises). Default mirrors
+    # the migration backfill (`Program.FALL_ENROLLMENT`); no magic literal (INV-11).
+    gt_program_id: str = Program.FALL_ENROLLMENT.value
+
     # HubSpot live-adapter config (§5.4). The token defaults to ``None`` —
     # absence is a first-class state: with no token the CRM edge can only run
     # `simulate` (the adapter agent's registry fails loud on `live` w/o a token).
@@ -182,6 +194,14 @@ class Settings(BaseModel):
         if not cockpit_repo or cockpit_repo.startswith("<"):
             cockpit_repo = "auto"
 
+        # GT_PROGRAM_ID: the active program token; empty / unset / a `<…>` sentinel ⇒
+        # the migration-backfill default (`fall_enrollment`). Kept as the RAW string —
+        # `resolve_program` validates it fail-closed at the deps layer (a typo there
+        # raises, never silently defaulting to a program; A1 fail-closed posture).
+        gt_program_id = (os.environ.get("GT_PROGRAM_ID", "") or "").strip()
+        if not gt_program_id or gt_program_id.startswith("<"):
+            gt_program_id = Program.FALL_ENROLLMENT.value
+
         # A placeholder/sentinel token (the .env.example angle-bracket form or an
         # empty string) counts as "unset" — same posture as ANTHROPIC_API_KEY.
         hs_token = os.environ.get("HUBSPOT_PRIVATE_APP_TOKEN")
@@ -216,6 +236,7 @@ class Settings(BaseModel):
             crm_mode=crm_mode,  # type: ignore[arg-type]
             sis_mode=sis_mode,  # type: ignore[arg-type]
             cockpit_repo=cockpit_repo,  # type: ignore[arg-type]
+            gt_program_id=gt_program_id,
             hubspot_private_app_token=hs_token,
             hubspot_calls_per_run_cap=_env_int("HUBSPOT_CALLS_PER_RUN_CAP", 200),
             hubspot_kill_switch=_env_bool("HUBSPOT_KILL_SWITCH", False),
