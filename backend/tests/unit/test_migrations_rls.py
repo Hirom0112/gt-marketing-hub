@@ -882,3 +882,92 @@ def test_sis_status_table_force_rls_and_pii_firewall() -> None:
         "sis_status must have no anon/authenticated write policy (writes via service_role)"
     )
     assert not _SECURITY_DEFINER.search(sql), "0014 must not use SECURITY DEFINER (D-RLS-7)"
+
+
+# ---------------------------------------------------------------------------
+# 0024 program isolation (A1) — single hardened database, program-level tenancy.
+# Each family/enrollment tenant table gains `program_id text NOT NULL DEFAULT
+# 'fall_enrollment'` (the DEFAULT backfills the existing synthetic Fall rows) and
+# an `AS RESTRICTIVE` policy AND-ed on top of the owner-scoped permissive policies,
+# keyed on the caller's app_metadata.program_id JWT claim AND carrying the same
+# auth.uid() null guard (so the global one-guard-per-policy invariant stays green;
+# the rule reads "authenticated AND in-program"). The API connects as a least-
+# privilege `app_runtime` role created WITHOUT bypass-RLS, so even the server path
+# is RLS-bounded; the true service_role/superuser is migrations-only. The
+# operational/global tables (proposals, evals, brand_memory, security_event,
+# decisions, assignment_cursor, sales_agent, community_profiles) are NOT
+# program-partitioned (ASSUMPTIONS.md A-37; CLAUDE.md §2 domain ownership).
+# ---------------------------------------------------------------------------
+
+
+def _program_isolation_sql() -> str:
+    """The 0024 program-isolation migration DDL (comments stripped)."""
+    return _strip_comments(
+        (MIGRATIONS_DIR / "0024_program_isolation.sql").read_text(encoding="utf-8")
+    )
+
+
+# The family/enrollment tenant tables partitioned by program (each gets a
+# program_id tag + a RESTRICTIVE claim policy).
+_PROGRAM_SCOPED_TABLES = (
+    "family_record",
+    "leads_new",
+    "app_form",
+    "enrollment_forms",
+    "apply_events",
+    "student",
+    "voucher_event",
+    "sis_status",
+    "lead_assignment",
+)
+_AS_RESTRICTIVE = re.compile(r"\bAS\s+RESTRICTIVE\b", re.IGNORECASE)
+# A BYPASSRLS token NOT immediately negated by a NO prefix — granting it to the
+# app role would silently defeat program isolation.
+_BYPASSRLS_NOT_NEGATED = re.compile(r"(?<!NO)BYPASSRLS", re.IGNORECASE)
+
+
+def test_program_id_restrictive_isolation() -> None:
+    """A1: every program-scoped tenant table is program_id-tagged + RESTRICTIVE-isolated.
+
+    For each family/enrollment tenant table, 0024 must:
+      * ADD a `program_id` NOT NULL column (the DEFAULT backfills existing synthetic
+        rows to the Fall program), and
+      * add an `AS RESTRICTIVE` policy keyed on the caller's app_metadata.program_id
+        JWT claim AND carrying the auth.uid() null guard (authenticated AND
+        in-program) — AND-ed on top of the retained owner-scoped permissive policies.
+    The API connection role `app_runtime` is created WITHOUT bypass-RLS (so even the
+    server path is RLS-bounded); no un-negated BYPASSRLS is granted to any role; no
+    SECURITY DEFINER in the exposed schema (D-RLS-7).
+    """
+    sql = _program_isolation_sql()
+
+    for table in _PROGRAM_SCOPED_TABLES:
+        assert re.search(
+            rf"ALTER\s+TABLE\s+{table}\s+ADD\s+COLUMN\s+program_id\b[^;]*NOT\s+NULL",
+            sql,
+            re.IGNORECASE,
+        ), f"0024 must ADD COLUMN program_id NOT NULL on {table}"
+        policy = re.search(
+            rf"CREATE\s+POLICY\s+\w+\s+ON\s+{table}\b[^;]*AS\s+RESTRICTIVE[^;]*;",
+            sql,
+            re.IGNORECASE | re.DOTALL,
+        )
+        assert policy, f"0024 must add an AS RESTRICTIVE policy on {table}"
+        body = policy.group(0)
+        assert re.search(r"app_metadata", body, re.IGNORECASE) and re.search(
+            r"\bprogram_id\b", body, re.IGNORECASE
+        ), f"{table}'s RESTRICTIVE policy must key on the app_metadata program_id claim"
+        assert _NULL_GUARD.search(body), (
+            f"{table}'s RESTRICTIVE policy must carry the auth.uid() IS NOT NULL guard (D-RLS-2)"
+        )
+
+    # The least-privilege API role: created WITHOUT bypass-RLS, and no un-negated
+    # BYPASSRLS granted anywhere (would silently defeat program isolation).
+    assert re.search(r"\bapp_runtime\b", sql), "0024 must create the app_runtime role"
+    assert re.search(r"NOBYPASSRLS", sql, re.IGNORECASE), (
+        "app_runtime must be created NOBYPASSRLS (the server path stays RLS-bounded)"
+    )
+    assert not _BYPASSRLS_NOT_NEGATED.search(sql), (
+        "0024 must not grant BYPASSRLS to any role (only NOBYPASSRLS is permitted)"
+    )
+    assert not _SECURITY_DEFINER.search(sql), "0024 must not use SECURITY DEFINER (D-RLS-7)"
