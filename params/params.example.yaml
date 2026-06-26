@@ -392,3 +392,8 @@ security:                   # M7 — detection thresholds for the edge middlewar
 
 data_confidence:            # A4 — cross-module data-confidence threshold (INV-11)
   min_parity: 0.95                  # overall sync-parity below this ⇒ data-confidence banner (A4). High bar (boring default) so a meaningfully out-of-sync cohort trips the banner.
+
+resilience:                 # A5 — retry/backoff tunables for retryable adapter calls (RESEARCH_v2 §II.2; INV-11)
+  max_attempts: 3                   # total attempts (1 initial + 2 retries) for a retryable call — boring default, ~Stripe sandbox
+  base_delay_ms: 200                # exponential-backoff base
+  max_delay_ms: 5000                # backoff ceiling

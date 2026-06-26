@@ -1063,6 +1063,41 @@ class DataConfidence(_StrictModel):
         return self
 
 
+class Resilience(_StrictModel):
+    """A5 retry/backoff tunables for a retryable adapter call (INV-11).
+
+    The single canonical home for the resilience helper's magic numbers — the
+    retry wrapper reads them here, never a code literal:
+
+    * ``max_attempts`` — total attempts for a retryable call (1 initial + N
+      retries); Stripe's sandbox does ~3 attempts (RESEARCH_v2 §II.2).
+    * ``base_delay_ms`` — the exponential-backoff base delay (ms).
+    * ``max_delay_ms`` — the backoff ceiling (ms) the exponential delay is
+      clamped to.
+
+    Each value MUST be ``>= 1``, and the ceiling MUST NOT sit below the base
+    (a ``max_delay_ms < base_delay_ms`` is incoherent) — drift fails the build
+    (CLAUDE.md §4.1).
+    """
+
+    max_attempts: int
+    base_delay_ms: int
+    max_delay_ms: int
+
+    @model_validator(mode="after")
+    def _bounds_valid(self) -> Resilience:
+        for name in ("max_attempts", "base_delay_ms", "max_delay_ms"):
+            value = getattr(self, name)
+            if value < 1:
+                raise ValueError(f"resilience.{name} must be >= 1, got {value!r}")
+        if self.max_delay_ms < self.base_delay_ms:
+            raise ValueError(
+                "resilience.max_delay_ms must be >= base_delay_ms, got "
+                f"{self.max_delay_ms!r} < {self.base_delay_ms!r}"
+            )
+        return self
+
+
 class ConversionWeights(_StrictModel):
     """conversion.weights — the five conversion-likelihood dimension weights (DH-1).
 
@@ -1292,6 +1327,7 @@ class Params(_StrictModel):
     stripe: Stripe
     security: Security
     data_confidence: DataConfidence
+    resilience: Resilience
 
 
 def _resolve_path(path: Path | None) -> Path:
