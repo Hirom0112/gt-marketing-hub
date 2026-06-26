@@ -24,6 +24,7 @@ from app.adapters.funding.base import FundingSignalAdapter
 from app.adapters.geo_sampling.base import GeoSamplingAdapter
 from app.adapters.hubspot.crm_adapter import CRMAdapter, SimulatedCRMAdapter
 from app.adapters.media.base import MediaGenAdapter
+from app.adapters.payments.base import PaymentsAdapter
 from app.adapters.sentiment.base import SentimentAdapter
 from app.adapters.social.base import SocialAdapter
 from app.ai.client import AnthropicLLMClient, LLMClient
@@ -35,6 +36,11 @@ from app.core.sales_agents import lookup as lookup_sales_agent
 from app.core.seam import MirrorState
 from app.core.settings import Settings
 from app.data.notes_repository import InMemoryNotesRepository, NotesRepository
+from app.data.payments_store import (
+    InMemoryPaymentsStore,
+    PaymentsStore,
+    build_supabase_payments_store,
+)
 from app.data.repository import (
     UNASSIGNED,
     FamilyRepository,
@@ -237,6 +243,39 @@ def _build_watermark_store() -> WatermarkStore:
 # state behind the same NFR-8 seam as ``_repository``. Default v1 = in-memory (A-3);
 # production swaps the Supabase-backed impl over the 0025 table.
 _watermark_store: WatermarkStore = _build_watermark_store()
+
+
+def _build_payments_store() -> PaymentsStore:
+    """Bind the A3 Stripe dedupe + payment ledger store, MIRRORING ``_build_repository``.
+
+    The same ``COCKPIT_REPO`` / ``SUPABASE_URL`` selection as the family and watermark
+    stores, so the three never disagree on which backend is live (the NFR-8 store seam):
+
+    - ``synthetic`` ⇒ FORCE the in-memory store (never Supabase).
+    - ``supabase`` ⇒ REQUIRE the live store; a missing ``SUPABASE_URL`` is a misconfig
+      ⇒ raise (fail loud, the family-store posture).
+    - ``auto`` (default) ⇒ Supabase when ``SUPABASE_URL`` is configured, else the
+      in-memory v1 fallback (A-3). Default CI is :class:`InMemoryPaymentsStore`.
+    """
+    repo_mode = Settings.from_env().cockpit_repo
+    if repo_mode == "synthetic":
+        return InMemoryPaymentsStore()
+    if repo_mode == "supabase":
+        supabase = build_supabase_payments_store()
+        if supabase is None:
+            raise RuntimeError(
+                "COCKPIT_REPO=supabase requires SUPABASE_URL (+ "
+                "SUPABASE_SERVICE_ROLE_KEY) for the Stripe payments store; none was "
+                "configured. Set them, or use COCKPIT_REPO=synthetic / auto."
+            )
+        return supabase
+    return build_supabase_payments_store() or InMemoryPaymentsStore()
+
+
+# Singleton Stripe payments store (A3) — the durable per-program dedupe (stripe_events)
+# + payment money ledger behind the same NFR-8 seam as ``_repository``. Default v1 =
+# in-memory (A-3); production swaps the Supabase-backed impl over the 0026 tables.
+_payments_store: PaymentsStore = _build_payments_store()
 
 # Singleton env snapshot, read once at import (TECH_STACK §5; INV-11). Tests that
 # need a different env override `get_settings_dep`; named so it never clashes with
@@ -542,6 +581,22 @@ def get_repository() -> FamilyRepository:
 def get_watermark_store() -> WatermarkStore:
     """FastAPI dependency yielding the active CRM-poll watermark store (A2 seam)."""
     return _watermark_store
+
+
+def get_payments_adapter_dep() -> PaymentsAdapter:
+    """FastAPI dependency yielding the Stripe payments adapter (A3; INV-8/INV-9).
+
+    Delegates to the §7 registry (v1 ⇒ a simulated recorder that still verifies
+    webhooks offline; live ⇒ the Stripe adapter behind the cap + kill switch, or its
+    fail-loud misconfig). Mirrors :func:`get_crm_adapter_dep`. Tests override this with
+    a `SimulatedPaymentsAdapter` constructed with a known webhook secret.
+    """
+    return registry.get_payments_adapter()
+
+
+def get_payments_store() -> PaymentsStore:
+    """FastAPI dependency yielding the active Stripe payments store (A3 seam)."""
+    return _payments_store
 
 
 # ===========================================================================
