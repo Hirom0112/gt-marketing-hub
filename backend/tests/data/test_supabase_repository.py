@@ -28,13 +28,16 @@ import httpx
 import pytest
 
 from app.core.params import load_params
+from app.core.program import Program
 from app.data.models import FundingState, SeamStatus, Stage
 from app.data.supabase_repository import (
+    _PROGRAM_SCOPED_TABLES,
     DropOffBucket,
     DropOffPoint,
     HouseholdRollUp,
     SupabaseError,
     SupabaseFamilyRepository,
+    _is_program_scoped,
 )
 
 _EXAMPLE_PARAMS = Path(__file__).resolve().parents[3] / "params" / "params.example.yaml"
@@ -155,8 +158,12 @@ def _tuition_row() -> dict[str, Any]:
     )
 
 
-def _make_repo(handler: Any) -> SupabaseFamilyRepository:
-    """A repo whose injected httpx client routes every request to ``handler``."""
+def _make_repo(handler: Any, *, program: Program | None = None) -> SupabaseFamilyRepository:
+    """A repo whose injected httpx client routes every request to ``handler``.
+
+    ``program`` threads the A1 active program (``None`` = the back-compat default,
+    no program filter — the posture every existing test relies on).
+    """
     transport = httpx.MockTransport(handler)
     client = httpx.Client(transport=transport, base_url="https://example.supabase.co")
     return SupabaseFamilyRepository(
@@ -164,6 +171,7 @@ def _make_repo(handler: Any) -> SupabaseFamilyRepository:
         service_role_key="synthetic-service-role-key",
         params=load_params(_EXAMPLE_PARAMS),
         client=client,
+        program=program,
     )
 
 
@@ -894,3 +902,98 @@ def test_append_voucher_event_non_2xx_fails_loud() -> None:
             program="tx_tefa",
             signal="self_report",
         )
+
+
+# ---------------------------------------------------------------------------
+# A1 app-layer program isolation (PLAN_v2 §A1; ASSUMPTIONS A-37/A-38). The backend
+# reads Supabase over the service_role key, which BYPASSES the 0024 RESTRICTIVE RLS,
+# so isolation is enforced IN CODE: every program-scoped read carries an explicit
+# `program_id=eq.<active>` filter and every insert/update stamps it. A repo with no
+# active program (the back-compat default) applies NO filter — proven by every test
+# above passing unchanged.
+# ---------------------------------------------------------------------------
+
+
+def test_is_program_scoped_matches_the_migration_partition() -> None:
+    """The scoped-table set is EXACTLY the 9 program-partitioned tables (0024 / A-37).
+
+    Pure-logic guard: the program filter must apply to the 9 family/enrollment funnel
+    tables and NEVER to an operational/global table (`assignment_cursor`,
+    `community_profiles`), or it would over-constrain a global registry.
+    """
+    assert _PROGRAM_SCOPED_TABLES == {
+        "family_record",
+        "leads_new",
+        "app_form",
+        "enrollment_forms",
+        "apply_events",
+        "student",
+        "voucher_event",
+        "sis_status",
+        "lead_assignment",
+    }
+    assert _is_program_scoped("/rest/v1/family_record") is True
+    assert _is_program_scoped("/rest/v1/student") is True
+    assert _is_program_scoped("/rest/v1/voucher_event") is True
+    # Operational/global tables are NOT program-scoped (A-37).
+    assert _is_program_scoped("/rest/v1/assignment_cursor") is False
+    assert _is_program_scoped("/rest/v1/community_profiles") is False
+
+
+def _program_capture_handler(captured: dict[str, Any], rows: list[dict[str, Any]]) -> Any:
+    """Serve /family_record, recording the query string so the program filter is visible."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        parsed = urlparse(str(request.url))
+        assert parsed.path == "/rest/v1/family_record"
+        captured["query"] = parse_qs(parsed.query)
+        served = [r for r in rows if r.get("leads_new")]
+        return httpx.Response(200, content=json.dumps(served))
+
+    return handler
+
+
+def test_reads_filter_by_active_program() -> None:
+    """A repo with an active program scopes every read to `program_id=eq.<program>`."""
+    captured: dict[str, Any] = {}
+    repo = _make_repo(
+        _program_capture_handler(captured, [_interest_row()]),
+        program=Program.SUMMER_CAMP,
+    )
+    repo.list_joined()
+    assert captured["query"]["program_id"] == ["eq.summer_camp"]
+
+
+def test_reads_apply_no_program_filter_without_an_active_program() -> None:
+    """The back-compat default (no active program) issues NO program_id filter."""
+    captured: dict[str, Any] = {}
+    repo = _make_repo(_program_capture_handler(captured, [_interest_row()]))  # program=None
+    repo.list_joined()
+    assert "program_id" not in captured["query"]
+
+
+def test_writes_stamp_the_active_program() -> None:
+    """An insert stamps the active TENANT program_id, distinct from the domain `program`."""
+    captured: dict[str, Any] = {}
+    repo = _make_repo(_capture_post_handler(captured), program=Program.SUMMER_CAMP)
+    repo.append_voucher_event(
+        family_id=UUID(_FID_INTEREST),
+        from_state=None,
+        to_state=FundingState.APPLIED,
+        program="tx_tefa",  # the voucher program — a DIFFERENT column from program_id.
+        signal="self_report",
+    )
+    body = captured["body"]
+    assert body["program_id"] == "summer_camp"  # the A1 tenant tag (stamped).
+    assert body["program"] == "tx_tefa"  # the domain voucher program (unchanged).
+
+
+def test_patch_carries_the_active_program_filter() -> None:
+    """A row-scoped PATCH ANDs the active program so a cross-program id can't be written."""
+    from datetime import UTC, datetime
+
+    captured: dict[str, Any] = {}
+    repo = _make_repo(_capture_patch_handler(captured), program=Program.SUMMER_CAMP)
+    repo.mark_synced(UUID(_FID_INTEREST), datetime(2030, 1, 1, tzinfo=UTC))
+    assert captured["query"]["program_id"] == ["eq.summer_camp"]
+    assert captured["query"]["family_id"] == [f"eq.{UUID(_FID_INTEREST)}"]

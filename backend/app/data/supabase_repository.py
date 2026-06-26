@@ -49,6 +49,7 @@ from uuid import UUID, uuid4
 import httpx
 
 from app.core.params import Params
+from app.core.program import Program
 from app.core.stage_machine import FamilyInputs, derive_stage
 from app.data.models import (
     AppForm,
@@ -102,6 +103,41 @@ _FAMILY_EMBED = "*,leads_new!inner(*),app_form(*),enrollment_forms(*),community_
 _STUDENT_EMBED = (
     "*,family_record!inner(*,leads_new(*),community_profiles(*)),app_form(*),enrollment_forms(*)"
 )
+
+# A1 app-layer program isolation (PLAN_v2 §A1; ASSUMPTIONS A-37). The backend reads
+# Supabase over the service_role key, which BYPASSES RLS (the proper non-BYPASSRLS
+# `app_runtime` connection swap lands with B1's auth rewrite — ASSUMPTIONS A-38), so
+# the RESTRICTIVE program policy in 0024 does NOT bound the app's own read path. This
+# set is the defense-in-depth: every program-scoped table read carries an explicit
+# `program_id=eq.<active>` filter and every insert/update stamps it, so the cockpit can
+# only touch the active program's rows. The 9 tables are the EXACT program-partitioned
+# set from `0024_program_isolation.sql` / A-37 — `community_profiles` and
+# `assignment_cursor` are NOT here (operational/global, untagged). Pinned inline like
+# the migration's own table list (the schema vocabulary's canonical home, INV-11).
+_PROGRAM_SCOPED_TABLES: frozenset[str] = frozenset(
+    {
+        "family_record",
+        "leads_new",
+        "app_form",
+        "enrollment_forms",
+        "apply_events",
+        "student",
+        "voucher_event",
+        "sis_status",
+        "lead_assignment",
+    }
+)
+
+
+def _is_program_scoped(path: str) -> bool:
+    """True when a PostgREST path targets an A1 program-scoped table (0024 / A-37).
+
+    Pure decision over the trailing table segment of the REST path (e.g.
+    ``"/rest/v1/family_record"`` → ``True``; ``"/rest/v1/assignment_cursor"`` →
+    ``False``). The query-builder boundary uses it to decide whether to inject the
+    active ``program_id`` filter/stamp (the app-layer isolation, defense-in-depth).
+    """
+    return path.rsplit("/", 1)[-1] in _PROGRAM_SCOPED_TABLES
 
 
 @dataclass(frozen=True)
@@ -164,6 +200,13 @@ class SupabaseFamilyRepository(FamilyRepository):
             client (stateless-runtime friendly).
         timeout: Per-request timeout seconds (a fixed transport setting, not a
             product tunable — same posture as the HubSpot adapter's client).
+        program: The active :class:`~app.core.program.Program` (A1). When set, every
+            program-scoped read carries a ``program_id=eq.<program>`` filter and every
+            insert/update stamps it — the app-layer isolation that bounds the
+            service_role read path to the active program (it BYPASSES the 0024
+            RESTRICTIVE RLS, so isolation is enforced in code; PLAN_v2 §A1 / A-38).
+            ``None`` (the test/back-compat default) applies NO program filter, so the
+            existing PostgREST contract tests are unchanged.
     """
 
     def __init__(
@@ -174,12 +217,14 @@ class SupabaseFamilyRepository(FamilyRepository):
         params: Params,
         client: httpx.Client | None = None,
         timeout: float = 30.0,
+        program: Program | None = None,
     ) -> None:
         self._base_url = base_url.rstrip("/")
         self._key = service_role_key
         self._params = params
         self._client = client
         self._timeout = timeout
+        self._program = program
 
     # ------------------------------------------------------------------ I/O
     def _headers(self) -> dict[str, str]:
@@ -190,8 +235,37 @@ class SupabaseFamilyRepository(FamilyRepository):
             "Accept": "application/json",
         }
 
+    def _program_filtered(self, path: str, params: dict[str, str]) -> dict[str, str]:
+        """Add the active ``program_id=eq.<program>`` filter on a program-scoped read.
+
+        The app-layer isolation chokepoint for reads (A1): when a program is active
+        and the path targets a program-scoped table, the cohort is bounded to that
+        program even though the service_role connection bypasses RLS. A no-op when no
+        program is active (test/back-compat) or the table is operational/global
+        (A-37). Never overwrites a caller-supplied ``program_id`` (none does today).
+        """
+        if self._program is None or not _is_program_scoped(path):
+            return params
+        if "program_id" in params:
+            return params
+        return {**params, "program_id": f"eq.{self._program.value}"}
+
+    def _program_stamped(self, path: str, payload: dict[str, Any]) -> dict[str, Any]:
+        """Stamp the active ``program_id`` onto a write to a program-scoped table.
+
+        The write-side of the app-layer isolation (A1): an insert/update can only
+        land a row in the active program (the WITH-CHECK analog the bypassed RLS
+        would otherwise enforce). A no-op when no program is active or the table is
+        operational/global. Distinct from a row's domain ``program`` field (e.g.
+        ``voucher_event.program`` = ``tx_tefa``) — ``program_id`` is the A1 TENANT tag.
+        """
+        if self._program is None or not _is_program_scoped(path):
+            return payload
+        return {**payload, "program_id": self._program.value}
+
     def _get(self, path: str, params: dict[str, str]) -> list[dict[str, Any]]:
         """One PostgREST GET → the decoded JSON array (fail loud on non-2xx)."""
+        params = self._program_filtered(path, params)
         url = f"{self._base_url}{path}"
         headers = self._headers()
         if self._client is not None:
@@ -216,6 +290,9 @@ class SupabaseFamilyRepository(FamilyRepository):
         exactly one row is written. ``Prefer: return=minimal`` keeps the response
         body empty (we do not re-read here). The key never leaves the backend.
         """
+        # A1: AND the active program onto the row filter (defense-in-depth — a
+        # cross-program family_id cannot be PATCHed under the active program).
+        params = self._program_filtered(path, params)
         url = f"{self._base_url}{path}"
         headers = {
             **self._headers(),
@@ -241,6 +318,8 @@ class SupabaseFamilyRepository(FamilyRepository):
         SELECT + INSERT). ``Prefer: return=minimal`` keeps the response body empty
         (we do not re-read here). The key never leaves the backend.
         """
+        # A1: stamp the active program onto the inserted row (the WITH-CHECK analog).
+        payload = self._program_stamped(path, payload)
         url = f"{self._base_url}{path}"
         headers = {
             **self._headers(),
@@ -789,7 +868,9 @@ class SupabaseFamilyRepository(FamilyRepository):
         return buckets
 
 
-def build_supabase_repository(params: Params) -> SupabaseFamilyRepository | None:
+def build_supabase_repository(
+    params: Params, *, program: Program | None = None
+) -> SupabaseFamilyRepository | None:
     """Construct the Supabase repo from the environment, or ``None`` when unbound.
 
     Reads ``SUPABASE_URL`` + ``SUPABASE_SERVICE_ROLE_KEY`` directly from the env
@@ -798,6 +879,11 @@ def build_supabase_repository(params: Params) -> SupabaseFamilyRepository | None
     absent so the caller falls back to the in-memory store (A-3). A placeholder
     angle-bracket value (the ``.env.example`` sentinel) counts as unset — same
     posture as the Settings secret readers.
+
+    ``program`` is the A1 active program (resolved fail-closed from ``GT_PROGRAM_ID``
+    at the composition root). When set it bounds every program-scoped read/write to
+    that program (the app-layer isolation over the service_role read path, PLAN_v2
+    §A1 / A-38). ``None`` leaves the repo program-agnostic.
     """
     url = (os.environ.get("SUPABASE_URL") or "").strip()
     if not url or url.startswith("<"):
@@ -805,4 +891,6 @@ def build_supabase_repository(params: Params) -> SupabaseFamilyRepository | None
     key = (os.environ.get("SUPABASE_SERVICE_ROLE_KEY") or "").strip()
     if not key or key.startswith("<"):
         return None
-    return SupabaseFamilyRepository(base_url=url, service_role_key=key, params=params)
+    return SupabaseFamilyRepository(
+        base_url=url, service_role_key=key, params=params, program=program
+    )

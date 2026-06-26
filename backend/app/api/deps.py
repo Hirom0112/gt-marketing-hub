@@ -30,6 +30,7 @@ from app.ai.client import AnthropicLLMClient, LLMClient
 from app.ai.schemas.brand import BrandRule
 from app.core.eval_gate import BrandJudge
 from app.core.params import Params, load_params
+from app.core.program import Program, resolve_program
 from app.core.sales_agents import lookup as lookup_sales_agent
 from app.core.seam import MirrorState
 from app.core.settings import Settings
@@ -77,7 +78,13 @@ def _build_repository(params: Params) -> FamilyRepository:
     :func:`_build_in_memory_repository`. One composition-root read; no change to the
     repository seam, the router layer, or the synthetic cohorts themselves.
     """
-    repo_mode = Settings.from_env().cockpit_repo
+    settings = Settings.from_env()
+    repo_mode = settings.cockpit_repo
+    # A1: resolve the active program fail-closed (an unknown GT_PROGRAM_ID raises at
+    # boot — never a silent default; A1 fail-closed posture). Threaded into the live
+    # Supabase repo so every program-scoped read/write is bounded to this program,
+    # the app-layer isolation over the service_role read path (PLAN_v2 §A1 / A-38).
+    program = resolve_program(settings.gt_program_id)
 
     if repo_mode == "synthetic":
         return _build_in_memory_repository(params)
@@ -85,7 +92,7 @@ def _build_repository(params: Params) -> FamilyRepository:
     if repo_mode == "supabase":
         # Fail loud on misconfig — the operator asked for the live repo explicitly,
         # so a missing/blank SUPABASE_URL is an error, NOT a silent synthetic boot.
-        supabase = build_supabase_repository(params)
+        supabase = build_supabase_repository(params, program=program)
         if supabase is None:
             raise RuntimeError(
                 "COCKPIT_REPO=supabase requires SUPABASE_URL (+ "
@@ -96,7 +103,7 @@ def _build_repository(params: Params) -> FamilyRepository:
 
     # auto (default): A-24 M5 single source of truth — Supabase when configured,
     # else the in-memory v1 fallback.
-    supabase = build_supabase_repository(params)
+    supabase = build_supabase_repository(params, program=program)
     if supabase is not None:
         return supabase
     return _build_in_memory_repository(params)
@@ -197,6 +204,14 @@ _repository: FamilyRepository = _build_repository(_params)
 # need a different env override `get_settings_dep`; named so it never clashes with
 # `app.core.settings.get_settings` (a fresh-read helper, not the cached seam).
 _settings: Settings = Settings.from_env()
+
+# Singleton active program (A1), resolved ONCE at import from GT_PROGRAM_ID via the
+# fail-closed `resolve_program` (an unknown token raises at boot — never a silent
+# default; A1). This is DEPLOYMENT config, NEVER a client header (A-37): it is read
+# from the env seam, not from any request. It bounds the live Supabase repo to the
+# active program (the app-layer isolation, threaded in `_build_repository`); routers
+# consume it via `get_active_program` (B1 widens this to the auth-claim path).
+_active_program: Program = resolve_program(_settings.gt_program_id)
 
 # How many of the seeded demo families read as "followed_up" — a deterministic
 # handful get a seeded approve-decision so the situation bar shows a believable
@@ -606,6 +621,19 @@ def get_settings_dep() -> Settings:
     each call): this is the composition-layer singleton, read once at import.
     """
     return _settings
+
+
+def get_active_program() -> Program:
+    """FastAPI dependency yielding the active :class:`Program` (A1 — the program seam).
+
+    Resolved fail-closed from ``GT_PROGRAM_ID`` at import (an unknown token raised
+    at boot), it is DEPLOYMENT config and is NEVER taken from a client header (A-37)
+    — exactly like :func:`get_settings_dep`, this returns the composition-layer
+    singleton. It is the active ``program_id`` the app-layer isolation stamps/filters
+    on; B1's auth rewrite widens program resolution to the JWT ``app_metadata`` claim
+    once the app connects via the non-``BYPASSRLS`` ``app_runtime`` role (A-38).
+    """
+    return _active_program
 
 
 # Singleton security-event feed (M7 Panel B) — the append-only suspicious-signal

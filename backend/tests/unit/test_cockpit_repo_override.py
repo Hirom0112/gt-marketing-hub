@@ -76,7 +76,7 @@ def test_synthetic_forces_in_memory_even_with_supabase_url(
     monkeypatch.delenv("COCKPIT_SCENARIO", raising=False)
 
     sentinel = object()
-    monkeypatch.setattr(deps, "build_supabase_repository", lambda params: sentinel)
+    monkeypatch.setattr(deps, "build_supabase_repository", lambda params, *, program=None: sentinel)
 
     repo = deps._build_repository(_params())
     assert isinstance(repo, InMemoryFamilyRepository)
@@ -98,7 +98,7 @@ def test_supabase_required_returns_live_when_bound(monkeypatch: pytest.MonkeyPat
     """COCKPIT_REPO=supabase + a built repo ⇒ that live repo (never falls back)."""
     monkeypatch.setenv("COCKPIT_REPO", "supabase")
     sentinel = object()
-    monkeypatch.setattr(deps, "build_supabase_repository", lambda params: sentinel)
+    monkeypatch.setattr(deps, "build_supabase_repository", lambda params, *, program=None: sentinel)
     assert deps._build_repository(_params()) is sentinel
 
 
@@ -106,7 +106,7 @@ def test_auto_binds_supabase_when_url_set(monkeypatch: pytest.MonkeyPatch) -> No
     """RED 3a: COCKPIT_REPO unset (auto) + a built repo ⇒ Supabase (A-24 M5 preserved)."""
     monkeypatch.delenv("COCKPIT_REPO", raising=False)
     sentinel = object()
-    monkeypatch.setattr(deps, "build_supabase_repository", lambda params: sentinel)
+    monkeypatch.setattr(deps, "build_supabase_repository", lambda params, *, program=None: sentinel)
     assert deps._build_repository(_params()) is sentinel
 
 
@@ -116,6 +116,6 @@ def test_auto_falls_back_to_in_memory_when_unbound(
     """RED 3b: COCKPIT_REPO unset (auto) + no Supabase ⇒ in-memory (A-24 M5 preserved)."""
     monkeypatch.delenv("COCKPIT_REPO", raising=False)
     monkeypatch.delenv("COCKPIT_SCENARIO", raising=False)
-    monkeypatch.setattr(deps, "build_supabase_repository", lambda params: None)
+    monkeypatch.setattr(deps, "build_supabase_repository", lambda params, *, program=None: None)
     repo = deps._build_repository(_params())
     assert isinstance(repo, InMemoryFamilyRepository)
