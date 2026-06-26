@@ -148,11 +148,19 @@ def test_one_null_guard_per_policy() -> None:
 
 
 def test_no_security_definer_in_exposed_schema() -> None:
-    """D-RLS-7: no security-definer helper functions in the exposed schema."""
-    sql = _all_sql()
-    assert not _SECURITY_DEFINER.search(sql), (
-        "security-definer function found (D-RLS-7 violated): exposed-schema "
-        "RLS must not rely on SECURITY DEFINER helpers"
+    """D-RLS-7: no security-definer helper functions in the EXPOSED (public) schema.
+
+    A security-definer helper is permitted ONLY when defined OUTSIDE the exposed,
+    PostgREST-reachable schema (e.g. `private.authorize` — 0027/B1). Placing one in
+    `public` would be an internet-facing privilege bypass; that is what D-RLS-7
+    forbids. (Earlier this scan was a blanket ban on the token anywhere; it is now
+    scoped to the exposed schema so the legitimate `private.` RBAC helpers pass
+    while a `public.` definer-rights function still fails.)
+    """
+    offenders = _security_definer_functions_in_public(_strip_comments(_all_sql()))
+    assert not offenders, (
+        "security-definer function found in the EXPOSED schema (D-RLS-7 violated): "
+        f"{offenders} — move it to a non-exposed schema (e.g. private.)"
     )
 
 
@@ -1141,3 +1149,128 @@ def test_stripe_events_and_payment_append_only() -> None:
 
     # --- D-RLS-7: no security-definer helper in the exposed schema ---
     assert not _SECURITY_DEFINER.search(sql), "0026 must not use SECURITY DEFINER (D-RLS-7)"
+
+
+# ---------------------------------------------------------------------------
+# 0027 rbac (B1) — the RLS defense-in-depth leg of the three-role auth (audit S1).
+# Two GLOBAL (cross-program, ASSUMPTIONS A-37) tables map users→roles→permissions:
+#   * `user_roles`      — (user_id, role app_role); a user may read their OWN rows.
+#   * `role_permissions`— (role app_role, permission text); the lookup every
+#     authenticated user may read.
+# Plus an `authorize(requested_permission)` helper AND a custom access-token hook,
+# BOTH defined in a NON-exposed schema (`private`) so the definer-rights token
+# never attaches to a public-schema (PostgREST-reachable) object — D-RLS-7. The
+# primary enforcement is the FastAPI principal (a separate unit); this migration is
+# the in-DB backstop. Both tables ENABLE+FORCE row-level security with a
+# null-guarded policy (the 0013/0015 registry pattern). Roles are cross-program, so
+# — unlike the 0024 tenant tables — there is NO program_id tag and NO RESTRICTIVE
+# program-isolation policy.
+# ---------------------------------------------------------------------------
+
+# A CREATE FUNCTION's (optionally schema-qualified) name.
+_CREATE_FUNCTION = re.compile(
+    r"\bCREATE\s+(?:OR\s+REPLACE\s+)?FUNCTION\s+([A-Za-z_][\w.]*)", re.IGNORECASE
+)
+
+
+def _security_definer_functions_in_public(sql: str) -> list[str]:
+    """Names of any definer-rights functions defined in the exposed (public) schema.
+
+    Splits the DDL into per-function windows; for each window carrying the
+    definer-rights token, returns its name iff that name resolves to the exposed
+    schema (unqualified ⇒ public, or explicitly `public.`). A name qualified to a
+    non-public schema (e.g. `private.authorize`) is NOT an exposed-schema object,
+    so it is permitted (D-RLS-7 bans definer-rights helpers only in the exposed,
+    internet-reachable schema).
+    """
+    matches = list(_CREATE_FUNCTION.finditer(sql))
+    offenders: list[str] = []
+    for i, m in enumerate(matches):
+        end = matches[i + 1].start() if i + 1 < len(matches) else len(sql)
+        window = sql[m.end() : end]
+        if not _SECURITY_DEFINER.search(window):
+            continue
+        qualname = m.group(1)
+        schema = qualname.split(".")[0].lower() if "." in qualname else "public"
+        if schema == "public":
+            offenders.append(qualname)
+    return offenders
+
+
+def _rbac_sql() -> str:
+    """The 0027 RBAC migration DDL (comments stripped)."""
+    return _strip_comments((MIGRATIONS_DIR / "0027_rbac.sql").read_text(encoding="utf-8"))
+
+
+def test_rbac_tables_and_authorize_not_in_public() -> None:
+    """B1: 0027 adds the two GLOBAL RBAC tables (user_roles, role_permissions) —
+    each ENABLE+FORCE RLS + a null-guarded policy — plus an authorize() helper and
+    a custom access-token hook defined in a NON-exposed schema (private), so the
+    definer-rights token never lands on a public-schema object (D-RLS-7). Roles are
+    cross-program (A-37): GLOBAL tables, no program_id / no RESTRICTIVE policy.
+    """
+    sql = _rbac_sql()
+
+    # --- both RBAC tables created + ENABLE/FORCE RLS (D-RLS-1) + null-guarded policy ---
+    for table in ("user_roles", "role_permissions"):
+        assert re.search(rf"CREATE\s+TABLE\s+{table}\b", sql, re.IGNORECASE), (
+            f"0027 must CREATE TABLE {table}"
+        )
+        assert re.search(
+            rf"ALTER\s+TABLE\s+{table}\s+ENABLE\s+ROW\s+LEVEL\s+SECURITY", sql, re.IGNORECASE
+        ), f"0027 must ENABLE RLS on {table} (D-RLS-1)"
+        assert re.search(
+            rf"ALTER\s+TABLE\s+{table}\s+FORCE\s+ROW\s+LEVEL\s+SECURITY", sql, re.IGNORECASE
+        ), f"0027 must FORCE RLS on {table} (owner-role escape hatch, D-RLS-1)"
+        policy = re.search(
+            rf"CREATE\s+POLICY\s+\w+\s+ON\s+{table}\b[^;]*;", sql, re.IGNORECASE | re.DOTALL
+        )
+        assert policy, f"0027 must add a CREATE POLICY on {table}"
+        assert _NULL_GUARD.search(policy.group(0)), (
+            f"0027 {table} policy must carry the auth.uid() IS NOT NULL guard (D-RLS-2)"
+        )
+
+    # --- the app_role enum (admin/leader/operator) ---
+    assert re.search(r"CREATE\s+TYPE\s+app_role\s+AS\s+ENUM", sql, re.IGNORECASE), (
+        "0027 must create the app_role enum (the three-role vocabulary)"
+    )
+    for role in ("admin", "leader", "operator"):
+        assert re.search(rf"'{role}'", sql), f"app_role enum must include '{role}'"
+
+    # --- user_roles is user-scoped (a user reads their OWN role rows) ---
+    assert re.search(r"\buser_id\b", sql, re.IGNORECASE), "user_roles must carry a user_id column"
+    user_roles_policy = re.search(
+        r"CREATE\s+POLICY\s+\w+\s+ON\s+user_roles\b[^;]*;", sql, re.IGNORECASE | re.DOTALL
+    )
+    assert user_roles_policy and re.search(
+        r"user_id\s*=\s*\(\s*SELECT\s+auth\.uid\(\)\s*\)", user_roles_policy.group(0), re.IGNORECASE
+    ), "user_roles policy must scope to the caller's OWN rows (user_id = auth.uid())"
+
+    # --- roles are GLOBAL/cross-program (A-37): no program_id, no RESTRICTIVE policy ---
+    assert not re.search(r"\bprogram_id\b", sql, re.IGNORECASE), (
+        "RBAC tables are cross-program GLOBAL tables (A-37): no program_id tag"
+    )
+    assert not _AS_RESTRICTIVE.search(sql), (
+        "RBAC tables are not program-partitioned: no AS RESTRICTIVE policy"
+    )
+
+    # --- the authorize() helper + the custom access-token hook exist ---
+    assert re.search(r"\bauthorize\s*\(", sql, re.IGNORECASE), (
+        "0027 must define an authorize() helper"
+    )
+    assert re.search(r"custom_access_token_hook\s*\(", sql, re.IGNORECASE), (
+        "0027 must define the custom access-token hook (injects role into the JWT)"
+    )
+
+    # --- D-RLS-7: the private (non-exposed) schema holds the definer-rights helpers ---
+    assert re.search(r"CREATE\s+SCHEMA\s+(?:IF\s+NOT\s+EXISTS\s+)?private\b", sql, re.IGNORECASE), (
+        "0027 must create the private (non-exposed) schema"
+    )
+    assert re.search(
+        r"CREATE\s+(?:OR\s+REPLACE\s+)?FUNCTION\s+private\.authorize\b", sql, re.IGNORECASE
+    ), "authorize() must be defined under the private (non-exposed) schema (D-RLS-7)"
+    # Every definer-rights function in 0027 is schema-qualified OUTSIDE public.
+    assert not _security_definer_functions_in_public(sql), (
+        "0027 definer-rights functions must live in a non-exposed schema (e.g. private.), "
+        "never in the PostgREST-reachable public schema (D-RLS-7)"
+    )
