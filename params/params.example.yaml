@@ -392,6 +392,18 @@ crm_ops:                    # C1 — CRM/Marketing-Ops data-quality cores; share
   unreliable_fields: [tefa_amount, attribution_source, income_tier]   # fields known to be low-trust; flagged unreliable + surfaced as an unreliable_field issue
   parity_floor: 0.95                # sync-parity fraction below which the cross-module data-confidence banner activates (reuse A4); a fraction in [0,1]
 
+open_data:                  # E1 — tryopendata.ai Texas-education enrichment seam (RESEARCH_v2 §II.3; INV-1/8/9/11)
+  datasets:                         # tea/* dataset slugs the live adapter queries over POST /v1/query (aggregate/district-level only — INV-1/INV-6)
+    accountability_ratings: tea/accountability-ratings
+    staar: tea/staar-accountability
+    peims_finance: tea/public-school-finance
+  per_run_query_cap: 25             # INV-8 per-run query budget; the (cap+1)th live /v1/query raises rather than overspending the metered API
+  decision_change:                  # district-performance thresholds (the decision-change CORE that consumes these is a separate later unit)
+    low_rating_grades: [D, F]       # A–F accountability grades that count as low-performing
+    staar_proficiency_floor: 0.40   # STAAR proficiency below this fraction = low
+    min_enrollment: 500             # district enrollment at/above which the boost applies
+    priority_boost: 1               # how much the recommendation priority moves
+
 stripe:                     # A3 — Stripe payments seam tunables (RESEARCH_v2 §II.2; INV-8/INV-11)
   calls_per_run_cap: 50             # hard per-run ceiling on outbound Stripe API calls (INV-8; mirrors HUBSPOT_CALLS_PER_RUN_CAP)
   tolerance_seconds: 300            # Stripe default 5-min signature tolerance (RESEARCH_v2 II.2)

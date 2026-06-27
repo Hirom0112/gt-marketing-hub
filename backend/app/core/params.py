@@ -1534,6 +1534,96 @@ class CrmOps(_StrictModel):
         return self
 
 
+class OpenDataDatasets(_StrictModel):
+    """open_data.datasets — the tryopendata.ai ``tea/*`` dataset slugs (E1; INV-11).
+
+    The single canonical home for the dataset slugs the live adapter queries over
+    ``POST /v1/query`` (RESEARCH_v2 §II.3). These are TEA aggregate/district-level
+    datasets only (INV-1/INV-6 — never child-level): the A–F accountability
+    ratings, STAAR accountability, and PEIMS public-school finance. The adapter
+    reads these here, never a code literal; each MUST be non-empty.
+    """
+
+    accountability_ratings: str
+    staar: str
+    peims_finance: str
+
+    @model_validator(mode="after")
+    def _non_empty(self) -> OpenDataDatasets:
+        for name in ("accountability_ratings", "staar", "peims_finance"):
+            value = getattr(self, name)
+            if not value or not str(value).strip():
+                raise ValueError(f"open_data.datasets.{name} must be non-empty")
+        return self
+
+
+class OpenDataDecisionChange(_StrictModel):
+    """open_data.decision_change — the district-performance thresholds (E1; INV-11).
+
+    The single canonical home for the decision-change CORE's thresholds (the core
+    that CONSUMES these is a separate later unit). Every value is a tunable, never
+    a code literal:
+
+    * ``low_rating_grades`` — the A–F accountability grades that count as
+      low-performing (a district at one of these is a candidate for the boost).
+      MUST be non-empty.
+    * ``staar_proficiency_floor`` — a STAAR proficiency BELOW this fraction counts
+      as low; a FRACTION in [0.0, 1.0].
+    * ``min_enrollment`` — the district enrollment at/above which the boost applies
+      (a thin district is not boosted); MUST be ``>= 1``.
+    * ``priority_boost`` — how much the recommendation priority moves when a
+      district trips the low-performance signal.
+    """
+
+    low_rating_grades: list[str]
+    staar_proficiency_floor: float
+    min_enrollment: int
+    priority_boost: int
+
+    @model_validator(mode="after")
+    def _bounds_valid(self) -> OpenDataDecisionChange:
+        if not self.low_rating_grades:
+            raise ValueError("open_data.decision_change.low_rating_grades must be non-empty")
+        if not 0.0 <= self.staar_proficiency_floor <= 1.0:
+            raise ValueError(
+                "open_data.decision_change.staar_proficiency_floor must be in [0.0, 1.0], "
+                f"got {self.staar_proficiency_floor!r}"
+            )
+        if self.min_enrollment < 1:
+            raise ValueError(
+                "open_data.decision_change.min_enrollment must be >= 1, "
+                f"got {self.min_enrollment!r}"
+            )
+        return self
+
+
+class OpenData(_StrictModel):
+    """E1 tryopendata.ai Texas-education enrichment seam config (RESEARCH_v2 §II.3).
+
+    The single canonical home (INV-11) for the Open Data adapter family's tunables —
+    the live adapter and the later decision-change core read them here, never a code
+    literal:
+
+    * ``datasets`` — the ``tea/*`` dataset slugs (aggregate/district-level; INV-1).
+    * ``per_run_query_cap`` — the INV-8 per-run query budget; the live adapter's
+      (cap+1)th ``/v1/query`` raises rather than overspending the metered API. MUST
+      be ``>= 1``.
+    * ``decision_change`` — the district-performance thresholds.
+    """
+
+    datasets: OpenDataDatasets
+    per_run_query_cap: int
+    decision_change: OpenDataDecisionChange
+
+    @model_validator(mode="after")
+    def _cap_valid(self) -> OpenData:
+        if self.per_run_query_cap < 1:
+            raise ValueError(
+                f"open_data.per_run_query_cap must be >= 1, got {self.per_run_query_cap!r}"
+            )
+        return self
+
+
 class Params(_StrictModel):
     """Typed view of the whole params file — one field per §8 top-level block."""
 
@@ -1566,6 +1656,7 @@ class Params(_StrictModel):
     crm: Crm
     crm_sync: CrmSync
     crm_ops: CrmOps
+    open_data: OpenData
     stripe: Stripe
     security: Security
     data_confidence: DataConfidence
