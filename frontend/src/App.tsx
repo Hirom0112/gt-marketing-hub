@@ -78,7 +78,7 @@ const SECURITY_NAV: SidebarItem<NavKey> = {
 const SECONDARY_NAV: ReadonlyArray<SidebarItem<NavKey>> = [
   { key: 'settings', label: 'Settings', icon: Settings },
   { key: 'help', label: 'Help', icon: CircleHelp },
-  { key: 'switch-seat', label: 'Switch seat', icon: LogOut },
+  { key: 'switch-seat', label: 'Sign out', icon: LogOut },
 ];
 
 export default function App(): JSX.Element {
