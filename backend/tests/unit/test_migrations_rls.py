@@ -1594,3 +1594,132 @@ def test_user_dashboard_layouts_owner_scoped() -> None:
 
     # --- D-RLS-7: no security-definer helper (inline owner-scoping only) ---
     assert not _SECURITY_DEFINER.search(sql), "0029 must not use SECURITY DEFINER (D-RLS-7)"
+
+
+# ---------------------------------------------------------------------------
+# 0030 budget_workstream + budget_entry (B4) — the $365K Budget Tracker's two
+# program-scoped tables.
+#   * `budget_workstream` — the four budget rows (grassroots / content / guerrilla
+#     / ops), each with a planned_usd allocation. `name` is the UNIQUE workstream
+#     key. Schema-only (the dollar amounts are SEEDED from params at app boot, NOT
+#     in the migration — the 0026/0028 schema-only posture, INV-11). A leadership
+#     definition table: a null-guarded SELECT permissive policy (leadership reads
+#     via the API require_role gate), MUTABLE allocation possible but v1 seeds from
+#     params so writes go via service_role.
+#   * `budget_entry` — the APPEND-ONLY spend/commitment ledger: one row per
+#     recommended/planned/committed/actual line item (kind), amount_usd, note. The
+#     0010/0015/0026 immutable-once-written posture: GRANT SELECT+INSERT only — NO
+#     UPDATE/DELETE grant or policy. `workstream` FKs the budget_workstream.name key.
+# BOTH program-scoped (program_id + the 0024 AS RESTRICTIVE program-isolation
+# policy keyed on app_metadata.program_id, null-guarded). Each table ENABLE+FORCE
+# RLS (D-RLS-1); every policy null-guarded (D-RLS-2) — keeping the global
+# CREATE==ENABLE==FORCE + one-guard-per-policy invariants green (+2/+2/+2). Budget
+# WRITE is privileged (service_role; budget edits are admin/leader-gated at the API
+# via require_role). No public definer-rights helper (D-RLS-7).
+# ---------------------------------------------------------------------------
+
+
+def _budget_sql() -> str:
+    """The 0030 budget tables migration DDL (comments stripped)."""
+    return _strip_comments((MIGRATIONS_DIR / "0030_budget.sql").read_text(encoding="utf-8"))
+
+
+def test_budget_tables_rls() -> None:
+    """B4: 0030 adds the program-scoped budget_workstream (UNIQUE name key,
+    null-guarded SELECT) + append-only budget_entry (SELECT+INSERT only) tables —
+    each ENABLE+FORCE RLS, a RESTRICTIVE program-isolation policy keyed on
+    app_metadata.program_id with the auth.uid() null guard, and no SECURITY DEFINER
+    — keeping the global RLS count invariants green (+2 tables / +2 ENABLE / +2
+    FORCE).
+    """
+    sql = _budget_sql()
+
+    # --- both tables created, program-scoped, ENABLE+FORCE RLS (D-RLS-1) ---
+    for table in ("budget_workstream", "budget_entry"):
+        assert re.search(rf"CREATE\s+TABLE\s+{table}\b", sql, re.IGNORECASE), (
+            f"0030 must CREATE TABLE {table}"
+        )
+        assert re.search(
+            rf"ALTER\s+TABLE\s+{table}\s+ENABLE\s+ROW\s+LEVEL\s+SECURITY", sql, re.IGNORECASE
+        ), f"0030 must ENABLE RLS on {table} (D-RLS-1)"
+        assert re.search(
+            rf"ALTER\s+TABLE\s+{table}\s+FORCE\s+ROW\s+LEVEL\s+SECURITY", sql, re.IGNORECASE
+        ), f"0030 must FORCE RLS on {table} (owner-role escape hatch, D-RLS-1)"
+        assert re.search(
+            rf"CREATE\s+TABLE\s+{table}\b.*?\bprogram_id\b[^;]*NOT\s+NULL",
+            sql,
+            re.IGNORECASE | re.DOTALL,
+        ), f"{table} must carry a program_id NOT NULL column (program-scoped)"
+
+        # The RESTRICTIVE program-isolation policy keyed on app_metadata.program_id
+        # + the auth.uid() null guard (the 0024/0026/0028 pattern).
+        prog_policy = re.search(
+            rf"CREATE\s+POLICY\s+\w+\s+ON\s+{table}\b[^;]*AS\s+RESTRICTIVE[^;]*;",
+            sql,
+            re.IGNORECASE | re.DOTALL,
+        )
+        assert prog_policy, f"0030 must add an AS RESTRICTIVE program-isolation policy on {table}"
+        body = prog_policy.group(0)
+        assert re.search(r"app_metadata", body, re.IGNORECASE) and re.search(
+            r"\bprogram_id\b", body, re.IGNORECASE
+        ), f"{table}'s RESTRICTIVE policy must key on the app_metadata program_id claim"
+        assert _NULL_GUARD.search(body), (
+            f"{table}'s RESTRICTIVE policy must carry the auth.uid() null guard (D-RLS-2)"
+        )
+
+    # --- budget_workstream.name is the UNIQUE workstream key ---
+    assert re.search(r"\bname\s+text\s+NOT\s+NULL\s+UNIQUE", sql, re.IGNORECASE) or re.search(
+        r"UNIQUE\s*\(\s*name\s*\)", sql, re.IGNORECASE
+    ), "budget_workstream.name must be UNIQUE (the workstream key)"
+
+    # --- budget_workstream: a null-guarded SELECT permissive policy (leadership read) ---
+    ws_select = re.search(
+        r"CREATE\s+POLICY\s+\w+\s+ON\s+budget_workstream\b[^;]*FOR\s+SELECT[^;]*;",
+        sql,
+        re.IGNORECASE | re.DOTALL,
+    )
+    assert ws_select, "0030 must add a null-guarded FOR SELECT policy on budget_workstream"
+    assert _NULL_GUARD.search(ws_select.group(0)), (
+        "budget_workstream SELECT policy must carry the auth.uid() null guard (D-RLS-2)"
+    )
+
+    # --- budget_entry: a null-guarded SELECT permissive policy ---
+    be_select = re.search(
+        r"CREATE\s+POLICY\s+\w+\s+ON\s+budget_entry\b[^;]*FOR\s+SELECT[^;]*;",
+        sql,
+        re.IGNORECASE | re.DOTALL,
+    )
+    assert be_select, "0030 must add a null-guarded FOR SELECT policy on budget_entry"
+    assert _NULL_GUARD.search(be_select.group(0)), (
+        "budget_entry SELECT policy must carry the auth.uid() null guard (D-RLS-2)"
+    )
+
+    # --- budget_entry is APPEND-ONLY: no UPDATE/DELETE grant or policy (0010/0015) ---
+    assert not re.search(r"GRANT[^;]*\bUPDATE\b[^;]*ON\s+budget_entry\b", sql, re.IGNORECASE), (
+        "0030 must NOT grant UPDATE on budget_entry (append-only spend ledger)"
+    )
+    assert not re.search(r"GRANT[^;]*\bDELETE\b[^;]*ON\s+budget_entry\b", sql, re.IGNORECASE), (
+        "0030 must NOT grant DELETE on budget_entry (append-only spend ledger)"
+    )
+    assert not re.search(
+        r"CREATE\s+POLICY\s+\w+\s+ON\s+budget_entry\b[^;]*FOR\s+UPDATE", sql, re.IGNORECASE
+    ), "0030 must not add an UPDATE policy on budget_entry (append-only)"
+    assert not re.search(
+        r"CREATE\s+POLICY\s+\w+\s+ON\s+budget_entry\b[^;]*FOR\s+DELETE", sql, re.IGNORECASE
+    ), "0030 must not add a DELETE policy on budget_entry (append-only)"
+
+    # --- the schema-only posture: no seeded dollar amounts in the migration (INV-11,
+    #     the 0026 schema-only posture — the four allocations seed from params) ---
+    assert not re.search(r"INSERT\s+INTO\s+budget_workstream\b", sql, re.IGNORECASE), (
+        "0030 must be schema-only: the planned_usd allocations seed from params, not the migration"
+    )
+
+    # --- the global one-guard-per-policy invariant holds locally (+2/+2/+2) ---
+    assert len(_ENABLE_RLS.findall(sql)) == 2, "0030 must ENABLE RLS on exactly 2 tables"
+    assert len(_FORCE_RLS.findall(sql)) == 2, "0030 must FORCE RLS on exactly 2 tables"
+    assert len(_NULL_GUARD.findall(sql)) >= len(_CREATE_POLICY.findall(sql)), (
+        "every 0030 policy must carry the auth.uid() null guard (D-RLS-2)"
+    )
+
+    # --- D-RLS-7: no security-definer helper in the exposed schema ---
+    assert not _SECURITY_DEFINER.search(sql), "0030 must not use SECURITY DEFINER (D-RLS-7)"
