@@ -1,12 +1,15 @@
 import { useState } from 'react';
 import {
   BarChart3,
+  BookMarked,
   CircleHelp,
   ClipboardCheck,
   Home as HomeIcon,
   LayoutGrid,
+  LineChart,
   LogOut,
   Megaphone,
+  Tent,
   Settings,
   ShieldCheck,
   Wallet,
@@ -24,6 +27,9 @@ import DecisionQueueWorkspace, {
   useOpenDecisionCount,
 } from './workspaces/DecisionQueueWorkspace';
 import SettingsWorkspace from './workspaces/SettingsWorkspace';
+import ResourceLibraryWorkspace from './workspaces/ResourceLibraryWorkspace';
+import WebsiteAnalyticsWorkspace from './workspaces/WebsiteAnalyticsWorkspace';
+import SummerCampWorkspace from './workspaces/SummerCampWorkspace';
 import HelpWorkspace from './workspaces/HelpWorkspace';
 import SecurityWorkspace from './workspaces/SecurityWorkspace';
 import BudgetWorkspace from './workspaces/BudgetWorkspace';
@@ -42,6 +48,9 @@ type Workspace =
   | 'decisions'
   | 'budget'
   | 'security'
+  | 'resources'
+  | 'analytics'
+  | 'camp'
   | 'settings'
   | 'help';
 
@@ -146,18 +155,48 @@ function AppShell(): JSX.Element {
     icon: Wallet,
   };
 
+  // Resource Library (spec Module 12) — owner is "All", so every seat sees it.
+  const resourcesNav: SidebarItem<NavKey> = {
+    key: 'resources',
+    label: 'Library',
+    icon: BookMarked,
+  };
+
+  // Website & Digital Analytics (spec Module 13) — the Marketing Lead's GA4 lens.
+  // Admin-only in our current model (alongside Marketing/Leadership).
+  const analyticsNav: SidebarItem<NavKey> = {
+    key: 'analytics',
+    label: 'Analytics',
+    icon: LineChart,
+    badge: 'Simulated',
+  };
+
+  // Summer Camp (spec Module 4) — the Content Owner's separate-program lens.
+  // Admin-only here; the program-isolation backbone keeps it off the Fall path.
+  const campNav: SidebarItem<NavKey> = {
+    key: 'camp',
+    label: 'Summer Camp',
+    icon: Tent,
+  };
+
   const primaryNav: ReadonlyArray<SidebarItem<NavKey>> = isAdmin
-    ? [...ADMIN_PRIMARY_NAV, decisionsNav, budgetNav]
+    ? [...ADMIN_PRIMARY_NAV, campNav, decisionsNav, budgetNav, analyticsNav, resourcesNav]
     : isLeaderOrAdmin
-      ? [...REP_PRIMARY_NAV, decisionsNav, budgetNav]
-      : REP_PRIMARY_NAV;
+      ? [...REP_PRIMARY_NAV, decisionsNav, budgetNav, resourcesNav]
+      : [...REP_PRIMARY_NAV, resourcesNav];
   const secondaryNav = isAdmin
     ? [SECURITY_NAV, ...SECONDARY_NAV]
     : SECONDARY_NAV;
 
   // A rep must never land on (or deep-link to) an admin-only workspace. If the
   // active workspace isn't in the seat's nav, fall back to enrollment.
-  const allowed = new Set<Workspace>(['home', 'enrollment', 'settings', 'help']);
+  const allowed = new Set<Workspace>([
+    'home',
+    'enrollment',
+    'resources',
+    'settings',
+    'help',
+  ]);
   if (isLeaderOrAdmin) {
     allowed.add('decisions');
     allowed.add('budget');
@@ -166,6 +205,8 @@ function AppShell(): JSX.Element {
     allowed.add('marketing');
     allowed.add('leadership');
     allowed.add('security');
+    allowed.add('analytics');
+    allowed.add('camp');
   }
   const activeWorkspace: Workspace = allowed.has(workspace)
     ? workspace
@@ -202,12 +243,20 @@ function AppShell(): JSX.Element {
           {/* Decision Queue (B2) · leader + admin only; gated by primaryNav AND
               guarded here so an operator can never reach it even if forced. */}
           {activeWorkspace === 'decisions' && isLeaderOrAdmin && (
-            <DecisionQueueWorkspace onChanged={refreshDecisions} />
+            <DecisionQueueWorkspace
+              onChanged={refreshDecisions}
+              canDecide={session.role === 'leader'}
+            />
           )}
           {/* Budget Tracker (B4) · leader + admin only; gated by primaryNav AND
               guarded here so an operator can never reach it even if forced. */}
           {activeWorkspace === 'budget' && isLeaderOrAdmin && <BudgetWorkspace />}
           {activeWorkspace === 'security' && isAdmin && <SecurityWorkspace />}
+          {activeWorkspace === 'resources' && <ResourceLibraryWorkspace />}
+          {activeWorkspace === 'analytics' && isAdmin && (
+            <WebsiteAnalyticsWorkspace />
+          )}
+          {activeWorkspace === 'camp' && isAdmin && <SummerCampWorkspace />}
           {activeWorkspace === 'settings' && <SettingsWorkspace />}
           {activeWorkspace === 'help' && <HelpWorkspace />}
         </div>

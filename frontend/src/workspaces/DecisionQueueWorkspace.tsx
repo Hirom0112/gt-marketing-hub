@@ -47,10 +47,17 @@ interface DecisionQueueWorkspaceProps {
   /** Fired after a successful action so the caller (App) can refresh the nav
    *  open-count badge — the queue owns its own list refresh regardless. */
   onChanged?: () => void;
+  /** Whether the current seat may DECIDE (spec Module 11: leader-only). An admin
+   *  has full module access and VIEWS the queue, but decision-making is reserved
+   *  to leadership, so App passes `session.role === 'leader'`. Defaults to true so
+   *  the standalone surface (and the Home preview widget) keep the action row; the
+   *  backend gates the decide POST to leader-only as defense-in-depth regardless. */
+  canDecide?: boolean;
 }
 
 export default function DecisionQueueWorkspace({
   onChanged,
+  canDecide = true,
 }: DecisionQueueWorkspaceProps): JSX.Element {
   const [state, setState] = useState<LoadState>({ status: 'loading' });
 
@@ -180,6 +187,7 @@ export default function DecisionQueueWorkspace({
               key={decision.id}
               decision={decision}
               onAct={act}
+              canDecide={canDecide}
             />
           ))}
         </div>
@@ -562,11 +570,17 @@ function OpenDataTrigger({ onChanged }: { onChanged: () => void }): JSX.Element 
 interface DecisionCardProps {
   decision: Decision;
   onAct: (id: string, action: DecisionAction, comment?: string) => void;
+  /** Only a leader seat may decide (spec Module 11). An admin views read-only. */
+  canDecide: boolean;
 }
 
 // One review card — the SAME `.proposal` review-card shell ActionPanel uses (a
 // surface-2 well + decision button row), repurposed for a queued decision.
-function DecisionCard({ decision, onAct }: DecisionCardProps): JSX.Element {
+function DecisionCard({
+  decision,
+  onAct,
+  canDecide,
+}: DecisionCardProps): JSX.Element {
   const [needInfo, setNeedInfo] = useState(false);
   const [comment, setComment] = useState('');
   const [required, setRequired] = useState(false);
@@ -649,7 +663,7 @@ function DecisionCard({ decision, onAct }: DecisionCardProps): JSX.Element {
         </p>
       )}
 
-      {needInfo && (
+      {canDecide && needInfo && (
         <div style={{ marginTop: 'var(--s-3)' }}>
           <textarea
             data-testid="need-info-comment"
@@ -689,6 +703,22 @@ function DecisionCard({ decision, onAct }: DecisionCardProps): JSX.Element {
         </div>
       )}
 
+      {!canDecide ? (
+        <p
+          data-testid="decision-readonly"
+          className="lab"
+          style={{
+            marginTop: 'var(--s-3)',
+            color: 'var(--muted)',
+            display: 'flex',
+            alignItems: 'center',
+            gap: 'var(--s-2)',
+          }}
+        >
+          <Lock size={13} aria-hidden />
+          Leadership decides. Your admin seat sees the queue read-only.
+        </p>
+      ) : (
       <div
         className="proposal-decisions"
         style={{ display: 'flex', gap: 'var(--s-2)', marginTop: 'var(--s-3)', flexWrap: 'wrap' }}
@@ -726,6 +756,7 @@ function DecisionCard({ decision, onAct }: DecisionCardProps): JSX.Element {
           </Button>
         )}
       </div>
+      )}
     </article>
   );
 }

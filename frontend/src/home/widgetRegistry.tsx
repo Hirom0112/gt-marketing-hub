@@ -2,7 +2,13 @@ import type { ComponentType } from 'react';
 import PipelineBoard from '../PipelineBoard';
 import Scoreboard from '../Scoreboard';
 import SecurityTab from '../security/SecurityTab';
+import MergeQueue from '../MergeQueue';
+import HouseholdReconcileBoard from '../HouseholdReconcileBoard';
 import DecisionQueueWorkspace from '../workspaces/DecisionQueueWorkspace';
+import BudgetWorkspace from '../workspaces/BudgetWorkspace';
+import ContentWorkspace from '../marketing/ContentWorkspace';
+import GeoBoard from '../marketing/GeoBoard';
+import PublishMonitor from '../marketing/PublishMonitor';
 import DataConfidenceBanner from '../dashboard/DataConfidenceBanner';
 import WeeklyScorecard from '../dashboard/WeeklyScorecard';
 import {
@@ -21,11 +27,14 @@ import {
 // home on each side and the two must agree; this is the frontend's. Neither side
 // invents ids of its own.
 //
-// Each id maps to either a REAL cockpit component (where one exists — the eight
-// starter-pack widgets all do) or an honest `WidgetPlaceholder` tile. We do NOT
-// build 36 brand-new dashboards: the point of B3 is the composable FRAME + the
-// registry, with real widgets where they exist and labeled placeholders
-// otherwise.
+// Each id maps to either a REAL cockpit component (where one exists) or an honest
+// `WidgetPlaceholder` tile. We do NOT build 36 brand-new dashboards: the point of
+// B3 is the composable FRAME + the registry, with real widgets where they exist
+// and labeled placeholders otherwise. Beyond the 8 starter widgets, six more ids
+// reuse already-built surfaces (content_library/geo_module/publish_monitor →
+// MarketingWorkspace's panels, budget_tracker → BudgetWorkspace, merge_queue,
+// seam_reconcile) so the library draws live from the modules per the spec's
+// "drawing live from the other modules" requirement, not a shell of stubs.
 
 export type WidgetGroup =
   | 'Enrollment'
@@ -74,26 +83,26 @@ export const WIDGETS: readonly WidgetDef[] = [
   { id: 'pipeline_board', group: 'Enrollment', label: 'Pipeline Board', starter: true, Component: PipelineBoard },
   { id: 'deal_view', group: 'Enrollment', label: 'Deal View', starter: false, Component: placeholder('Deal View') },
   { id: 'funding_tracker', group: 'Enrollment', label: 'Funding Tracker', starter: false, Component: placeholder('Funding Tracker') },
-  { id: 'seam_reconcile', group: 'Enrollment', label: 'Seam Reconcile', starter: false, Component: placeholder('Seam Reconcile') },
+  { id: 'seam_reconcile', group: 'Enrollment', label: 'Seam Reconcile', starter: false, Component: HouseholdReconcileBoard },
   { id: 'assignment_board', group: 'Enrollment', label: 'Assignment Board', starter: false, Component: placeholder('Assignment Board') },
   { id: 'sla_sweep', group: 'Enrollment', label: 'SLA Sweep', starter: false, Component: placeholder('SLA Sweep') },
   { id: 'contact_outcomes', group: 'Enrollment', label: 'Contact Outcomes', starter: false, Component: placeholder('Contact Outcomes') },
-  { id: 'merge_queue', group: 'Enrollment', label: 'Merge Queue', starter: false, Component: placeholder('Merge Queue') },
+  { id: 'merge_queue', group: 'Enrollment', label: 'Merge Queue', starter: false, Component: MergeQueue },
   { id: 'notes_timeline', group: 'Enrollment', label: 'Notes Timeline', starter: false, Component: placeholder('Notes Timeline') },
   // ------------------------------------------------------------- Marketing (9)
-  { id: 'content_library', group: 'Marketing', label: 'Content Library', starter: false, Component: placeholder('Content Library') },
-  { id: 'geo_module', group: 'Marketing', label: 'GEO Module', starter: false, Component: placeholder('GEO Module') },
+  { id: 'content_library', group: 'Marketing', label: 'Content Library', starter: false, Component: ContentWorkspace },
+  { id: 'geo_module', group: 'Marketing', label: 'GEO Module', starter: false, Component: GeoBoard },
   { id: 'brand_memory', group: 'Marketing', label: 'Brand Memory', starter: false, Component: placeholder('Brand Memory') },
   { id: 'scheduler', group: 'Marketing', label: 'Scheduler', starter: false, Component: placeholder('Scheduler') },
   { id: 'sentiment', group: 'Marketing', label: 'Sentiment', starter: false, Component: placeholder('Sentiment') },
   { id: 'creator_intel', group: 'Marketing', label: 'Creator Intel', starter: false, Component: placeholder('Creator Intel') },
   { id: 'recipes', group: 'Marketing', label: 'Recipes', starter: false, Component: placeholder('Recipes') },
-  { id: 'publish_monitor', group: 'Marketing', label: 'Publish Monitor', starter: false, Component: placeholder('Publish Monitor') },
+  { id: 'publish_monitor', group: 'Marketing', label: 'Publish Monitor', starter: false, Component: PublishMonitor },
   { id: 'campaign_analytics', group: 'Marketing', label: 'Campaign Analytics', starter: false, Component: placeholder('Campaign Analytics') },
   // ------------------------------------------------------------ Leadership (6)
   { id: 'scoreboard', group: 'Leadership', label: 'Scoreboard', starter: true, Component: Scoreboard },
   { id: 'decision_queue', group: 'Leadership', label: 'Decision Queue', starter: true, Component: DecisionQueueWorkspace },
-  { id: 'budget_tracker', group: 'Leadership', label: 'Budget Tracker', starter: false, Component: placeholder('Budget Tracker') },
+  { id: 'budget_tracker', group: 'Leadership', label: 'Budget Tracker', starter: false, Component: BudgetWorkspace },
   { id: 'kpi_scorecard', group: 'Leadership', label: 'KPI Scorecard', starter: false, Component: KpiScorecardWidget },
   { id: 'eval_scoreboard', group: 'Leadership', label: 'Eval Scoreboard', starter: false, Component: placeholder('Eval Scoreboard') },
   { id: 'agent_rollup', group: 'Leadership', label: 'Agent Rollup', starter: false, Component: placeholder('Agent Rollup') },

@@ -86,15 +86,17 @@ vi.mock('../../dashboard/DataConfidenceBanner', () => ({
 
 import ComposableHome from '../ComposableHome';
 
-// Two placeholder ids (light to render) — avoids mounting heavy real surfaces.
-const GEO = { i: 'geo_module', x: 0, y: 0, w: 4, h: 4 };
+// Two PLACEHOLDER ids (light to render) — avoids mounting heavy real surfaces that
+// self-fetch (e.g. geo_module → GeoBoard, content_library → ContentWorkspace). This
+// suite tests the persistence seam, not widget rendering, so it uses inert tiles.
+const SCHED = { i: 'scheduler', x: 0, y: 0, w: 4, h: 4 };
 const RECIPES = { i: 'recipes', x: 4, y: 0, w: 4, h: 4 };
 
 describe('ComposableHome', () => {
   beforeEach(() => {
     apiFetch.mockClear();
     putBodies.length = 0;
-    getLayout = [GEO, RECIPES];
+    getLayout = [SCHED, RECIPES];
     getOk = true;
     vi.useFakeTimers();
   });
@@ -115,10 +117,10 @@ describe('ComposableHome', () => {
     render(<ComposableHome />);
     await flushGet();
     expect(apiFetch.mock.calls.some((c) => c[0] === '/home/layout')).toBe(true);
-    expect(screen.getAllByText('GEO Module').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('Scheduler').length).toBeGreaterThan(0);
     expect(screen.getAllByText('Recipes').length).toBeGreaterThan(0);
     // The tile headers carry the remove affordance — proof the placements rendered.
-    expect(screen.getByRole('button', { name: 'Remove GEO Module' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Remove Scheduler' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Remove Recipes' })).toBeInTheDocument();
   });
 
@@ -158,20 +160,20 @@ describe('ComposableHome', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Add widgets' }));
     const picker = screen.getByTestId('widget-picker');
 
-    const box = within(picker).getByRole('checkbox', { name: 'GEO Module' });
+    const box = within(picker).getByRole('checkbox', { name: 'Scheduler' });
     expect(box).toBeChecked();
     fireEvent.click(box);
 
     // The tile is gone (only the picker label may remain, never a tile header).
     expect(
-      screen.queryByRole('button', { name: 'Remove GEO Module' }),
+      screen.queryByRole('button', { name: 'Remove Scheduler' }),
     ).toBeNull();
 
     act(() => {
       vi.advanceTimersByTime(500);
     });
     const body = putBodies[putBodies.length - 1] as { layout: Array<{ i: string }> };
-    expect(body.layout.map((p) => p.i)).not.toContain('geo_module');
+    expect(body.layout.map((p) => p.i)).not.toContain('scheduler');
   });
 
   it('persists a debounced PUT when RGL fires onLayoutChange', async () => {

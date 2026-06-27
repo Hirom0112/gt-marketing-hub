@@ -177,7 +177,7 @@ export default function LoginPage({
   const ROLE_SEATS: ReadonlyArray<{ value: DemoRole; label: string }> = [
     { value: 'admin', label: 'Admin' },
     { value: 'leader', label: 'Leadership' },
-    { value: 'operator', label: 'Sales Agent' },
+    { value: 'operator', label: 'Operator' },
   ];
 
   return (

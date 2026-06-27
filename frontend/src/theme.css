@@ -304,6 +304,25 @@ h3 {
   padding: var(--s-4) 0 var(--s-3);
   background: var(--sidebar-bg);
   border-right: 1px solid var(--sidebar-edge);
+  /* The rail scrolls when the nav stack is taller than the viewport (more
+     modules than fit at once) so the bottom group (Settings / Help / Sign out)
+     is always reachable. Thin, unobtrusive scrollbar. */
+  overflow-y: auto;
+  overflow-x: hidden;
+  scrollbar-width: thin;
+  scrollbar-color: var(--sidebar-edge) transparent;
+}
+.sidebar::-webkit-scrollbar {
+  width: 6px;
+}
+.sidebar::-webkit-scrollbar-thumb {
+  background: var(--sidebar-edge);
+  border-radius: 3px;
+}
+/* The brand block and every nav item keep their height when the rail scrolls. */
+.sidebar-brand,
+.sidebar-item {
+  flex-shrink: 0;
 }
 
 /* ---- the GT Pulse brand block at the top of the rail ---------------------- */
@@ -341,7 +360,7 @@ h3 {
   display: flex;
   flex-direction: column;
   align-items: stretch;
-  gap: var(--s-3);
+  gap: var(--s-2);
   width: 100%;
   padding: 0 var(--s-2);
 }
