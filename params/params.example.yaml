@@ -5,6 +5,7 @@ programs:                   # A1 — program-isolation config for the single har
     - fall_enrollment       # the enrollment cockpit (default program)
     - summer_camp           # the summer-camp program (D2 net-new module)
   active_program_id: fall_enrollment   # which program THIS deployment serves; MUST be one of active_program_ids. Deployment config (GT_PROGRAM_ID), NEVER a client header.
+  app_runtime_read_token_ttl_seconds: 300   # A-38 — lifetime of the short-lived HS256 token the live repo mints to read AS the non-BYPASSRLS app_runtime role (minted per request, consumed immediately).
 
 work_queue:                 # FR-2.5 — score = w_recoverability·recoverability + w_value·value + w_deadline·deadline_proximity
   w_recoverability: 0.6

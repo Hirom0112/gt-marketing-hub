@@ -997,3 +997,120 @@ def test_patch_carries_the_active_program_filter() -> None:
     repo.mark_synced(UUID(_FID_INTEREST), datetime(2030, 1, 1, tzinfo=UTC))
     assert captured["query"]["program_id"] == ["eq.summer_camp"]
     assert captured["query"]["family_id"] == [f"eq.{UUID(_FID_INTEREST)}"]
+
+
+# ---------------------------------------------------------------------------
+# A-38 — app_runtime read-path swap (RLS-enforced program isolation on the app's
+# own reads). These are CI-safe MockTransport CONTRACT tests: they assert the
+# OUTBOUND request shape (which bearer/claims a read carries). The LIVE in-DB
+# proof that RLS actually isolates lives in tests/adapters/test_rls_regression.py.
+# ---------------------------------------------------------------------------
+
+_ANON = "synthetic-anon-key"
+_JWT_SECRET = "synthetic-jwt-secret-at-least-32-characters-long!!"
+
+
+def _app_runtime_repo(
+    captured: dict[str, Any],
+    *,
+    program: Program | None,
+    app_runtime_reads: bool,
+    anon_key: str | None = _ANON,
+    jwt_secret: str | None = _JWT_SECRET,
+) -> SupabaseFamilyRepository:
+    """A repo wired for the A-38 read swap whose handler records request headers."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        parsed = urlparse(str(request.url))
+        captured[parsed.path] = {
+            "apikey": request.headers.get("apikey"),
+            "authorization": request.headers.get("Authorization"),
+        }
+        # /family_record honors the !inner drop; an empty array is a valid read.
+        return httpx.Response(200, content=json.dumps([]))
+
+    transport = httpx.MockTransport(handler)
+    client = httpx.Client(transport=transport, base_url="https://example.supabase.co")
+    return SupabaseFamilyRepository(
+        base_url="https://example.supabase.co",
+        service_role_key="synthetic-service-role-key",
+        params=load_params(_EXAMPLE_PARAMS),
+        client=client,
+        program=program,
+        anon_key=anon_key,
+        jwt_secret=jwt_secret,
+        app_runtime_reads=app_runtime_reads,
+    )
+
+
+def _decode_jwt_payload(bearer: str) -> dict[str, Any]:
+    """Decode the (signature-unchecked) payload of a `Bearer <jwt>` header."""
+    import base64
+
+    token = bearer.removeprefix("Bearer ")
+    payload_b64 = token.split(".")[1]
+    padded = payload_b64 + "=" * (-len(payload_b64) % 4)
+    return json.loads(base64.urlsafe_b64decode(padded))  # type: ignore[no-any-return]
+
+
+def test_app_runtime_read_carries_program_claim_token_not_service_role() -> None:
+    """A program-scoped GET authenticates AS app_runtime with the program claim (A-38)."""
+    captured: dict[str, Any] = {}
+    repo = _app_runtime_repo(captured, program=Program.FALL_ENROLLMENT, app_runtime_reads=True)
+    repo.list_families()
+
+    read = captured["/rest/v1/family_record"]
+    # apikey is the anon key (not service_role) and the bearer is a MINTED token.
+    assert read["apikey"] == _ANON
+    assert read["authorization"] != "Bearer synthetic-service-role-key"
+    claims = _decode_jwt_payload(read["authorization"])
+    assert claims["role"] == "app_runtime"
+    assert claims["app_metadata"]["program_id"] == Program.FALL_ENROLLMENT.value
+    # The token is signed with the real secret (verifiable, not a forgery).
+    from app.core.jwt_verify import verify_hs256
+
+    bearer = read["authorization"].removeprefix("Bearer ")
+    verify_hs256(bearer, secret=_JWT_SECRET, now=claims["exp"] - 1)
+
+
+def test_app_runtime_token_program_claim_follows_active_program() -> None:
+    """The minted read token's program claim is the repo's active program (isolation key)."""
+    captured: dict[str, Any] = {}
+    repo = _app_runtime_repo(captured, program=Program.SUMMER_CAMP, app_runtime_reads=True)
+    repo.list_families()
+    claims = _decode_jwt_payload(captured["/rest/v1/family_record"]["authorization"])
+    assert claims["app_metadata"]["program_id"] == Program.SUMMER_CAMP.value
+
+
+def test_app_runtime_disabled_keeps_service_role_reads() -> None:
+    """Default (flag off) ⇒ reads stay on service_role — the unchanged path."""
+    captured: dict[str, Any] = {}
+    repo = _app_runtime_repo(captured, program=Program.FALL_ENROLLMENT, app_runtime_reads=False)
+    repo.list_families()
+    read = captured["/rest/v1/family_record"]
+    assert read["apikey"] == "synthetic-service-role-key"
+    assert read["authorization"] == "Bearer synthetic-service-role-key"
+
+
+def test_app_runtime_fails_closed_to_service_role_without_secret() -> None:
+    """Enabled but JWT secret absent ⇒ fail-closed fallback to service_role (no half-swap)."""
+    captured: dict[str, Any] = {}
+    repo = _app_runtime_repo(
+        captured, program=Program.FALL_ENROLLMENT, app_runtime_reads=True, jwt_secret=None
+    )
+    repo.list_families()
+    read = captured["/rest/v1/family_record"]
+    assert read["apikey"] == "synthetic-service-role-key"
+    assert read["authorization"] == "Bearer synthetic-service-role-key"
+
+
+def test_app_runtime_writes_stay_on_service_role() -> None:
+    """Even with the read swap ON, the PATCH write seam stays service_role (INV-5)."""
+    from datetime import UTC, datetime
+
+    captured: dict[str, Any] = {}
+    repo = _app_runtime_repo(captured, program=Program.FALL_ENROLLMENT, app_runtime_reads=True)
+    repo.mark_synced(UUID(_FID_INTEREST), datetime(2030, 1, 1, tzinfo=UTC))
+    write = captured["/rest/v1/family_record"]
+    assert write["apikey"] == "synthetic-service-role-key"
+    assert write["authorization"] == "Bearer synthetic-service-role-key"

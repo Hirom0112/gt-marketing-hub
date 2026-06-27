@@ -57,6 +57,10 @@ SKIP_DIRS = {
     ".mypy_cache",
     ".pytest_cache",
     ".ruff_cache",
+    # Local Supabase CLI dev scaffolding (`supabase init` / `supabase start`):
+    # generated config + local seed, gitignored, never product source. Holds the
+    # CLI's own placeholder defaults (e.g. a commented `admin@email.com`), not PII.
+    "supabase",
 }
 
 # Lockfiles and obviously-binary extensions are never PII fixtures.

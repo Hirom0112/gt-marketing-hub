@@ -498,3 +498,148 @@ def test_cross_program_read_is_isolated() -> None:
                     headers=_admin_headers(service_key),
                     params={"family_id": f"eq.{seed_id}"},
                 )
+
+
+# ---------------------------------------------------------------------------
+# A-38 — the app's OWN read path is RLS-isolated by program (not just the
+# app-layer filter). This drives the REAL SupabaseFamilyRepository in app_runtime
+# read mode with `_program_filtered` NEUTRALIZED, so ONLY the 0031 RLS policy can
+# bound the cohort. It is the live counterpart to the MockTransport contract tests
+# in tests/data/test_supabase_repository.py. Skips without a live Supabase.
+# ASSUMPTIONS.md A-38; THREAT_MODEL.md §6 (D-RLS-4).
+# ---------------------------------------------------------------------------
+_A38_FALL_FID = "00000000-0000-0000-0000-00000000a380"
+_A38_SUMMER_FID = "00000000-0000-0000-0000-00000000a381"
+
+
+def _a38_seed_family(client: httpx.Client, service_key: str, fid: str, program: str) -> None:
+    """service_role (BYPASSRLS) seeds a family + its !inner lead, tagged to a program."""
+    client.request(
+        "DELETE",
+        "/rest/v1/leads_new",
+        headers=_admin_headers(service_key),
+        params={"family_id": f"eq.{fid}"},
+    )
+    client.request(
+        "DELETE",
+        "/rest/v1/family_record",
+        headers=_admin_headers(service_key),
+        params={"family_id": f"eq.{fid}"},
+    )
+    fr = client.post(
+        "/rest/v1/family_record",
+        headers={**_admin_headers(service_key), "Prefer": "return=minimal"},
+        json={
+            "family_id": fid,
+            "user_id": None,
+            "display_name": f"A38 {program}",
+            "primary_contact_synthetic_email": f"a38-{program}@example.invalid",
+            "current_stage": "interest",
+            "attribution_source": "a38-live-proof",
+            "program_id": program,
+        },
+    )
+    assert fr.status_code in (200, 201), f"seed family_record failed: {fr.text}"
+    ln = client.post(
+        "/rest/v1/leads_new",
+        headers={**_admin_headers(service_key), "Prefer": "return=minimal"},
+        json={
+            "lead_id": fid,
+            "family_id": fid,
+            "synthetic_first_name": "Synth",
+            "synthetic_last_name": program,
+            "synthetic_email": f"a38-lead-{program}@example.invalid",
+            "synthetic_phone": "+15555550100",
+            "source": "a38",
+            "utm": {},
+            "product_interest": "campus",
+            "grade_interest": "K",
+            "region": "local",
+            "num_children": 1,
+            "neighborhood": "synthetic",
+            "program_id": program,
+        },
+    )
+    assert ln.status_code in (200, 201), f"seed leads_new failed: {ln.text}"
+
+
+def test_app_runtime_read_path_is_rls_program_isolated() -> None:
+    """The live repo's app_runtime reads see ONLY the active program — by RLS alone."""
+    from pathlib import Path
+
+    from app.core.params import load_params
+    from app.core.program import Program
+    from app.data.supabase_repository import SupabaseFamilyRepository
+
+    supabase_url = (os.environ.get("SUPABASE_URL") or "").strip()
+    if not supabase_url or supabase_url.startswith("<"):
+        pytest.skip("no SUPABASE_URL — A-38 live read-path proof requires a live Supabase")
+    service_key = os.environ["SUPABASE_SERVICE_ROLE_KEY"]
+    anon_key = os.environ["SUPABASE_ANON_KEY"]
+    jwt_secret = os.environ["SUPABASE_JWT_SECRET"]
+    params = load_params(
+        Path(__file__).resolve().parents[2].parent / "params" / "params.example.yaml"
+    )
+
+    def _repo(program: Program, *, app_runtime_reads: bool) -> SupabaseFamilyRepository:
+        repo = SupabaseFamilyRepository(
+            base_url=supabase_url,
+            service_role_key=service_key,
+            params=params,
+            program=program,
+            anon_key=anon_key,
+            jwt_secret=jwt_secret,
+            app_runtime_reads=app_runtime_reads,
+        )
+        # NEUTRALIZE the app-layer filter so ONLY RLS can isolate (A-38 proof intent).
+        repo._program_filtered = lambda path, params: params  # type: ignore[method-assign]
+        return repo
+
+    with httpx.Client(base_url=supabase_url, timeout=30.0) as client:
+        _a38_seed_family(client, service_key, _A38_FALL_FID, _PROGRAM_A)
+        _a38_seed_family(client, service_key, _A38_SUMMER_FID, _PROGRAM_B)
+        try:
+            # Control: service_role (BYPASSRLS) + neutralized filter ⇒ sees BOTH
+            # programs (proves the filter really is off — so any isolation below is RLS).
+            both = {
+                str(jf.family.family_id)
+                for jf in _repo(Program.FALL_ENROLLMENT, app_runtime_reads=False).list_joined()
+            }
+            assert _A38_FALL_FID in both and _A38_SUMMER_FID in both, (
+                "control failed: service_role with the app filter off should see both programs"
+            )
+
+            # A-38: app_runtime read, program=fall, filter OFF ⇒ RLS isolates to fall.
+            fall_ids = {
+                str(jf.family.family_id)
+                for jf in _repo(Program.FALL_ENROLLMENT, app_runtime_reads=True).list_joined()
+            }
+            assert _A38_FALL_FID in fall_ids, "app_runtime fall read lost its own program row"
+            assert _A38_SUMMER_FID not in fall_ids, (
+                f"CROSS-PROGRAM LEAK (A-38): app_runtime fall read saw the summer row "
+                f"{_A38_SUMMER_FID} — RLS program isolation failed on the app read path"
+            )
+
+            # And the mirror: program=summer ⇒ RLS isolates to summer.
+            summer_ids = {
+                str(jf.family.family_id)
+                for jf in _repo(Program.SUMMER_CAMP, app_runtime_reads=True).list_joined()
+            }
+            assert _A38_SUMMER_FID in summer_ids, "app_runtime summer read lost its own row"
+            assert _A38_FALL_FID not in summer_ids, (
+                "CROSS-PROGRAM LEAK (A-38): app_runtime summer read saw the fall row"
+            )
+        finally:
+            for fid in (_A38_FALL_FID, _A38_SUMMER_FID):
+                client.request(
+                    "DELETE",
+                    "/rest/v1/leads_new",
+                    headers=_admin_headers(service_key),
+                    params={"family_id": f"eq.{fid}"},
+                )
+                client.request(
+                    "DELETE",
+                    "/rest/v1/family_record",
+                    headers=_admin_headers(service_key),
+                    params={"family_id": f"eq.{fid}"},
+                )

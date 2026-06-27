@@ -36,3 +36,6 @@ apply/design-ref/
 /posted-media/
 gt school scrap/
 */gt school scrap/
+
+# Local Supabase CLI dev scaffolding (supabase init/start) — machine-specific, not committed
+supabase/

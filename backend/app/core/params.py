@@ -1368,6 +1368,21 @@ class Programs(_StrictModel):
 
     active_program_ids: list[Program]
     active_program_id: Program
+    # app_runtime_read_token_ttl_seconds — lifetime (seconds) of the short-lived
+    # HS256 read token the live Supabase repo mints to authenticate program-scoped
+    # reads AS the non-`BYPASSRLS` `app_runtime` role (A-38). The token is minted
+    # per request and consumed immediately; the TTL only needs to exceed one
+    # request's wall-clock. INV-11: the one canonical home for this tunable.
+    app_runtime_read_token_ttl_seconds: int = 300
+
+    @model_validator(mode="after")
+    def _read_token_ttl_positive(self) -> Programs:
+        if self.app_runtime_read_token_ttl_seconds < 1:
+            raise ValueError(
+                "programs.app_runtime_read_token_ttl_seconds must be >= 1, got "
+                f"{self.app_runtime_read_token_ttl_seconds!r}"
+            )
+        return self
 
     @model_validator(mode="after")
     def _active_id_in_list(self) -> Programs:

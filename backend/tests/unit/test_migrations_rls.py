@@ -85,8 +85,71 @@ def _security_event_sql() -> str:
     return _strip_comments((MIGRATIONS_DIR / "0015_security_event.sql").read_text(encoding="utf-8"))
 
 
+def _app_runtime_read_sql() -> str:
+    """The 0031 app_runtime program-read policy DDL (A-38; comments stripped)."""
+    return _strip_comments(
+        (MIGRATIONS_DIR / "0031_app_runtime_program_read.sql").read_text(encoding="utf-8")
+    )
+
+
 def _all_sql() -> str:
     return "\n".join(p.read_text(encoding="utf-8") for p in _sql_files())
+
+
+# A-38 (0031): the 9 program-tagged tenant tables (mirror 0024) + community_profiles
+# (family-scoped, read as an embed) each get ONE app_runtime program-read policy.
+_A38_READ_TABLES = (
+    "family_record",
+    "leads_new",
+    "app_form",
+    "enrollment_forms",
+    "apply_events",
+    "student",
+    "voucher_event",
+    "sis_status",
+    "lead_assignment",
+    "community_profiles",
+)
+
+
+def test_0031_grants_app_runtime_to_authenticator() -> None:
+    """A-38: 0031 lets PostgREST SET ROLE app_runtime (GRANT app_runtime TO authenticator)."""
+    sql = _app_runtime_read_sql()
+    assert re.search(r"GRANT\s+app_runtime\s+TO\s+authenticator\b", sql, re.IGNORECASE), (
+        "0031 must GRANT app_runtime TO authenticator so the app read path can assume the role"
+    )
+
+
+def test_0031_adds_program_read_policy_to_app_runtime_per_table() -> None:
+    """A-38: each read table gets a PERMISSIVE FOR SELECT policy scoped TO app_runtime."""
+    sql = _app_runtime_read_sql()
+    for table in _A38_READ_TABLES:
+        assert re.search(
+            rf"CREATE\s+POLICY\s+\w+\s+ON\s+{table}\b[^;]*AS\s+PERMISSIVE[^;]*"
+            rf"FOR\s+SELECT[^;]*TO\s+app_runtime",
+            sql,
+            re.IGNORECASE,
+        ), f"0031 must add a PERMISSIVE FOR SELECT ... TO app_runtime policy on {table}"
+
+
+def test_0031_policies_are_select_only_and_program_keyed_and_guarded() -> None:
+    """A-38: SELECT-only (no app_runtime write policy), program-claim-keyed, null-guarded."""
+    sql = _app_runtime_read_sql()
+    n_policies = len(_CREATE_POLICY.findall(sql))
+    assert n_policies == len(_A38_READ_TABLES), (
+        f"0031 should add exactly {len(_A38_READ_TABLES)} policies, found {n_policies}"
+    )
+    # FOR SELECT only — never INSERT/UPDATE/DELETE/ALL for app_runtime (writes stay
+    # on service_role — INV-5 / D-RLS-4).
+    assert len(re.findall(r"FOR\s+SELECT", sql, re.IGNORECASE)) == n_policies
+    assert not re.search(r"FOR\s+(INSERT|UPDATE|DELETE|ALL)\b", sql, re.IGNORECASE), (
+        "0031 must not grant app_runtime any write policy (A-38 moves only the READ path)"
+    )
+    # Every policy keys on the app_metadata.program_id claim and carries the null guard.
+    assert len(re.findall(r"app_metadata'?\s*->>\s*'program_id'", sql)) >= n_policies
+    assert len(_NULL_GUARD.findall(sql)) >= n_policies, (
+        "every 0031 policy must carry the auth.uid() IS NOT NULL guard (D-RLS-2)"
+    )
 
 
 def test_every_table_enables_rls() -> None:

@@ -39,6 +39,7 @@ pure stage machine, and ``httpx``.
 from __future__ import annotations
 
 import os
+import time
 from collections import Counter
 from dataclasses import dataclass
 from datetime import datetime
@@ -48,6 +49,7 @@ from uuid import UUID, uuid4
 
 import httpx
 
+from app.core.jwt_verify import sign_hs256
 from app.core.params import Params
 from app.core.program import Program
 from app.core.stage_machine import FamilyInputs, derive_stage
@@ -84,6 +86,17 @@ __all__ = ["HouseholdChildStage", "HouseholdRollUp"]
 # PostgREST surface (the API's own fixed routes — INV-11 does not apply to a
 # third party's URLs, the same carve-out as the HubSpot adapter's object paths).
 _REST = "/rest/v1"
+# A-38 read-path identity (protocol constants, one-home here — same carve-out as
+# the adapter's fixed strings, A-39). The minted read token carries `role` =
+# `app_runtime` so the Supabase request pipeline `SET ROLE`s to the non-`BYPASSRLS`
+# server role; `aud` = `authenticated` matches PostgREST's audience; `sub` is a
+# FIXED synthetic service principal (the cockpit is one trusted server, not an
+# end user) — it only has to be a non-null UUID to satisfy the policies' `auth.uid()
+# IS NOT NULL` guard. It owns no rows, so it can read ONLY via the program-scoped
+# `app_runtime` policies (0031), never the owner-scoped ones.
+_APP_RUNTIME_ROLE = "app_runtime"
+_APP_RUNTIME_AUD = "authenticated"
+_APP_RUNTIME_SUB = "00000000-0000-0000-0000-0000000000ff"
 # The one-request embed: the spine plus all four source tables. ``leads_new`` is
 # the INNER side (``!inner`` makes PostgREST drop a spine row with no lead — the
 # partial-invisible rule); the other three are LEFT (a thin interest lead with no
@@ -218,6 +231,9 @@ class SupabaseFamilyRepository(FamilyRepository):
         client: httpx.Client | None = None,
         timeout: float = 30.0,
         program: Program | None = None,
+        anon_key: str | None = None,
+        jwt_secret: str | None = None,
+        app_runtime_reads: bool = False,
     ) -> None:
         self._base_url = base_url.rstrip("/")
         self._key = service_role_key
@@ -225,6 +241,16 @@ class SupabaseFamilyRepository(FamilyRepository):
         self._client = client
         self._timeout = timeout
         self._program = program
+        # A-38 read-path swap: when enabled (and a program + JWT secret + anon key
+        # are present), program-scoped READS authenticate AS the non-`BYPASSRLS`
+        # `app_runtime` role via a minted, program-claim-carrying token so RLS — not
+        # just the app-layer `_program_filtered` — enforces program isolation. Writes
+        # stay on service_role (INV-5 / D-RLS-4). Disabled by default ⇒ unchanged
+        # service_role read path (the existing MockTransport contract tests + the
+        # pre-provisioning posture both keep working).
+        self._anon_key = anon_key
+        self._jwt_secret = jwt_secret
+        self._app_runtime_reads = app_runtime_reads
 
     # ------------------------------------------------------------------ I/O
     def _headers(self) -> dict[str, str]:
@@ -232,6 +258,61 @@ class SupabaseFamilyRepository(FamilyRepository):
         return {
             "apikey": self._key,
             "Authorization": f"Bearer {self._key}",
+            "Accept": "application/json",
+        }
+
+    def _app_runtime_reads_active(self, path: str) -> bool:
+        """Whether THIS read should authenticate as ``app_runtime`` (A-38).
+
+        Fail-closed: the swap engages ONLY when explicitly enabled AND a program is
+        active AND both the JWT secret (to mint/sign the token) and the anon key (the
+        PostgREST ``apikey``) are present AND the path targets a program-scoped table.
+        Any missing piece falls back to the service_role read path — never a silent
+        un-authenticated read.
+        """
+        return (
+            self._app_runtime_reads
+            and self._program is not None
+            and bool(self._jwt_secret)
+            and bool(self._anon_key)
+            and _is_program_scoped(path)
+        )
+
+    def _mint_read_token(self) -> str:
+        """Mint the short-lived HS256 token that authenticates a read AS ``app_runtime``.
+
+        Carries ``role=app_runtime`` (the Supabase pipeline ``SET ROLE``s to the
+        non-`BYPASSRLS` server role) and ``app_metadata.program_id`` = the active
+        program (the 0031 program-read policy + the 0024 RESTRICTIVE policy both key
+        on this claim), so RLS bounds the read to exactly this program. Signed with
+        the same ``SUPABASE_JWT_SECRET`` Supabase uses (stdlib HS256 via
+        :func:`app.core.jwt_verify.sign_hs256` — no new dep). Only called when
+        :meth:`_app_runtime_reads_active` is true, so the secret/program are present.
+        """
+        assert self._jwt_secret is not None and self._program is not None
+        ttl = self._params.programs.app_runtime_read_token_ttl_seconds
+        claims: dict[str, Any] = {
+            "role": _APP_RUNTIME_ROLE,
+            "sub": _APP_RUNTIME_SUB,
+            "aud": _APP_RUNTIME_AUD,
+            "exp": int(time.time()) + ttl,
+            "app_metadata": {"program_id": self._program.value},
+        }
+        return sign_hs256(claims, secret=self._jwt_secret)
+
+    def _read_headers(self, path: str) -> dict[str, str]:
+        """Auth headers for a GET — ``app_runtime`` (A-38) when active, else service_role.
+
+        The A-38 read path uses the anon key as the PostgREST ``apikey`` and the
+        minted ``app_runtime`` token as the Bearer, so the request is RLS-bounded to
+        the active program. Otherwise the unchanged service_role headers (BYPASSRLS).
+        """
+        if not self._app_runtime_reads_active(path):
+            return self._headers()
+        assert self._anon_key is not None
+        return {
+            "apikey": self._anon_key,
+            "Authorization": f"Bearer {self._mint_read_token()}",
             "Accept": "application/json",
         }
 
@@ -264,10 +345,15 @@ class SupabaseFamilyRepository(FamilyRepository):
         return {**payload, "program_id": self._program.value}
 
     def _get(self, path: str, params: dict[str, str]) -> list[dict[str, Any]]:
-        """One PostgREST GET → the decoded JSON array (fail loud on non-2xx)."""
+        """One PostgREST GET → the decoded JSON array (fail loud on non-2xx).
+
+        Reads authenticate as ``app_runtime`` (A-38, RLS-enforced program isolation)
+        when that swap is active for this path, else over service_role. The app-layer
+        ``_program_filtered`` is retained as belt-and-suspenders under both.
+        """
         params = self._program_filtered(path, params)
         url = f"{self._base_url}{path}"
-        headers = self._headers()
+        headers = self._read_headers(path)
         if self._client is not None:
             response = self._client.get(url, params=params, headers=headers)
         else:
@@ -884,6 +970,12 @@ def build_supabase_repository(
     at the composition root). When set it bounds every program-scoped read/write to
     that program (the app-layer isolation over the service_role read path, PLAN_v2
     §A1 / A-38). ``None`` leaves the repo program-agnostic.
+
+    A-38: when ``SUPABASE_APP_RUNTIME_READS`` is truthy AND the anon key + JWT secret
+    are configured AND a program is active, program-scoped READS authenticate as the
+    non-`BYPASSRLS` ``app_runtime`` role (RLS-enforced program isolation, 0031), not
+    service_role. Any missing piece falls back to the unchanged service_role read
+    path (fail-closed; the swap never silently half-engages).
     """
     url = (os.environ.get("SUPABASE_URL") or "").strip()
     if not url or url.startswith("<"):
@@ -891,6 +983,22 @@ def build_supabase_repository(
     key = (os.environ.get("SUPABASE_SERVICE_ROLE_KEY") or "").strip()
     if not key or key.startswith("<"):
         return None
+    anon = (os.environ.get("SUPABASE_ANON_KEY") or "").strip()
+    anon_key = anon if anon and not anon.startswith("<") else None
+    secret = (os.environ.get("SUPABASE_JWT_SECRET") or "").strip()
+    jwt_secret = secret if secret and not secret.startswith("<") else None
+    app_runtime_reads = (os.environ.get("SUPABASE_APP_RUNTIME_READS") or "").strip().lower() in (
+        "1",
+        "true",
+        "yes",
+        "on",
+    )
     return SupabaseFamilyRepository(
-        base_url=url, service_role_key=key, params=params, program=program
+        base_url=url,
+        service_role_key=key,
+        params=params,
+        program=program,
+        anon_key=anon_key,
+        jwt_secret=jwt_secret,
+        app_runtime_reads=app_runtime_reads,
     )

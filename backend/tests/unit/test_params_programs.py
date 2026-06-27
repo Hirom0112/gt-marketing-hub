@@ -36,6 +36,10 @@ def test_programs_block_loads() -> None:
     # The selected active program is one of the active ids.
     assert programs.active_program_id in programs.active_program_ids
 
+    # A-38: the app_runtime read-token TTL is a positive tunable with a one-home in
+    # params (the live repo mints this token to read AS app_runtime, RLS-bounded).
+    assert programs.app_runtime_read_token_ttl_seconds >= 1
+
     # Drift guard: an active_program_id NOT in the active list fails at load time.
     with pytest.raises(ValidationError):
         Programs(
