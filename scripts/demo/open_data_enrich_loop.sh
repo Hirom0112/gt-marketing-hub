@@ -43,8 +43,8 @@ psql "$DATABASE_URL" -tAc "select 1" >/dev/null 2>&1 || die "local Supabase DB u
 say "starting backend on :$PORT (OPEN_DATA_MODE=live, key od_live_…${OPEN_DATA_API_KEY: -6})"
 ( cd backend && uv run uvicorn app.main:app --port "$PORT" >"$BACKEND_LOG" 2>&1 ) &
 BACKEND_PID=$!
-for _ in $(seq 1 40); do curl -fsS "localhost:${PORT}/families" >/dev/null 2>&1 && break; sleep 0.5; done
-curl -fsS "localhost:${PORT}/families" >/dev/null 2>&1 || { tail -20 "$BACKEND_LOG"; die "backend did not become healthy"; }
+up=""; for _ in $(seq 1 60); do code="$(curl -s -o /dev/null -w "%{http_code}" "localhost:${PORT}/families" 2>/dev/null || echo 000)"; [ "$code" != "000" ] && { up=1; break; }; sleep 0.5; done
+[ -n "$up" ] || { tail -20 "$BACKEND_LOG"; die "backend did not start (no HTTP response on :$PORT)"; }
 
 # --- Mint a leader demo token (AUTH_MODE=demo) -------------------------------
 say "minting a leader demo token"

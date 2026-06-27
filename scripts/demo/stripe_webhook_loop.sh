@@ -60,11 +60,14 @@ say "starting backend on :$PORT (STRIPE_MODE=simulate, payments store = local Su
   uv run uvicorn app.main:app --port "$PORT" >"$BACKEND_LOG" 2>&1 ) &
 BACKEND_PID=$!
 
-for _ in $(seq 1 40); do
-  curl -fsS "localhost:${PORT}/families" >/dev/null 2>&1 && break
+# /families is auth-gated (401), so "server responding with any HTTP code" = up.
+up=""
+for _ in $(seq 1 60); do
+  code="$(curl -s -o /dev/null -w "%{http_code}" "localhost:${PORT}/families" 2>/dev/null || echo 000)"
+  [ "$code" != "000" ] && { up=1; break; }
   sleep 0.5
 done
-curl -fsS "localhost:${PORT}/families" >/dev/null 2>&1 || { tail -20 "$BACKEND_LOG"; die "backend did not become healthy"; }
+[ -n "$up" ] || { tail -20 "$BACKEND_LOG"; die "backend did not start (no HTTP response on :$PORT)"; }
 
 # --- Start the forwarder -----------------------------------------------------
 say "forwarding Stripe events → $ENDPOINT"
