@@ -26,6 +26,7 @@ from app.core.seam import MirrorState
 from app.data.models import FundingState, SeamStatus, Stage
 from app.data.repository import InMemoryFamilyRepository
 from app.main import app
+from tests.conftest import install_test_principal_override
 
 client = TestClient(app)
 
@@ -42,6 +43,8 @@ def _isolation() -> Iterator[None]:
     deps.reset_observability_log()
     deps.reset_crm_adapter()
     app.dependency_overrides.clear()
+    # Re-assert the conftest token-aware principal shim wiped by the clear() above.
+    install_test_principal_override()
     repo = InMemoryFamilyRepository.seeded()
     _active_repo[:] = [repo]
     app.dependency_overrides[deps.get_repository] = lambda: repo

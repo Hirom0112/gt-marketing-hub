@@ -30,11 +30,20 @@ from app.data.models import (
 from app.data.repository import InMemoryFamilyRepository, JoinedFamily
 from app.data.synthetic import SyntheticDataset
 from app.main import app
+from tests.api._jwt import TEST_JWT_SECRET, mint_jwt
 
 client = TestClient(app)
 
 AGENT_A = UUID("a0000000-0000-4000-8000-000000000001")  # rank 1 closer (Riley Carter)
 AGENT_B = UUID("a0000000-0000-4000-8000-000000000002")  # rank 2 setter (Jordan Avery)
+
+
+def _operator_headers(agent_id: UUID) -> dict[str, str]:
+    """A signed operator JWT for ``agent_id`` (B1 — the verified successor to the
+    deleted client-supplied role header)."""
+    token = mint_jwt(role="operator", agent_id=agent_id, secret=TEST_JWT_SECRET)
+    return {"Authorization": f"Bearer {token}"}
+
 
 # A fixed "now" anchor. The endpoint reads wall-clock now; we date every fact a few
 # days BEFORE the real now so the windows (computed off the request's now) bracket
@@ -175,10 +184,8 @@ def _teardown() -> None:
     deps.reset_observability_log()
 
 
-def _get(window: str, *, role: str = "agent", agent_id: UUID | None = AGENT_A) -> dict:
-    headers = {"X-Demo-Role": role}
-    if agent_id is not None:
-        headers["X-Demo-Agent-Id"] = str(agent_id)
+def _get(window: str, *, agent_id: UUID = AGENT_A) -> dict:
+    headers = _operator_headers(agent_id)
     resp = client.get(f"/enrollment/agent-kpis?window={window}", headers=headers)
     assert resp.status_code == 200, resp.text
     return resp.json()
@@ -277,7 +284,7 @@ def test_owner_scope_blocks_cross_agent_read() -> None:
     _seed_outcomes(fams)
     try:
         # AGENT_B asks for AGENT_A's book explicitly; the clamp must ignore it.
-        headers = {"X-Demo-Role": "agent", "X-Demo-Agent-Id": str(AGENT_B)}
+        headers = _operator_headers(AGENT_B)
         resp = client.get(f"/enrollment/agent-kpis?window=all&owner={AGENT_A}", headers=headers)
         assert resp.status_code == 200, resp.text
         body = resp.json()

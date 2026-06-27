@@ -35,6 +35,7 @@ from app.core.recovery_state import RecoveryState
 from app.core.settings import Settings
 from app.data.repository import InMemoryFamilyRepository
 from app.main import app
+from tests.conftest import install_test_principal_override
 
 client = TestClient(app)
 
@@ -106,6 +107,9 @@ def _clean_overrides() -> Iterator[None]:
     deps.reset_observability_log()
     app.dependency_overrides.clear()
     app.dependency_overrides[deps.get_settings_dep] = _settings_with_key
+    # Restore the conftest token-aware principal shim wiped by the clear() above,
+    # WITHOUT touching get_settings_dep (this module manages its own keyed settings).
+    install_test_principal_override(settings=False)
     yield
     app.dependency_overrides.clear()
     deps.reset_observability_log()

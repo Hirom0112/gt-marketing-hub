@@ -26,6 +26,7 @@ from fastapi.testclient import TestClient
 from app.api.deps import get_security_event_log, reset_security_event_log
 from app.api.security import SecurityEdgeMiddleware
 from app.core.params import load_params
+from app.core.settings import Settings
 from app.main import app
 from app.observability.security_log import (
     OWASP_BY_SIGNAL,
@@ -45,7 +46,9 @@ def _probe_app(log: InMemorySecurityEventLog) -> TestClient:
     deterministically.
     """
     probe = FastAPI()
-    probe.add_middleware(SecurityEdgeMiddleware, log=log, params=_PARAMS)
+    # No JWT secret on the probe ⇒ every token reads as ANON (detection-only, safe);
+    # the probe drives ANON shapes anyway (no Authorization header is sent).
+    probe.add_middleware(SecurityEdgeMiddleware, log=log, params=_PARAMS, settings=Settings())
 
     @probe.get("/protected/{obj_id}")
     def protected(obj_id: str) -> JSONResponse:
@@ -82,7 +85,7 @@ def test_signals_recorded() -> None:
     assert resp.status_code == 200
 
     # --- API5:2023 anon hitting an admin/service route (broken function level auth) ---
-    resp = client.get("/admin/secret")  # no X-Demo-Role ⇒ anon
+    resp = client.get("/admin/secret")  # no Authorization ⇒ anon
     assert resp.status_code == 403
 
     # --- A07:2021 auth-failure burst (forged token / brute force) ---

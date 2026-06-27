@@ -42,6 +42,8 @@ from app.data.notes_repository import InMemoryNotesRepository
 from app.data.repository import InMemoryFamilyRepository
 from app.data.synthetic import SyntheticDataset, generate
 from app.main import app
+from tests.api._jwt import TEST_JWT_SECRET, mint_jwt
+from tests.conftest import install_test_principal_override
 
 client = TestClient(app)
 
@@ -49,6 +51,11 @@ client = TestClient(app)
 # closer the coworker authenticates as (MULTI_AGENT_COCKPIT §10.3).
 CLOSER = UUID("a0000000-0000-4000-8000-000000000001")  # Riley Carter (closer)
 OTHER_AGENT = UUID("a0000000-0000-4000-8000-000000000002")  # Jordan Avery (setter)
+
+
+def _closer_token(agent_id: UUID = CLOSER) -> str:
+    """A signed operator JWT the coworker forwards AS the closer (B1 verified principal)."""
+    return mint_jwt(role="operator", agent_id=agent_id, secret=TEST_JWT_SECRET)
 
 
 # --------------------------------------------------------------------------- #
@@ -134,6 +141,9 @@ def _clean_overrides() -> Iterator[None]:
     deps.reset_observability_log()
     app.dependency_overrides.clear()
     app.dependency_overrides[deps.get_settings_dep] = _settings_with_key
+    # Restore the conftest token-aware principal shim wiped by the clear() above, WITHOUT
+    # touching get_settings_dep (this module manages its own keyed settings above).
+    install_test_principal_override(settings=False)
     yield
     app.dependency_overrides.clear()
     deps.reset_observability_log()
@@ -171,7 +181,7 @@ def test_check_in_returns_closer_queue_only() -> None:
     repo, closer_ids, other_ids = _seed_assigned_repo()
     app.dependency_overrides[deps.get_repository] = lambda: repo
 
-    briefing = core.check_in(client, str(CLOSER), top_n=50)
+    briefing = core.check_in(client, str(CLOSER), token=_closer_token(), top_n=50)
 
     # The four blocks are present (the briefing shape).
     assert briefing.agent_id == str(CLOSER)
@@ -217,7 +227,9 @@ def test_draft_block_is_surfaced_verbatim() -> None:
     app.dependency_overrides[deps.get_brand_judge] = _on_brand_judge
 
     recorder = _RecordingClient(client)
-    outcome = core.draft(recorder, str(CLOSER), str(family_id), action="email")
+    outcome = core.draft(
+        recorder, str(CLOSER), str(family_id), token=_closer_token(), action="email"
+    )
 
     # The block is surfaced VERBATIM: not surfaced, failed_rules carried through,
     # and NO message body (the coworker fabricates nothing — INV-4).
@@ -261,10 +273,13 @@ def test_confirm_writes_only_via_decision_route() -> None:
     app.dependency_overrides[deps.get_brand_judge] = _on_brand_judge
 
     recorder = _RecordingClient(client)
-    drafted = core.draft(recorder, str(CLOSER), str(family_id), action="email")
+    token = _closer_token()
+    drafted = core.draft(recorder, str(CLOSER), str(family_id), token=token, action="email")
     assert drafted.surfaced is True
 
-    result = core.confirm(recorder, str(CLOSER), drafted.proposal_id, decision="approve")
+    result = core.confirm(
+        recorder, str(CLOSER), drafted.proposal_id, token=token, decision="approve"
+    )
 
     # (a) the decision route returned the decision + the recorded send id.
     assert result.action == "approve"

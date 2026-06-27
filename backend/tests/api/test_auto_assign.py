@@ -25,6 +25,8 @@ from app.core.sales_agents import SALES_AGENTS
 from app.data.repository import UNASSIGNED, FamilyRepository, InMemoryFamilyRepository
 from app.data.synthetic import generate_demo_cohort
 from app.main import app
+from tests.api._jwt import TEST_JWT_SECRET, mint_jwt
+from tests.conftest import install_test_principal_override
 
 client = TestClient(app)
 
@@ -33,10 +35,17 @@ _B = SALES_AGENTS[1].agent_id  # CA qualifier
 _fresh_repo: list[FamilyRepository] = []
 
 
+def _admin_headers() -> dict[str, str]:
+    """A signed admin JWT (B1 verified principal)."""
+    return {"Authorization": f"Bearer {mint_jwt(role='admin', secret=TEST_JWT_SECRET)}"}
+
+
 @pytest.fixture(autouse=True)
 def _isolation() -> Iterator[None]:
     deps.reset_observability_log()
     app.dependency_overrides.clear()
+    # Re-assert the conftest token-aware principal shim wiped by the clear() above.
+    install_test_principal_override()
     repo = InMemoryFamilyRepository(generate_demo_cohort(params=deps._params), params=deps._params)
     _fresh_repo[:] = [repo]
     app.dependency_overrides[deps.get_repository] = lambda: repo
@@ -141,9 +150,7 @@ def test_duplicate_lead_does_not_double_assign() -> None:
 def test_work_queue_row_exposes_assignment_contract() -> None:
     """The triage/work-queue row carries the assignment contract (assigned_rep_id +
     assigned_at) the rep-calendar workstream reads (LEAD_ASSIGNMENT.md §10a)."""
-    rows = client.get(
-        "/work-queue", params={"scope": "all"}, headers={"X-Demo-Role": "admin"}
-    ).json()
+    rows = client.get("/work-queue", params={"scope": "all"}, headers=_admin_headers()).json()
     assert rows, "the demo cohort produces work-queue rows"
     for row in rows:
         assert "assigned_rep_id" in row and "assigned_at" in row

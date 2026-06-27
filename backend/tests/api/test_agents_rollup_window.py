@@ -22,10 +22,17 @@ from app.data.models import FamilyRecord, FundingState, SeamStatus, Stage, Stall
 from app.data.repository import InMemoryFamilyRepository
 from app.data.synthetic import SyntheticDataset
 from app.main import app
+from tests.api._jwt import TEST_JWT_SECRET, mint_jwt
 
 client = TestClient(app)
 
 AGENT_1 = UUID("a0000000-0000-4000-8000-000000000001")
+
+
+def _admin_headers() -> dict[str, str]:
+    """A signed admin JWT (B1 verified principal)."""
+    return {"Authorization": f"Bearer {mint_jwt(role='admin', secret=TEST_JWT_SECRET)}"}
+
 
 _NOW = datetime.now(UTC)
 
@@ -66,7 +73,7 @@ def _teardown() -> None:
 
 def _agent_1(window: str | None) -> dict:
     suffix = "" if window is None else f"?window={window}"
-    resp = client.get(f"/enrollment/agents{suffix}", headers={"X-Demo-Role": "admin"})
+    resp = client.get(f"/enrollment/agents{suffix}", headers=_admin_headers())
     assert resp.status_code == 200, resp.text
     body = resp.json()
     return next(a for a in body["agents"] if a["agent_id"] == str(AGENT_1))

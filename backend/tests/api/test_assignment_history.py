@@ -23,6 +23,8 @@ from app.core.sales_agents import SALES_AGENTS
 from app.data.repository import UNASSIGNED, FamilyRepository, InMemoryFamilyRepository
 from app.data.synthetic import generate_demo_cohort
 from app.main import app
+from tests.api._jwt import TEST_JWT_SECRET, mint_jwt
+from tests.conftest import install_test_principal_override
 
 client = TestClient(app)
 
@@ -31,10 +33,23 @@ _B = SALES_AGENTS[1].agent_id  # CA qualifier
 _fresh_repo: list[FamilyRepository] = []
 
 
+def _admin_headers() -> dict[str, str]:
+    """A signed admin JWT (B1 verified principal)."""
+    return {"Authorization": f"Bearer {mint_jwt(role='admin', secret=TEST_JWT_SECRET)}"}
+
+
+def _operator_headers(agent_id: UUID) -> dict[str, str]:
+    """A signed operator JWT for ``agent_id`` (B1 verified principal)."""
+    token = mint_jwt(role="operator", agent_id=agent_id, secret=TEST_JWT_SECRET)
+    return {"Authorization": f"Bearer {token}"}
+
+
 @pytest.fixture(autouse=True)
 def _isolation() -> Iterator[None]:
     deps.reset_observability_log()
     app.dependency_overrides.clear()
+    # Re-assert the conftest token-aware principal shim wiped by the clear() above.
+    install_test_principal_override()
     repo = InMemoryFamilyRepository(generate_demo_cohort(params=deps._params), params=deps._params)
     _fresh_repo[:] = [repo]
     app.dependency_overrides[deps.get_repository] = lambda: repo
@@ -63,7 +78,7 @@ def _route_an_fl_lead() -> UUID:
 
 def test_history_returns_the_append_only_rows() -> None:
     fid = _route_an_fl_lead()
-    resp = client.get(f"/families/{fid}/assignments", headers={"X-Demo-Role": "admin"})
+    resp = client.get(f"/families/{fid}/assignments", headers=_admin_headers())
     assert resp.status_code == 200, resp.text
     rows = resp.json()
     assert len(rows) == 1
@@ -90,7 +105,7 @@ def test_history_grows_append_only_on_reassignment() -> None:
         assigned_by="router",
         reason="sla-reassign: unworked past timer",
     )
-    rows = client.get(f"/families/{fid}/assignments", headers={"X-Demo-Role": "admin"}).json()
+    rows = client.get(f"/families/{fid}/assignments", headers=_admin_headers()).json()
     assert len(rows) == 2
     assert [r["to_rep_id"] for r in rows] == [str(_A), str(_B)]
 
@@ -98,7 +113,7 @@ def test_history_grows_append_only_on_reassignment() -> None:
 def test_history_is_owner_scoped_admin_sees_any() -> None:
     fid = _route_an_fl_lead()
     # Admin (default) reads the FL family's history fine.
-    resp = client.get(f"/families/{fid}/assignments", headers={"X-Demo-Role": "admin"})
+    resp = client.get(f"/families/{fid}/assignments", headers=_admin_headers())
     assert resp.status_code == 200 and len(resp.json()) == 1
 
 
@@ -106,7 +121,7 @@ def test_history_is_owner_scoped_owning_agent_sees_own() -> None:
     fid = _route_an_fl_lead()  # now owned by Agent A
     resp = client.get(
         f"/families/{fid}/assignments",
-        headers={"X-Demo-Role": "agent", "X-Demo-Agent-Id": str(_A)},
+        headers=_operator_headers(_A),
     )
     assert resp.status_code == 200 and len(resp.json()) == 1
 
@@ -117,13 +132,13 @@ def test_history_is_owner_scoped_foreign_agent_blocked() -> None:
     fid = _route_an_fl_lead()  # owned by Agent A
     resp = client.get(
         f"/families/{fid}/assignments",
-        headers={"X-Demo-Role": "agent", "X-Demo-Agent-Id": str(_B)},
+        headers=_operator_headers(_B),
     )
     assert resp.status_code == 404
 
 
 def test_history_unknown_family_is_404() -> None:
-    resp = client.get(f"/families/{uuid4()}/assignments", headers={"X-Demo-Role": "admin"})
+    resp = client.get(f"/families/{uuid4()}/assignments", headers=_admin_headers())
     assert resp.status_code == 404
 
 
@@ -135,9 +150,7 @@ def test_seeded_owned_family_serves_its_baseline_history() -> None:
     owned = next(f for f in repo.list_families() if f.assigned_rep_id is not None)
 
     # Admin sees the seeded baseline row.
-    rows = client.get(
-        f"/families/{owned.family_id}/assignments", headers={"X-Demo-Role": "admin"}
-    ).json()
+    rows = client.get(f"/families/{owned.family_id}/assignments", headers=_admin_headers()).json()
     assert len(rows) == 1
     assert rows[0]["from_rep_id"] is None
     assert rows[0]["to_rep_id"] == str(owned.assigned_rep_id)
@@ -146,6 +159,6 @@ def test_seeded_owned_family_serves_its_baseline_history() -> None:
     # The OWNING agent sees its own deal's history too (owner-scoped, not just admin).
     own = client.get(
         f"/families/{owned.family_id}/assignments",
-        headers={"X-Demo-Role": "agent", "X-Demo-Agent-Id": str(owned.assigned_rep_id)},
+        headers=_operator_headers(owned.assigned_rep_id),
     )
     assert own.status_code == 200 and len(own.json()) == 1

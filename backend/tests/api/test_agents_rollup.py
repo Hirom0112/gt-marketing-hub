@@ -26,6 +26,7 @@ from app.core.recovery_state import RecoveryState, is_active, recovered_outcome
 from app.data.repository import UNASSIGNED, InMemoryFamilyRepository, JoinedFamily, OwnerScope
 from app.data.synthetic import SyntheticDataset, generate
 from app.main import app
+from tests.api._jwt import TEST_JWT_SECRET, mint_jwt
 
 client = TestClient(app)
 
@@ -33,7 +34,10 @@ client = TestClient(app)
 AGENT_1 = UUID("a0000000-0000-4000-8000-000000000001")  # rank 1, closer (Riley Carter)
 AGENT_2 = UUID("a0000000-0000-4000-8000-000000000002")  # rank 2, setter (Jordan Avery)
 
-_HEADER_ROLE = "X-Demo-Role"
+
+def _admin_headers() -> dict[str, str]:
+    """A signed admin JWT (B1 verified principal)."""
+    return {"Authorization": f"Bearer {mint_jwt(role='admin', secret=TEST_JWT_SECRET)}"}
 
 
 def teardown_function() -> None:
@@ -137,7 +141,7 @@ def test_per_agent_metrics() -> None:
     exp_a2 = _expected_metrics(repo, AGENT_2, now=now, cap=cap)
     exp_unowned = _expected_metrics(repo, UNASSIGNED, now=now, cap=cap)
 
-    resp = client.get("/enrollment/agents", headers={_HEADER_ROLE: "admin"})
+    resp = client.get("/enrollment/agents", headers=_admin_headers())
     assert resp.status_code == 200, resp.text
     body = resp.json()
 

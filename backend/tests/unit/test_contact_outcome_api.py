@@ -21,11 +21,18 @@ from app.data.models import FamilyRecord, FundingState, SeamStatus, Stage
 from app.data.repository import InMemoryFamilyRepository, JoinedFamily
 from app.data.synthetic import SyntheticDataset
 from app.main import app
+from tests.api._jwt import TEST_JWT_SECRET, mint_jwt
 
 client = TestClient(app)
 
 AGENT_A = UUID("a0000000-0000-4000-8000-000000000001")
 AGENT_B = UUID("a0000000-0000-4000-8000-000000000002")
+
+
+def _operator_headers(agent_id: UUID) -> dict[str, str]:
+    """A signed operator JWT for ``agent_id`` (B1 verified principal)."""
+    token = mint_jwt(role="operator", agent_id=agent_id, secret=TEST_JWT_SECRET)
+    return {"Authorization": f"Bearer {token}"}
 
 
 def _family(*, assigned_rep_id: UUID | None = None) -> JoinedFamily:
@@ -180,14 +187,14 @@ def test_agent_cannot_log_for_a_foreign_family() -> None:
         resp = client.post(
             f"/families/{fid}/contact-outcome",
             json={"channel": "call", "disposition": "no_answer"},
-            headers={"X-Demo-Role": "agent", "X-Demo-Agent-Id": str(AGENT_B)},
+            headers=_operator_headers(AGENT_B),
         )
         assert resp.status_code == 404, resp.text
         # The rightful owner can.
         ok = client.post(
             f"/families/{fid}/contact-outcome",
             json={"channel": "call", "disposition": "no_answer"},
-            headers={"X-Demo-Role": "agent", "X-Demo-Agent-Id": str(AGENT_A)},
+            headers=_operator_headers(AGENT_A),
         )
         assert ok.status_code == 201
     finally:

@@ -9,17 +9,15 @@ tests and reused by T4b's migration tests.
 
 from __future__ import annotations
 
-import base64
-import hashlib
-import hmac
-import json
 from datetime import UTC, datetime
 from uuid import UUID, uuid4
 
+from app.core.jwt_verify import sign_hs256
 
-def _b64url(raw: bytes) -> str:
-    """base64url WITHOUT padding (the JWT wire form)."""
-    return base64.urlsafe_b64encode(raw).rstrip(b"=").decode("ascii")
+# The single canonical test JWT secret (B1). Every migrated principal test signs with
+# this and the conftest auth shim verifies against it, so there is ONE home for the
+# value the suite trusts (INV-11 spirit). Distinct from any real SUPABASE_JWT_SECRET.
+TEST_JWT_SECRET = "test-supabase-jwt-secret-deadbeef"
 
 
 def mint_jwt(
@@ -58,9 +56,6 @@ def mint_jwt(
         "exp": base + exp_delta,
         metadata_key: metadata,
     }
-    header = {"alg": "HS256", "typ": "JWT"}
-    header_b64 = _b64url(json.dumps(header).encode("utf-8"))
-    payload_b64 = _b64url(json.dumps(payload).encode("utf-8"))
-    signing_input = f"{header_b64}.{payload_b64}".encode("ascii")
-    sig = hmac.new(secret.encode("utf-8"), signing_input, hashlib.sha256).digest()
-    return f"{header_b64}.{payload_b64}.{_b64url(sig)}"
+    # Sign through the SAME stdlib HS256 signer the production code uses (DRY; the
+    # verifier round-trips it). The test helper only shapes the Supabase-style claims.
+    return sign_hs256(payload, secret=secret)

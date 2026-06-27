@@ -21,8 +21,14 @@ DISALLOWED = "http://evil.example"
 def _client() -> TestClient:
     """A fresh app instance (CORS origins are read at construction)."""
     import app.main as main
+    from tests.conftest import install_test_principal_override
 
     importlib.reload(main)
+    # The reload builds a BRAND-NEW app with empty dependency_overrides, so the
+    # autouse conftest principal shim (pinned to the original app) does not apply to
+    # it — install the token-aware shim here so the owner-scoped /seam probe answers
+    # 200 (admin-on-no-token) instead of the production default-deny 401.
+    install_test_principal_override(app=main.app)
     return TestClient(main.app)
 
 
