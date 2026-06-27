@@ -45,6 +45,15 @@ SisMode = Literal["simulate", "live"]
 # + kill switch. Separate from the `send_mode` lock — the payments seam keys on
 # its own var, mirroring CRM_MODE.
 StripeMode = Literal["simulate", "live"]
+# AUTH_MODE is the demo-auth bridge seam (B1 task 5a, INV-9-style): it selects how
+# the cockpit obtains a verified principal. v1 default `demo` — there is no real
+# Supabase login in v1, so the `POST /auth/demo-token` endpoint mints a SIGNED seat
+# JWT over SYNTHETIC data (INV-1) that `get_principal` then verifies like any other
+# token. `live` deployments rely on Supabase-issued JWTs and the demo-token endpoint
+# 404s (it is ABSENT, never a production auth bypass). Mirrors the simulated-default
+# posture of `crm_mode`/`stripe_mode`; it does NOT weaken `get_principal`, which
+# verifies every request in both modes.
+AuthMode = Literal["demo", "live"]
 # COCKPIT_REPO is the explicit data-source override (TECH_STACK §5.1). It chooses
 # the FamilyRepository the cockpit reads — it does NOT change either repo's
 # behavior (doctrine-neutral). `auto` keeps the A-24 M5 default (SUPABASE_URL set
@@ -115,6 +124,14 @@ class Settings(BaseModel):
     # the cockpit can push SYNTHETIC data into the real portal behind the four
     # guards (S10; ANALYSIS/hubspot-complement-plan.md §3). Default `simulate`.
     crm_mode: CrmMode = "simulate"
+
+    # Demo-auth bridge seam (§5; B1 task 5a). `demo` (v1 default) EXPOSES
+    # `POST /auth/demo-token`, which mints a signed seat JWT over synthetic data so
+    # the frontend can authenticate against `get_principal` without a real Supabase
+    # login; `live` deployments rely on Supabase-issued JWTs and that endpoint 404s
+    # (absent — never a production auth bypass). It does NOT change how any request
+    # is verified — `get_principal` always verifies the token. Mirrors `crm_mode`.
+    auth_mode: AuthMode = "demo"
 
     # SIS/enrollment-system seam (§5; MULTI_AGENT_COCKPIT §4, INV-9). Selects the
     # EnrollmentSystemAdapter impl the M5 reconcile core reads. Default `simulate`
@@ -215,6 +232,7 @@ class Settings(BaseModel):
         crm_mode = os.environ.get("CRM_MODE", "simulate").strip() or "simulate"
         sis_mode = os.environ.get("SIS_MODE", "simulate").strip() or "simulate"
         stripe_mode = os.environ.get("STRIPE_MODE", "simulate").strip() or "simulate"
+        auth_mode = os.environ.get("AUTH_MODE", "demo").strip() or "demo"
 
         # COCKPIT_REPO: lower-cased; empty / unset / a `<…>` sentinel ⇒ `auto` (the
         # current behavior). Any other value flows through to pydantic, which
@@ -298,6 +316,7 @@ class Settings(BaseModel):
             crm_mode=crm_mode,  # type: ignore[arg-type]
             sis_mode=sis_mode,  # type: ignore[arg-type]
             stripe_mode=stripe_mode,  # type: ignore[arg-type]
+            auth_mode=auth_mode,  # type: ignore[arg-type]
             stripe_secret_key=stripe_key,
             stripe_webhook_secret=stripe_webhook_secret,
             stripe_kill_switch=_env_bool("STRIPE_KILL_SWITCH", False),

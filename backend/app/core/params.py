@@ -1120,6 +1120,19 @@ class Rbac(_StrictModel):
     roles: list[str]
     # permission name → roles that hold it (permission → roles; see docstring).
     permissions: dict[str, list[str]]
+    # demo_token_ttl_seconds — the lifetime (seconds) of a seat JWT minted by the
+    # B1 demo-auth bridge (`POST /auth/demo-token`). The single home for the demo
+    # token's expiry (INV-11 — no `now + 3600` literal in the endpoint). MUST be
+    # >= 1 so a minted token is never already-expired.
+    demo_token_ttl_seconds: int
+
+    @model_validator(mode="after")
+    def _ttl_positive(self) -> Rbac:
+        if self.demo_token_ttl_seconds < 1:
+            raise ValueError(
+                f"rbac.demo_token_ttl_seconds must be >= 1, got {self.demo_token_ttl_seconds!r}"
+            )
+        return self
 
     @model_validator(mode="after")
     def _roles_complete(self) -> Rbac:

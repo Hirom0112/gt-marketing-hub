@@ -44,13 +44,14 @@ def test_rbac_rejects_dangling_role() -> None:
         Rbac(
             roles=["admin", "leader", "operator"],
             permissions={"decision_queue.view": ["admin", "ghost"]},
+            demo_token_ttl_seconds=3600,
         )
 
 
 def test_rbac_requires_canonical_roles() -> None:
     """An empty roles list, or one missing a canonical role, is rejected."""
     with pytest.raises(ValidationError):
-        Rbac(roles=[], permissions={})
+        Rbac(roles=[], permissions={}, demo_token_ttl_seconds=3600)
 
     with pytest.raises(ValidationError):
-        Rbac(roles=["admin", "leader"], permissions={})
+        Rbac(roles=["admin", "leader"], permissions={}, demo_token_ttl_seconds=3600)
