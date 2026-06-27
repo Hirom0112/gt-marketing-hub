@@ -1436,6 +1436,104 @@ class Budget(_StrictModel):
         return self
 
 
+class CrmOpsUtm(_StrictModel):
+    """crm_ops.utm — UTM-health rule set (TODO_v2 §C1; INV-11).
+
+    The single canonical home for the deterministic UTM-health deriver
+    (``core/utm_health.py``); the deriver reads these, never a code literal:
+
+    * ``required_keys`` — the UTM keys that MUST be present and non-blank
+      (``utm_source`` / ``utm_medium`` / ``utm_campaign``); a missing one flags
+      the UTM ``broken``.
+    * ``allowed_mediums`` — the closed set of acceptable ``utm_medium`` values; a
+      ``utm_medium`` outside this set flags ``broken``.
+
+    Both lists MUST be non-empty — an empty rule set would silently pass every
+    UTM, defeating the honesty mandate (drift fails the build, CLAUDE.md §4.1).
+    """
+
+    required_keys: list[str]
+    allowed_mediums: list[str]
+
+    @model_validator(mode="after")
+    def _non_empty(self) -> CrmOpsUtm:
+        if not self.required_keys:
+            raise ValueError("crm_ops.utm.required_keys must be non-empty")
+        if not self.allowed_mediums:
+            raise ValueError("crm_ops.utm.allowed_mediums must be non-empty")
+        return self
+
+
+class CrmOpsDataQuality(_StrictModel):
+    """crm_ops.data_quality — the auto data-quality queue's severity order (§C1).
+
+    ``severity_order`` lists the known issue kinds highest-severity → lowest; the
+    queue (``core/data_quality.py``) ranks each detected issue by its position
+    here (a ``conflict`` outranks a ``utm_broken`` outranks an
+    ``unreliable_field``). The single canonical home for that ordering (INV-11).
+
+    The list MUST be non-empty, free of duplicates, and contain ONLY the known
+    issue kinds (:data:`_KNOWN_ISSUE_KINDS`) — a stray/renamed kind is config
+    drift and fails the build (CLAUDE.md §4.1).
+    """
+
+    # The closed set of data-quality issue kinds. Kept here (not imported from
+    # core/data_quality.py) because params is CONSUMED by that module — importing
+    # back would be circular. The deriver's literals must match this set.
+    _KNOWN_ISSUE_KINDS = ("conflict", "utm_broken", "unreliable_field")
+
+    severity_order: list[str]
+
+    @model_validator(mode="after")
+    def _order_valid(self) -> CrmOpsDataQuality:
+        if not self.severity_order:
+            raise ValueError("crm_ops.data_quality.severity_order must be non-empty")
+        if len(set(self.severity_order)) != len(self.severity_order):
+            raise ValueError(
+                f"crm_ops.data_quality.severity_order must not repeat a kind, got "
+                f"{self.severity_order!r}"
+            )
+        unknown = [k for k in self.severity_order if k not in self._KNOWN_ISSUE_KINDS]
+        if unknown:
+            raise ValueError(
+                f"crm_ops.data_quality.severity_order entries must be known issue kinds "
+                f"{list(self._KNOWN_ISSUE_KINDS)!r}, got unknown {unknown!r}"
+            )
+        return self
+
+
+class CrmOps(_StrictModel):
+    """C1 CRM/Marketing-Operations data-quality tunables (TODO_v2 §C1; INV-11).
+
+    The shared single home for the deterministic CRM-Ops cores — UTM-health, the
+    auto data-quality queue, and field-reliability flags — which are cohesive
+    (they share this block; the queue composes UTM-health). Every value is a
+    tunable home (INV-11); the derivers read them here, never a code literal:
+
+    * ``utm`` — the UTM-health rule set (required keys + allowed mediums).
+    * ``data_quality`` — the queue's severity order over the known issue kinds.
+    * ``unreliable_fields`` — the fields known to be low-trust, which the
+      field-reliability flag (``core/field_reliability.py``) marks ``unreliable``
+      and the queue surfaces as an ``unreliable_field`` issue.
+    * ``parity_floor`` — the sync-parity fraction below which the cross-module
+      data-confidence banner activates (reuses the A4 banner). A FRACTION, so it
+      MUST sit in [0.0, 1.0]; an out-of-range value fails the build (§4.1).
+    """
+
+    utm: CrmOpsUtm
+    data_quality: CrmOpsDataQuality
+    unreliable_fields: list[str]
+    parity_floor: float
+
+    @model_validator(mode="after")
+    def _parity_floor_is_fraction(self) -> CrmOps:
+        if not 0.0 <= self.parity_floor <= 1.0:
+            raise ValueError(
+                f"crm_ops.parity_floor must be in [0.0, 1.0], got {self.parity_floor!r}"
+            )
+        return self
+
+
 class Params(_StrictModel):
     """Typed view of the whole params file — one field per §8 top-level block."""
 
@@ -1467,6 +1565,7 @@ class Params(_StrictModel):
     scheduler: Scheduler
     crm: Crm
     crm_sync: CrmSync
+    crm_ops: CrmOps
     stripe: Stripe
     security: Security
     data_confidence: DataConfidence
