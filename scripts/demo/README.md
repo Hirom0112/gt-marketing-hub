@@ -33,3 +33,29 @@ after — they are unchanged across the resend (the idempotency proof).
   row has `family_id = NULL` (the webhook never fabricates a mapping — INV-2/INV-10).
   That does not affect the idempotency proof, which is about the dedupe on
   `event.id`.
+
+## Open Data enrichment that changes a decision (E1)
+
+Proves the E1 headline against the **local Supabase stack**: a live
+`tryopendata.ai` Texas-district query runs through the `OpenDataAdapter` seam,
+the pure `enrich_decision` rule moves a recommendation, and a card is fed into
+the Decision Queue — with a `data_source: "live"` badge so the leader sees the
+move came from real data, not the seeded fallback.
+
+### Prerequisites
+- Local Supabase up (`supabase start`) + `backend/.env.local-supabase` present.
+- Your free `od_live_…` key pasted into the repo `.env` as `OPEN_DATA_API_KEY`
+  (replace the `<od_live_REPLACE_ME>` placeholder).
+
+### Run
+```bash
+bash scripts/demo/open_data_enrich_loop.sh            # district 031903 by default
+DISTRICT=101912 bash scripts/demo/open_data_enrich_loop.sh   # pick another
+```
+
+It pulls the key from `.env`, pins the DB to the local stack (migrated through
+0031), starts the backend in `OPEN_DATA_MODE=live`, mints a leader demo token,
+POSTs `/open-data/enrich`, and prints the response — `data_source: "live"` +
+`recommendation_changed: true` is the proof. The live edge runs behind the INV-8
+cap + kill switch; if it degrades to `seeded`, the script says why.
+
