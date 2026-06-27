@@ -11,8 +11,10 @@ import-guards the SDK: ``import app.coworker.mcp_server`` never raises, and
 :func:`build_server` raises a clear, actionable error only if you actually try to
 run the transport without the SDK installed.
 
-The coworker authenticates AS the closer via the demo-principal headers
-(``X-Demo-Role: agent`` + ``X-Demo-Agent-Id: <closer id>``) — see
+The coworker authenticates AS the closer with a SIGNED ``Authorization: Bearer``
+JWT minted here for the closer's operator role/agent (B1: the verified successor to
+the deleted, spoofable client-supplied role header, S1) — signed with the configured
+``SUPABASE_JWT_SECRET`` via :func:`app.core.jwt_verify.sign_hs256` and forwarded by
 :func:`app.coworker.core.closer_headers`. Every tool here is a READ except
 ``confirm``, which routes through the SOLE write path
 (``POST /proposals/{id}/decision``) — the coworker NEVER writes HubSpot directly
@@ -57,6 +59,31 @@ def _agent_id() -> str:
     return os.environ.get("COWORKER_AGENT_ID", DEFAULT_CLOSER_AGENT_ID)
 
 
+def _bearer_token() -> str:  # pragma: no cover - transport glue
+    """Mint the closer's signed operator JWT (B1) — the verified ``Authorization`` bearer.
+
+    Signs a Supabase-shaped claim set (role + agent_id in ``app_metadata``) with the
+    configured ``SUPABASE_JWT_SECRET`` via the stdlib :func:`sign_hs256`, so the
+    cockpit's verified-principal gate (``get_principal``) scopes the coworker to the
+    closer's own book. With no secret configured the token cannot verify (the
+    cockpit fails closed to 401) — never a default-admin path.
+    """
+    from datetime import UTC, datetime
+
+    from app.core.jwt_verify import sign_hs256
+    from app.core.settings import Settings
+
+    secret = Settings.from_env().supabase_jwt_secret or ""
+    now = int(datetime.now(UTC).timestamp())
+    claims = {
+        "sub": _agent_id(),
+        "iat": now,
+        "exp": now + 3600,
+        "app_metadata": {"role": "operator", "agent_id": _agent_id()},
+    }
+    return sign_hs256(claims, secret=secret)
+
+
 def _base_url() -> str:
     """The cockpit API base URL the read-proxy points at."""
     return os.environ.get("COCKPIT_BASE_URL", DEFAULT_BASE_URL)
@@ -98,7 +125,7 @@ def build_server() -> Any:
         """Run /check-in: the closer's four blocks (who-to-contact / pending-notes /
         hygiene-gaps / voucher-clocks), scoped to the closer's own book."""
         with _http_client() as client:
-            briefing = core.check_in(client, _agent_id())
+            briefing = core.check_in(client, _agent_id(), token=_bearer_token())
         return dataclasses.asdict(briefing)
 
     @server.tool()
@@ -108,7 +135,9 @@ def build_server() -> Any:
         """Draft an eval-gated follow-up for a family. A BLOCKED draft is surfaced
         VERBATIM (failed_rules, no message) — never softened or retried (INV-4)."""
         with _http_client() as client:
-            outcome = core.draft(client, _agent_id(), family_id, action=action)
+            outcome = core.draft(
+                client, _agent_id(), family_id, token=_bearer_token(), action=action
+            )
         return dataclasses.asdict(outcome)
 
     @server.tool()
@@ -118,7 +147,9 @@ def build_server() -> Any:
         """Confirm a drafted proposal through the SOLE write path
         (POST /proposals/{id}/decision). The coworker never writes HubSpot directly."""
         with _http_client() as client:
-            result = core.confirm(client, _agent_id(), proposal_id, decision=decision)
+            result = core.confirm(
+                client, _agent_id(), proposal_id, token=_bearer_token(), decision=decision
+            )
         return dataclasses.asdict(result)
 
     return server

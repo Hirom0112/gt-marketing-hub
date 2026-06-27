@@ -60,6 +60,7 @@ app.add_middleware(
     SecurityEdgeMiddleware,
     log=get_security_event_log(),
     params=get_params(),
+    settings=_settings,
 )
 
 

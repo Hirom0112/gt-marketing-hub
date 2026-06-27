@@ -41,14 +41,9 @@ from typing import Any, Protocol, runtime_checkable
 # a params tunable — no AI action is gated on it (CLAUDE §1, INV-11 spirit).
 CHECK_IN_TOP_N = 10
 
-# The two demo-principal headers the coworker authenticates the closer with
-# (MULTI_AGENT_COCKPIT §10.3) — the SAME owner-scoping the cockpit UI uses.
-HEADER_ROLE = "X-Demo-Role"
-HEADER_AGENT_ID = "X-Demo-Agent-Id"
-
 # The owner sentinel the coworker passes — ``owner=me`` reads as "my own book". The
-# server clamps an agent to self regardless (the IDOR defense), so this is belt-and-
-# suspenders intent, not the security boundary.
+# server clamps an operator to self regardless (the IDOR defense), so this is belt-
+# and-suspenders intent, not the security boundary.
 OWNER_ME = "me"
 
 
@@ -81,14 +76,19 @@ class HttpClient(Protocol):
     ) -> HttpResponse: ...
 
 
-def closer_headers(agent_id: str) -> dict[str, str]:
-    """The demo-principal headers that authenticate the coworker AS the closer (§10.3).
+def closer_headers(token: str) -> dict[str, str]:
+    """The verified-identity header that authenticates the coworker AS the closer (§10.3).
 
-    ``X-Demo-Role: agent`` + ``X-Demo-Agent-Id: <closer id>`` — so ``/check-in``
-    returns the closer's queue only (the same owner-scoping the UI uses). This is
-    the ONLY scoping the coworker applies; the server enforces the clamp.
+    ``Authorization: Bearer <jwt>`` — a signed Supabase-shaped JWT for the closer's
+    operator role/agent (B1: the verified successor to the deleted, spoofable
+    client-supplied role header, S1). The caller mints the token (the MCP server signs it
+    with the configured ``SUPABASE_JWT_SECRET``; the gate signs it with the test
+    secret), so the coworker core stays free of any signing secret — it only
+    FORWARDS the bearer token. So ``/check-in`` returns the closer's queue only (the
+    server's owner clamp does the scoping); this is the ONLY scoping the coworker
+    applies.
     """
-    return {HEADER_ROLE: "agent", HEADER_AGENT_ID: agent_id}
+    return {"Authorization": f"Bearer {token}"}
 
 
 # --------------------------------------------------------------------------- #
@@ -171,14 +171,17 @@ def check_in(
     client: HttpClient,
     agent_id: str,
     *,
+    token: str,
     top_n: int = CHECK_IN_TOP_N,
 ) -> CheckInBriefing:
     """Compose the four ``/check-in`` blocks from the owner-scoped reads (§10.4).
 
-    Authenticates AS the closer (``closer_headers``) and reads only the closer's
-    own book — the server's owner clamp (``resolve_owner_scope``) does the scoping,
-    so a foreign rep's families are NEVER returned through the coworker (the IDOR
-    defense holds; INV-5). READ-ONLY: this function makes no POST and no write.
+    Authenticates AS the closer with the signed ``token`` (``closer_headers``) and
+    reads only the closer's own book — the server's owner clamp
+    (``resolve_owner_scope``) does the scoping, so a foreign rep's families are NEVER
+    returned through the coworker (the IDOR defense holds; INV-5). ``agent_id`` is the
+    closer's id for the briefing label / ``owner=me`` intent; the verified token is
+    what the server actually scopes on. READ-ONLY: no POST and no write.
 
     The four blocks:
 
@@ -192,7 +195,7 @@ def check_in(
     4. voucher-clocks — the funding standing per top family (``GET
        /families/{id}/funding``): the ``due_by`` / ``days_remaining`` / ``at_risk``.
     """
-    headers = closer_headers(agent_id)
+    headers = closer_headers(token)
 
     # Block 1: the ranked queue, scoped to the closer's own book. owner=me is intent;
     # the server clamps an agent to self regardless (the IDOR defense). scope=active
@@ -326,6 +329,7 @@ def draft(
     agent_id: str,
     family_id: str,
     *,
+    token: str,
     action: str = "email",
 ) -> DraftOutcome:
     """Draft an enrollment follow-up via the eval-gated route — surface it VERBATIM.
@@ -345,7 +349,7 @@ def draft(
     state): the proposal is logged server-side; the WRITE happens only when the rep
     confirms via :func:`confirm`.
     """
-    headers = closer_headers(agent_id)
+    headers = closer_headers(token)
     resp = client.post(
         "/ai/enrollment/draft",
         json={"family_id": family_id, "action": action},
@@ -384,6 +388,7 @@ def confirm(
     agent_id: str,
     proposal_id: str,
     *,
+    token: str,
     decision: str = "approve",
 ) -> ConfirmResult:
     """Confirm a drafted proposal — the SOLE write path (``POST .../decision``).
@@ -399,7 +404,7 @@ def confirm(
     status; the caller reports the timestamp via the audit (``GET
     /proposals/{id}``), keeping this function's surface to the one write call.
     """
-    headers = closer_headers(agent_id)
+    headers = closer_headers(token)
     resp = client.post(
         f"/proposals/{proposal_id}/decision",
         json={"action": decision},

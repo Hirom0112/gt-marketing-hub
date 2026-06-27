@@ -144,7 +144,7 @@ class Settings(BaseModel):
     # its end-user JWTs with; the API verifies the ``Authorization: Bearer`` token
     # against it (``app.core.jwt_verify.verify_hs256``) to derive the VERIFIED
     # principal from ``app_metadata.role`` — the replacement for the spoofable
-    # ``X-Demo-Role`` header (S1). Defaults to ``None`` — absence is first-class and
+    # client-supplied role header (S1). Defaults to ``None`` — absence is first-class and
     # fails closed: with no secret, JWT auth cannot validate any token (401), it
     # NEVER default-allows. Server-side only — never shipped to the client.
     supabase_jwt_secret: str | None = None

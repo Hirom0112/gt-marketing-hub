@@ -38,9 +38,10 @@ from starlette.requests import Request
 from starlette.responses import Response
 from starlette.types import ASGIApp
 
-from app.api.deps import get_security_event_log
+from app.api.deps import actor_principal, get_security_event_log
 from app.core.params import Params
 from app.core.security_posture import PostureCheck, evaluate_posture
+from app.core.settings import Settings
 from app.observability.security_log import (
     ActorKind,
     SecurityEvent,
@@ -63,27 +64,31 @@ _ADMIN_SURFACE_TOKENS = ("/admin", "/service", "/internal")
 class SecurityEdgeMiddleware(BaseHTTPMiddleware):
     """Edge detection middleware (§7 Panel B feed) — observe, classify, RECORD.
 
-    For each request it derives the actor kind from ``X-Demo-Role`` (the app-layer
-    auth.uid() stand-in: ``agent``/``admin`` ⇒ authenticated, else anon), runs the
-    response and the request body past the §7 signal classifiers, and records a
-    ``security_event`` for any that fire. It NEVER blocks (detection only).
+    For each request it derives the actor kind from the verified
+    ``Authorization: Bearer`` JWT (B1: a token that verifies to a trusted principal
+    ⇒ authenticated, else anon — the spoofable client-supplied role header was
+    DELETED, S1), runs the response and the request body past the §7 signal classifiers, and
+    records a ``security_event`` for any that fire. It NEVER blocks (detection only).
 
     Thresholds (``oversized_result_rows``, ``auth_failure_burst``,
     ``auth_failure_window_seconds``) come from ``params.security`` (INV-11). The
     auth-failure burst is counted per-actor over a rolling time window held in
-    process memory (v1; A-3).
+    process memory (v1; A-3). ``settings`` carries the JWT-verifying secret; with no
+    secret configured every token reads as ANON — detection-only and safe.
     """
 
-    def __init__(self, app: ASGIApp, *, log: SecurityEventLog, params: Params) -> None:
+    def __init__(
+        self, app: ASGIApp, *, log: SecurityEventLog, params: Params, settings: Settings
+    ) -> None:
         super().__init__(app)
         self._log = log
         self._params = params
+        self._settings = settings
         # Per-actor rolling 401/403 timestamps for the burst detector (v1 in-memory).
         self._auth_failures: dict[str, deque[float]] = defaultdict(deque)
 
     async def dispatch(self, request: Request, call_next):  # type: ignore[no-untyped-def]
-        actor_kind = self._actor_kind(request)
-        actor_ref = request.headers.get("X-Demo-Agent-Id")
+        actor_kind, actor_ref = self._resolve_actor(request)
         path = request.url.path
 
         # Inspect a mutating body for a user_id-reassign attempt BEFORE dispatch
@@ -104,13 +109,20 @@ class SecurityEdgeMiddleware(BaseHTTPMiddleware):
 
     # -- actor resolution -----------------------------------------------------
 
-    @staticmethod
-    def _actor_kind(request: Request) -> ActorKind:
-        """Derive the actor kind from X-Demo-Role (the auth.uid() stand-in)."""
-        role = (request.headers.get("X-Demo-Role") or "").strip().lower()
-        if role in ("agent", "admin"):
-            return ActorKind.AUTHENTICATED
-        return ActorKind.ANON
+    def _resolve_actor(self, request: Request) -> tuple[ActorKind, str | None]:
+        """Derive (actor_kind, actor_ref) from the verified Bearer JWT (B1; the S1 fix).
+
+        Reuses :func:`actor_principal` (the non-raising sibling of the route
+        dependency): a token that verifies to a trusted principal ⇒ AUTHENTICATED,
+        with ``actor_ref`` the operator ``agent_id`` (else the auth ``user_id``); any
+        failure (no/forged/expired token, no trusted role, no configured secret) ⇒
+        ANON with no ref. Detection-only — it never blocks or raises.
+        """
+        principal = actor_principal(request.headers.get("Authorization"), self._settings)
+        if principal is None:
+            return ActorKind.ANON, None
+        ref = principal.agent_id or principal.user_id
+        return ActorKind.AUTHENTICATED, (str(ref) if ref is not None else None)
 
     # -- signal classifiers ---------------------------------------------------
 

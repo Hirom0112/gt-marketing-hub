@@ -29,10 +29,10 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field, field_validator
 
 from app.api.deps import (
-    DemoPrincipal,
-    get_demo_principal,
+    Principal,
     get_observability_log,
     get_params,
+    get_principal,
     get_repository,
     resolve_owner_scope,
 )
@@ -51,7 +51,7 @@ router = APIRouter(tags=["close-loop"])
 RepositoryDep = Annotated[FamilyRepository, Depends(get_repository)]
 ParamsDep = Annotated[Params, Depends(get_params)]
 LogDep = Annotated[ObservabilityLog, Depends(get_observability_log)]
-PrincipalDep = Annotated[DemoPrincipal, Depends(get_demo_principal)]
+PrincipalDep = Annotated[Principal, Depends(get_principal)]
 
 
 class ContactOutcomeRequest(BaseModel):
@@ -101,14 +101,14 @@ class ConfirmLostResponse(BaseModel):
 
 
 def _owned_family_or_404(
-    family_id: UUID, repository: FamilyRepository, principal: DemoPrincipal
+    family_id: UUID, repository: FamilyRepository, principal: Principal
 ) -> JoinedFamily:
     """Resolve a family the principal may write, else 404 (the IDOR clamp, INV-5).
 
     Mirrors ``families.get_family_assignments``: the scope is decided by the ROLE,
-    never a client param. An agent may act only on a family in its OWN book; a
+    never a client param. An operator may act only on a family in its OWN book; a
     foreign (or unknown) family is a 404 — existence itself is never leaked
-    (deny-by-default). An admin may act on any family.
+    (deny-by-default). A leader/admin may act on any family.
     """
     joined = repository.get_family(family_id)
     if joined is None:

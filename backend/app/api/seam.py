@@ -38,9 +38,9 @@ from pydantic import BaseModel
 
 from app.adapters.hubspot.crm_adapter import CRMAdapter
 from app.api.deps import (
-    DemoPrincipal,
-    get_demo_principal,
+    Principal,
     get_observability_log,
+    get_principal,
     get_repository,
     get_seam_crm_adapter_dep,
     resolve_owner_scope,
@@ -62,8 +62,8 @@ router = APIRouter(tags=["seam"])
 RepositoryDep = Annotated[FamilyRepository, Depends(get_repository)]
 LogDep = Annotated[ObservabilityLog, Depends(get_observability_log)]
 CRMAdapterDep = Annotated[CRMAdapter, Depends(get_seam_crm_adapter_dep)]
-# The M1 demo principal — the app-layer auth.uid() stand-in (the IDOR atonement).
-PrincipalDep = Annotated[DemoPrincipal, Depends(get_demo_principal)]
+# The M1 verified principal — the app-layer auth.uid() stand-in (the IDOR atonement).
+PrincipalDep = Annotated[Principal, Depends(get_principal)]
 # The shared ``owner`` query-param description (admin-only slice; agent is clamped).
 _OWNER_QUERY_DESC = (
     "Deal-ownership scope (admin only; ignored for an agent, who is always clamped "

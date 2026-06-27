@@ -2,9 +2,10 @@
 
 The founder connects Claude Desktop as the **closer** (Agent #1) and runs
 ``/check-in`` + a ``draft→confirm`` loop. The coworker authenticates AS the closer
-(the demo principal headers ``X-Demo-Role: agent`` + ``X-Demo-Agent-Id: <closer>``,
-MULTI_AGENT_COCKPIT §10.3) and is just a SECOND client of the same owner-scoped
-reads the cockpit UI uses — the IDOR clamp holds through the coworker.
+with a SIGNED ``Authorization: Bearer`` operator JWT (B1: the verified successor to
+the deleted, spoofable client-supplied role header, S1; MULTI_AGENT_COCKPIT §10.3)
+and is just a SECOND client of the same owner-scoped reads the cockpit UI uses — the
+IDOR clamp holds through the coworker.
 
 Its defining invariant (MULTI_AGENT_COCKPIT §2.5; CLAUDE INV-2/INV-9):
 

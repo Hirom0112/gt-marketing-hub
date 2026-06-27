@@ -18,11 +18,11 @@ from app.adapters.hubspot.crm_adapter import CRMAdapter, StudentSyncResult
 from app.adapters.registry import get_enrollment_system_adapter
 from app.adapters.sis.base import EnrollmentSystemAdapter
 from app.api.deps import (
-    DemoPrincipal,
+    Principal,
     get_crm_adapter_dep,
-    get_demo_principal,
     get_observability_log,
     get_params,
+    get_principal,
     get_repository,
     resolve_owner_scope,
 )
@@ -112,9 +112,9 @@ LogDep = Annotated[ObservabilityLog, Depends(get_observability_log)]
 # The CRM boundary (INV-9) — simulated by default, live behind CRM_MODE=live; the
 # per-child transfer route pushes through this seam, never a direct HubSpot call.
 CRMAdapterDep = Annotated[CRMAdapter, Depends(get_crm_adapter_dep)]
-# The M1 demo principal — the app-layer auth.uid() stand-in (the IDOR atonement).
+# The M1 verified principal — the app-layer auth.uid() stand-in (the IDOR atonement).
 # The role decides the effective owner scope; the clamp lives in resolve_owner_scope.
-PrincipalDep = Annotated[DemoPrincipal, Depends(get_demo_principal)]
+PrincipalDep = Annotated[Principal, Depends(get_principal)]
 # The SIS boundary (INV-9) — the simulated synthetic roster by default (SIS_MODE).
 SisAdapterDep = Annotated[EnrollmentSystemAdapter, Depends(get_enrollment_system_adapter)]
 
