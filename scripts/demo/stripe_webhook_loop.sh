@@ -40,12 +40,20 @@ trap cleanup EXIT
 command -v stripe >/dev/null || die "stripe CLI not found (brew install stripe/stripe-cli/stripe)."
 [ -f "$ENV_FILE" ] || die "missing $ENV_FILE — provision the local Supabase stack first."
 
-# `stripe login` writes ~/.config/stripe/config.toml; --print-secret fails without it.
+set -a; . "$ENV_FILE"; set +a
+# Auth WITHOUT `stripe login`: if a test secret key is in the repo .env, hand it to
+# the CLI via STRIPE_API_KEY (the CLI honors this env var) — no browser pairing.
+# Falls back to an existing `stripe login` session if no key is present.
+if [ -f .env ]; then SK="$(grep -E '^STRIPE_SECRET_KEY=' .env | head -1 | cut -d= -f2- | tr -d '"' )"; fi
+case "${SK:-}" in
+  sk_test_*) export STRIPE_API_KEY="$SK"; say "using STRIPE_SECRET_KEY from .env (no stripe login needed)" ;;
+  sk_live_*) die "refusing a LIVE key (sk_live_) — use a TEST key (sk_test_) for this demo (NFR-1)." ;;
+esac
+# Either the env key or a prior `stripe login` must let the CLI talk to Stripe.
 if ! stripe listen --print-secret >/dev/null 2>&1; then
-  die "stripe CLI is not logged in. Run:  stripe login   (interactive, one-time) then re-run this script."
+  die "stripe is not authenticated. Either put a sk_test_ key in .env (STRIPE_SECRET_KEY=) or run: stripe login"
 fi
 
-set -a; . "$ENV_FILE"; set +a
 [ -n "${DATABASE_URL:-}" ] || die "DATABASE_URL not set by $ENV_FILE."
 psql "$DATABASE_URL" -tAc "select 1" >/dev/null 2>&1 || die "local Supabase DB unreachable at DATABASE_URL — is 'supabase start' up?"
 
