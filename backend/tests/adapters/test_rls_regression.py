@@ -343,6 +343,89 @@ def test_operator_reads_zero_decisions_leader_can() -> None:
             )
 
 
+# B3 owner-scoped regression (TODO_v2 §B3) — the per-user composable-Home layout
+# table (0029). A personal preference: each user reads/writes ONLY their OWN row
+# (user_id = auth.uid()). user2 must read ZERO of user1's layout rows — the live
+# proof the owner-scoped, null-guarded policy holds (the same IDOR cure as
+# family_record, applied to a mutable single-row-per-user preference table).
+_EMAIL_LAYOUT_1 = "rls-regression-layout-1@example.invalid"
+_EMAIL_LAYOUT_2 = "rls-regression-layout-2@example.invalid"
+
+
+def _select_dashboard_layouts(
+    client: httpx.Client, *, apikey: str, bearer: str
+) -> list[dict[str, Any]]:
+    """A PostgREST SELECT * on user_dashboard_layouts under the given key/bearer pair."""
+    response = client.get(
+        "/rest/v1/user_dashboard_layouts",
+        headers={
+            "apikey": apikey,
+            "Authorization": f"Bearer {bearer}",
+            "Accept": "application/json",
+        },
+        params={"select": "*"},
+    )
+    response.raise_for_status()
+    body: Any = response.json()
+    assert isinstance(body, list)
+    return body
+
+
+def test_user_cannot_read_foreign_dashboard_layout() -> None:
+    """user2 reads ZERO of user1's user_dashboard_layouts rows (B3 owner-scoping).
+
+    The live proof of the 0029 owner-scoped, null-guarded policy
+    ((SELECT auth.uid()) = user_id): service_role seeds user1's saved layout, then
+    user2 (authenticated, its OWN JWT) SELECTs the table and must see NONE of user1's
+    rows — the same IDOR cure as family_record, applied to the per-user preference
+    table. Skipped when no live Supabase is configured (A-3).
+    """
+    supabase_url = (os.environ.get("SUPABASE_URL") or "").strip()
+    if not supabase_url or supabase_url.startswith("<"):
+        pytest.skip("no SUPABASE_URL — dashboard-layout owner-scoping regression requires Supabase")
+
+    anon_key = os.environ["SUPABASE_ANON_KEY"]
+    service_key = os.environ["SUPABASE_SERVICE_ROLE_KEY"]
+
+    with httpx.Client(base_url=supabase_url, timeout=30.0) as client:
+        user1_id = _ensure_user(client, service_key, _EMAIL_LAYOUT_1)
+        _ensure_user(client, service_key, _EMAIL_LAYOUT_2)
+        user2_jwt = _sign_in(client, anon_key, _EMAIL_LAYOUT_2)
+
+        # service_role seeds user1's saved layout (one row per user — clean first).
+        client.request(
+            "DELETE",
+            "/rest/v1/user_dashboard_layouts",
+            headers=_admin_headers(service_key),
+            params={"user_id": f"eq.{user1_id}"},
+        )
+        seeded = client.post(
+            "/rest/v1/user_dashboard_layouts",
+            headers={**_admin_headers(service_key), "Prefer": "return=representation"},
+            json={
+                "user_id": user1_id,
+                "layout": [{"i": "kpis", "x": 0, "y": 0, "w": 6, "h": 2}],
+            },
+        )
+        assert seeded.status_code in (200, 201), f"seed of user1's layout failed: {seeded.text}"
+
+        try:
+            # user2 (authenticated) reads the table with its OWN JWT → none of user1's rows.
+            as_user2 = _select_dashboard_layouts(client, apikey=anon_key, bearer=user2_jwt)
+            foreign = [r for r in as_user2 if r.get("user_id") == user1_id]
+            assert foreign == [], (
+                f"OWNER-SCOPING LEAK (B3): user2 read {len(foreign)} of user1's "
+                f"user_dashboard_layouts rows — the owner-scoped policy failed"
+            )
+        finally:
+            client.request(
+                "DELETE",
+                "/rest/v1/user_dashboard_layouts",
+                headers=_admin_headers(service_key),
+                params={"user_id": f"eq.{user1_id}"},
+            )
+
+
 def test_cross_program_read_is_isolated() -> None:
     """A program-A principal reads its program-A row but ZERO program-B rows (A1).
 

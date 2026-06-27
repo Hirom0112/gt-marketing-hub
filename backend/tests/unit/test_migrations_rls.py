@@ -1443,3 +1443,154 @@ def test_decisions_leader_gated_and_append_only() -> None:
     assert not _SECURITY_DEFINER.search(sql), (
         "0028 must not define a SECURITY DEFINER helper (it REUSES private.authorize, D-RLS-7)"
     )
+
+
+# ---------------------------------------------------------------------------
+# 0029 user_dashboard_layouts (B3) — the per-user composable-Home widget layout.
+# One row per auth user holding the React-Grid-Layout placement array. This is a
+# PERSONAL PREFERENCE table: OWNER-scoped (a user reads/writes ONLY their own row,
+# keyed on user_id = auth.uid(), the same predicate as 0027's user_roles), and
+# GLOBAL/cross-program (a layout is not program-specific — like the A-37
+# operational tables, so NO program_id tag and NO RESTRICTIVE program-isolation
+# policy). UNLIKE the append-only tables (0010/0015/0026) it is MUTABLE: a saved
+# preference is overwritten in place, so it carries an owner-scoped UPDATE policy
+# (+ SELECT + INSERT), each null-guarded, with WITH CHECK pinning user_id =
+# auth.uid() so a user cannot write a row for another user. The table ENABLE+FORCE
+# RLS (D-RLS-1), keeping the global CREATE==ENABLE==FORCE + one-guard-per-policy
+# invariants green (+1 table / +1 ENABLE / +1 FORCE). D-RLS-7: no SECURITY DEFINER.
+# ---------------------------------------------------------------------------
+
+
+def _user_dashboard_layouts_sql() -> str:
+    """The 0029 user_dashboard_layouts migration DDL (comments stripped)."""
+    return _strip_comments(
+        (MIGRATIONS_DIR / "0029_user_dashboard_layouts.sql").read_text(encoding="utf-8")
+    )
+
+
+def test_user_dashboard_layouts_owner_scoped() -> None:
+    """B3: 0029 adds the per-user composable-Home layout table — owner-scoped on
+    user_id = auth.uid(), GLOBAL/cross-program (A-37: no program_id, no RESTRICTIVE
+    policy), and MUTABLE (an owner-scoped UPDATE policy — a saved preference, not
+    append-only). The table ENABLE+FORCE RLS (D-RLS-1); every policy carries the
+    auth.uid() null guard (D-RLS-2); SELECT/INSERT/UPDATE are owner-scoped with
+    WITH CHECK pinning user_id = auth.uid() so a user cannot write a row for another
+    user — keeping the global RLS count invariants green (+1/+1/+1).
+    """
+    sql = _user_dashboard_layouts_sql()
+
+    # --- the table + ENABLE *and* FORCE RLS (D-RLS-1) ---
+    assert re.search(r"CREATE\s+TABLE\s+user_dashboard_layouts\b", sql, re.IGNORECASE), (
+        "0029 must CREATE TABLE user_dashboard_layouts"
+    )
+    assert re.search(
+        r"ALTER\s+TABLE\s+user_dashboard_layouts\s+ENABLE\s+ROW\s+LEVEL\s+SECURITY",
+        sql,
+        re.IGNORECASE,
+    ), "0029 must ENABLE RLS on user_dashboard_layouts (D-RLS-1)"
+    assert re.search(
+        r"ALTER\s+TABLE\s+user_dashboard_layouts\s+FORCE\s+ROW\s+LEVEL\s+SECURITY",
+        sql,
+        re.IGNORECASE,
+    ), "0029 must FORCE RLS on user_dashboard_layouts (owner-role escape hatch, D-RLS-1)"
+
+    # --- the columns: user_id uuid NOT NULL (PK/UNIQUE — one row per user), layout
+    #     jsonb NOT NULL (the RGL placement array), updated_at timestamptz NOT NULL ---
+    assert re.search(r"\buser_id\s+uuid\s+NOT\s+NULL", sql, re.IGNORECASE), (
+        "user_dashboard_layouts must carry user_id uuid NOT NULL (the auth user)"
+    )
+    assert re.search(r"\blayout\s+jsonb\s+NOT\s+NULL", sql, re.IGNORECASE), (
+        "user_dashboard_layouts must carry layout jsonb NOT NULL (the RGL placement array)"
+    )
+    assert re.search(r"\bupdated_at\s+timestamptz\s+NOT\s+NULL", sql, re.IGNORECASE), (
+        "user_dashboard_layouts must carry updated_at timestamptz NOT NULL"
+    )
+    # One row per user: user_id is the PRIMARY KEY or UNIQUE.
+    assert re.search(
+        r"user_id\s+uuid\s+NOT\s+NULL\s+(?:PRIMARY\s+KEY|UNIQUE)", sql, re.IGNORECASE
+    ) or re.search(r"(?:PRIMARY\s+KEY|UNIQUE)\s*\(\s*user_id\s*\)", sql, re.IGNORECASE), (
+        "user_dashboard_layouts must pin one row per user (user_id PRIMARY KEY or UNIQUE)"
+    )
+
+    # --- GLOBAL/cross-program (A-37): NO program_id tag, NO RESTRICTIVE policy ---
+    assert not re.search(r"\bprogram_id\b", sql, re.IGNORECASE), (
+        "user_dashboard_layouts is a cross-program GLOBAL preference (A-37): no program_id tag"
+    )
+    assert not _AS_RESTRICTIVE.search(sql), (
+        "user_dashboard_layouts is not program-partitioned (A-37): no AS RESTRICTIVE policy"
+    )
+
+    # --- owner-scoped SELECT (a user reads ONLY their own row) ---
+    select_policy = re.search(
+        r"CREATE\s+POLICY\s+\w+\s+ON\s+user_dashboard_layouts\b[^;]*FOR\s+SELECT[^;]*;",
+        sql,
+        re.IGNORECASE | re.DOTALL,
+    )
+    assert select_policy, "0029 must add an owner-scoped FOR SELECT policy"
+    assert re.search(
+        r"\(\s*SELECT\s+auth\.uid\(\)\s*\)\s*=\s*user_id", select_policy.group(0), re.IGNORECASE
+    ), "the SELECT policy must be owner-scoped ((SELECT auth.uid()) = user_id)"
+    assert _NULL_GUARD.search(select_policy.group(0)), (
+        "the SELECT policy must carry the auth.uid() IS NOT NULL guard (D-RLS-2)"
+    )
+
+    # --- owner-scoped INSERT with a null-guarded WITH CHECK pinning user_id ---
+    insert_policy = re.search(
+        r"CREATE\s+POLICY\s+\w+\s+ON\s+user_dashboard_layouts\b[^;]*FOR\s+INSERT[^;]*WITH\s+CHECK[^;]*;",
+        sql,
+        re.IGNORECASE | re.DOTALL,
+    )
+    assert insert_policy, "0029 must add an owner-scoped FOR INSERT policy with WITH CHECK"
+    assert re.search(
+        r"\(\s*SELECT\s+auth\.uid\(\)\s*\)\s*=\s*user_id", insert_policy.group(0), re.IGNORECASE
+    ), "the INSERT WITH CHECK must pin user_id = auth.uid() (cannot write a foreign row)"
+    assert _NULL_GUARD.search(insert_policy.group(0)), (
+        "the INSERT policy must carry the auth.uid() IS NOT NULL guard (D-RLS-2)"
+    )
+
+    # --- MUTABLE: an owner-scoped UPDATE policy with BOTH USING and WITH CHECK ---
+    update_policy = re.search(
+        r"CREATE\s+POLICY\s+\w+\s+ON\s+user_dashboard_layouts\b[^;]*FOR\s+UPDATE[^;]*;",
+        sql,
+        re.IGNORECASE | re.DOTALL,
+    )
+    assert update_policy, "0029 must add an owner-scoped FOR UPDATE policy (mutable preference)"
+    body = update_policy.group(0)
+    assert _USING.search(body), "the UPDATE policy must have a USING clause"
+    assert _WITH_CHECK.search(body), "the UPDATE policy must have a WITH CHECK clause"
+    assert len(_NULL_GUARD.findall(body)) >= 2, (
+        "the UPDATE policy must be null-guarded in BOTH USING and WITH CHECK (D-RLS-2)"
+    )
+    assert re.search(r"\(\s*SELECT\s+auth\.uid\(\)\s*\)\s*=\s*user_id", body, re.IGNORECASE), (
+        "the UPDATE policy must be owner-scoped ((SELECT auth.uid()) = user_id)"
+    )
+
+    # --- exactly three owner-scoped policies, all null-guarded; no FOR ALL/DELETE ---
+    n_policies = len(_CREATE_POLICY.findall(sql))
+    n_guards = len(_NULL_GUARD.findall(sql))
+    assert n_policies == 3, (
+        f"0029 should add exactly 3 policies (SELECT/INSERT/UPDATE), found {n_policies}"
+    )
+    assert n_guards >= n_policies, (
+        f"unguarded policy (D-RLS-2): {n_policies} policies but only {n_guards} null guards"
+    )
+    assert not _FOR_ALL.search(sql), "0029 must not use FOR ALL (owner-scoped per-action only)"
+    assert not _FOR_DELETE.search(sql), (
+        "0029 must not add a DELETE policy (a layout is overwritten, not deleted)"
+    )
+
+    # --- grants: SELECT/INSERT/UPDATE to the app roles, NEVER anon (D-RLS-3) ---
+    for verb in ("SELECT", "INSERT", "UPDATE"):
+        grant = re.search(
+            rf"GRANT[^;]*\b{verb}\b[^;]*ON\s+user_dashboard_layouts\b[^;]*", sql, re.IGNORECASE
+        )
+        assert grant, f"0029 must GRANT {verb} ON user_dashboard_layouts"
+        assert re.search(r"\bauthenticated\b", grant.group(0), re.IGNORECASE), (
+            f"0029 must grant {verb} to authenticated"
+        )
+        assert not re.search(r"\banon\b", grant.group(0), re.IGNORECASE), (
+            f"0029 must NOT grant {verb} to anon (D-RLS-3: unauthenticated = no rows)"
+        )
+
+    # --- D-RLS-7: no security-definer helper (inline owner-scoping only) ---
+    assert not _SECURITY_DEFINER.search(sql), "0029 must not use SECURITY DEFINER (D-RLS-7)"
