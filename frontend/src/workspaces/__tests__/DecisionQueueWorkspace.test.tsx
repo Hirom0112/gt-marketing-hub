@@ -1,6 +1,7 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import DecisionQueueWorkspace from '../DecisionQueueWorkspace';
+import App from '../../App';
 
 // Acceptance test (CLAUDE §4.2) for the consolidated Decision Queue workspace (B2).
 // The queue reads the leader-gated GET /decisions, lists OPEN decisions in the reused
@@ -175,5 +176,92 @@ describe('DecisionQueueWorkspace (B2)', () => {
     render(<DecisionQueueWorkspace />);
     await screen.findByTestId('decision-queue-list');
     expect(screen.getByTestId('decision-open-count')).toHaveTextContent('2 open');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Nav-entry + open-count badge gating, exercised through the App shell (the nav
+// lives in App). A seated session is written to localStorage (as the app tests do),
+// and the same url-aware fetch stub serves the token + the OPEN queue.
+const FAKE_TOKEN = 'header.payload.signature';
+
+function seat(role: 'admin' | 'leader' | 'operator'): void {
+  localStorage.setItem(
+    'gt_demo_session',
+    JSON.stringify({
+      role,
+      token: FAKE_TOKEN,
+      expiresAt: Date.now() + 3_600_000,
+      ...(role === 'operator'
+        ? {
+            agentId: 'a0000000-0000-4000-8000-000000000001',
+            agentRank: 1,
+            tier: 'closer',
+            agentName: 'Riley Carter',
+          }
+        : {}),
+    }),
+  );
+}
+
+function stubShell(): void {
+  vi.stubGlobal(
+    'fetch',
+    vi.fn((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (/\/auth\/demo-token/.test(url)) {
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          json: () =>
+            Promise.resolve({ access_token: FAKE_TOKEN, token_type: 'bearer', expires_in: 3600 }),
+        } as Response);
+      }
+      if (/\/decisions$/.test(url)) {
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          json: () => Promise.resolve(OPEN_DECISIONS),
+        } as Response);
+      }
+      const body = /\/enrollment\/calendar/.test(url) ? { month: '2026-06', entries: [] } : [];
+      return Promise.resolve({ ok: true, json: () => Promise.resolve(body) } as Response);
+    }),
+  );
+}
+
+describe('Decision Queue nav entry + badge (B2)', () => {
+  beforeEach(() => {
+    localStorage.clear();
+    stubShell();
+  });
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+
+  it('shows the Decisions nav entry for an admin seat', async () => {
+    seat('admin');
+    render(<App />);
+    expect(await screen.findByTestId('sidebar-nav-decisions')).toBeInTheDocument();
+  });
+
+  it('shows the Decisions nav entry for a leader seat', async () => {
+    seat('leader');
+    render(<App />);
+    expect(await screen.findByTestId('sidebar-nav-decisions')).toBeInTheDocument();
+  });
+
+  it('hides the Decisions nav entry for an operator seat', () => {
+    seat('operator');
+    render(<App />);
+    expect(screen.queryByTestId('sidebar-nav-decisions')).toBeNull();
+  });
+
+  it('renders the open-count badge reflecting the number of open decisions', async () => {
+    seat('leader');
+    render(<App />);
+    const nav = await screen.findByTestId('sidebar-nav-decisions');
+    await waitFor(() => expect(nav).toHaveTextContent('2'));
   });
 });

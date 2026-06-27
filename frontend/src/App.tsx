@@ -2,6 +2,7 @@ import { useState } from 'react';
 import {
   BarChart3,
   CircleHelp,
+  ClipboardCheck,
   LayoutGrid,
   LogOut,
   Megaphone,
@@ -16,6 +17,9 @@ import AdminDashboard from './workspaces/AdminDashboard';
 import AgentDashboard from './workspaces/AgentDashboard';
 import MarketingWorkspace from './workspaces/MarketingWorkspace';
 import LeadershipWorkspace from './workspaces/LeadershipWorkspace';
+import DecisionQueueWorkspace, {
+  useOpenDecisionCount,
+} from './workspaces/DecisionQueueWorkspace';
 import SettingsWorkspace from './workspaces/SettingsWorkspace';
 import HelpWorkspace from './workspaces/HelpWorkspace';
 import SecurityWorkspace from './workspaces/SecurityWorkspace';
@@ -30,6 +34,7 @@ type Workspace =
   | 'enrollment'
   | 'marketing'
   | 'leadership'
+  | 'decisions'
   | 'security'
   | 'settings'
   | 'help';
@@ -80,6 +85,17 @@ function AppShell(): JSX.Element {
   const { session, enter, leave } = useSession();
   const [workspace, setWorkspace] = useState<Workspace>('enrollment');
 
+  // The consolidated Decision Queue (B2) is leader/admin only — an operator never
+  // sees the nav entry OR the surface (the backend also 403s the GET defensively).
+  // Computed before any early return so the badge hook's call order is stable
+  // (rules of hooks): it is enabled only for a seated leader/admin.
+  const isLeaderOrAdmin =
+    session?.role === 'admin' || session?.role === 'leader';
+
+  // The leadership nav open-count badge — counts OPEN decisions (leader/admin only).
+  const { count: openDecisions, refresh: refreshDecisions } =
+    useOpenDecisionCount(isLeaderOrAdmin);
+
   // No seat chosen yet ⇒ the demo login gate (M1). The gate's chosen seat scopes
   // the whole app (and rides as a signed `Authorization: Bearer` token via apiFetch).
   if (session === null) {
@@ -104,16 +120,37 @@ function AppShell(): JSX.Element {
   // Admin-only: the Security tab is injected at the top of the secondary group
   // for an admin seat ONLY. A rep (agent) never sees the nav item OR the tab.
   const isAdmin = session.role === 'admin';
-  const primaryNav = isAdmin ? ADMIN_PRIMARY_NAV : REP_PRIMARY_NAV;
+
+  // The Decision Queue nav entry, shown to leader + admin. Its open-count rides as
+  // the existing sidebar badge (consistent with the other nav badges).
+  const decisionsNav: SidebarItem<NavKey> = {
+    key: 'decisions',
+    label: 'Decisions',
+    icon: ClipboardCheck,
+    ...(openDecisions > 0 ? { badge: String(openDecisions) } : {}),
+  };
+
+  const primaryNav: ReadonlyArray<SidebarItem<NavKey>> = isAdmin
+    ? [...ADMIN_PRIMARY_NAV, decisionsNav]
+    : isLeaderOrAdmin
+      ? [...REP_PRIMARY_NAV, decisionsNav]
+      : REP_PRIMARY_NAV;
   const secondaryNav = isAdmin
     ? [SECURITY_NAV, ...SECONDARY_NAV]
     : SECONDARY_NAV;
 
   // A rep must never land on (or deep-link to) an admin-only workspace. If the
-  // active workspace isn't in the rep's nav, fall back to enrollment.
-  const repAllowed = new Set<Workspace>(['enrollment', 'settings', 'help']);
-  const activeWorkspace: Workspace =
-    isAdmin || repAllowed.has(workspace) ? workspace : 'enrollment';
+  // active workspace isn't in the seat's nav, fall back to enrollment.
+  const allowed = new Set<Workspace>(['enrollment', 'settings', 'help']);
+  if (isLeaderOrAdmin) allowed.add('decisions');
+  if (isAdmin) {
+    allowed.add('marketing');
+    allowed.add('leadership');
+    allowed.add('security');
+  }
+  const activeWorkspace: Workspace = allowed.has(workspace)
+    ? workspace
+    : 'enrollment';
 
   return (
     <div className="app-shell">
@@ -140,6 +177,11 @@ function AppShell(): JSX.Element {
               can never reach Marketing/Leadership/Security even if forced. */}
           {activeWorkspace === 'marketing' && isAdmin && <MarketingWorkspace />}
           {activeWorkspace === 'leadership' && isAdmin && <LeadershipWorkspace />}
+          {/* Decision Queue (B2) — leader + admin only; gated by primaryNav AND
+              guarded here so an operator can never reach it even if forced. */}
+          {activeWorkspace === 'decisions' && isLeaderOrAdmin && (
+            <DecisionQueueWorkspace onChanged={refreshDecisions} />
+          )}
           {activeWorkspace === 'security' && isAdmin && <SecurityWorkspace />}
           {activeWorkspace === 'settings' && <SettingsWorkspace />}
           {activeWorkspace === 'help' && <HelpWorkspace />}
