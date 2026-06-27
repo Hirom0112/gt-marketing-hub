@@ -45,12 +45,19 @@ say "starting backend on :$PORT (OPEN_DATA_MODE=live, key od_live_…${OPEN_DATA
 BACKEND_PID=$!
 up=""; for _ in $(seq 1 60); do code="$(curl -s -o /dev/null -w "%{http_code}" "localhost:${PORT}/families" 2>/dev/null || echo 000)"; [ "$code" != "000" ] && { up=1; break; }; sleep 0.5; done
 [ -n "$up" ] || { tail -20 "$BACKEND_LOG"; die "backend did not start (no HTTP response on :$PORT)"; }
+sleep 1   # grace: let uvicorn finish binding before the first real request
 
 # --- Mint a leader demo token (AUTH_MODE=demo) -------------------------------
 say "minting a leader demo token"
-TOKEN="$(curl -fsS -X POST "localhost:${PORT}/auth/demo-token" \
-  -H 'Content-Type: application/json' -d '{"role":"leader"}' | sed -E 's/.*"access_token":"([^"]+)".*/\1/')"
-[ -n "$TOKEN" ] || die "could not mint a demo token (is AUTH_MODE=demo + SUPABASE_JWT_SECRET set?)"
+TOKEN=""
+for _ in $(seq 1 10); do
+  TOKEN="$(curl -fsS -X POST "localhost:${PORT}/auth/demo-token" \
+    -H 'Content-Type: application/json' -d '{"role":"leader"}' 2>/dev/null \
+    | sed -E 's/.*"access_token":"([^"]+)".*/\1/')"
+  [ -n "$TOKEN" ] && break
+  sleep 0.5
+done
+[ -n "$TOKEN" ] || { tail -20 "$BACKEND_LOG"; die "could not mint a demo token (AUTH_MODE=demo + SUPABASE_JWT_SECRET?)"; }
 
 # --- The headline: live enrichment that changes a decision -------------------
 say "POST /open-data/enrich  district=$DISTRICT  (live tryopendata.ai query)"
