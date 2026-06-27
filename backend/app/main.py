@@ -23,6 +23,7 @@ from app.api.evals import router as evals_router
 from app.api.families import router as families_router
 from app.api.funding import router as funding_router
 from app.api.geo import router as geo_router
+from app.api.layouts import router as layouts_router
 from app.api.marketing import router as marketing_router
 from app.api.merge import router as merge_router
 from app.api.notes import router as notes_router
@@ -213,6 +214,15 @@ app.include_router(security_router)
 # through the pure state machine, fail-closed on an illegal transition). The actor is
 # the VERIFIED principal; every decided action is LOGGED to the §10 spine (NFR-6).
 app.include_router(decisions_router)
+
+# Composable Home layout (B3; PLAN_v2 §B3; INV-5/INV-11) — /home/layout GET + PUT.
+# Per-user dashboard widget arrangement, scoped to the VERIFIED principal's user_id
+# (no owner param — the app-layer IDOR defense; RLS on the 0029 table is the DB
+# backstop). GET reconciles the saved RGL placements against the server-side widget
+# registry via the pure merge_starter_pack (new user ⇒ starter pack, removed widgets
+# dropped, missing starters re-hydrated); PUT upserts the layout and returns the
+# merged result. No LLM, no external send.
+app.include_router(layouts_router)
 
 
 # AWS Lambda + API Gateway entrypoint (ARCHITECTURE.md §12).
