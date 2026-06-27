@@ -1758,6 +1758,20 @@ figure {
   min-width: 0;
 }
 
+/* CRM-Ops reconcile surface (C1): merge queue beside the data-quality panel. */
+.reconcile-ops-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--s-4);
+  align-items: start;
+}
+
+@media (max-width: 980px) {
+  .reconcile-ops-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
 .dash-banner {
   display: flex;
   align-items: center;

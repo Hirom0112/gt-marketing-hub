@@ -13,6 +13,7 @@ import FundingTracker from '../FundingTracker';
 import HouseholdReconcileBoard from '../HouseholdReconcileBoard';
 import MergeQueue from '../MergeQueue';
 import CloseTipsPanel from '../enrollment/CloseTipsPanel';
+import DataQualityPanel from '../enrollment/DataQualityPanel';
 import EnrollmentCalendar, {
   type DrillBulk,
   type SortKey,
@@ -576,7 +577,13 @@ export default function EnrollmentWorkspace(): JSX.Element {
                   onSelect={(v) => setMergeQueueOpen(v === 'merge')}
                   ariaLabel="Reconcile view"
                 />
-                <MergeQueue />
+                {/* The CRM-Ops Data-Quality panel sits BESIDE the merge queue on
+                    the same reconcile/CRM-ops surface (C1): merge candidates on
+                    the left, sync-parity + dq queue + field flags on the right. */}
+                <div className="reconcile-ops-grid">
+                  <MergeQueue />
+                  <DataQualityPanel />
+                </div>
               </div>
             ) : (
               <HouseholdReconcileBoard
