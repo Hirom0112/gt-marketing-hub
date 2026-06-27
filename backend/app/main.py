@@ -12,6 +12,7 @@ from mangum import Mangum
 
 from app.api.ai_actions import router as ai_actions_router
 from app.api.auth import router as auth_router
+from app.api.budget import router as budget_router
 from app.api.contact_outcome import router as contact_outcome_router
 from app.api.content import router as content_router
 from app.api.crm_status import router as crm_status_router
@@ -223,6 +224,15 @@ app.include_router(decisions_router)
 # dropped, missing starters re-hydrated); PUT upserts the layout and returns the
 # merged result. No LLM, no external send.
 app.include_router(layouts_router)
+
+# Budget Tracker + variance→Decision feeder (B4; PLAN_v2 §B4; INV-2/INV-11) — /budget
+# GET (the params-seeded workstream tracker: per-workstream planned/actual/committed/
+# remaining/variance/flagged + roll-up + burn series; any authenticated VIEW) +
+# /budget/entry POST (admin/leader-gated append to the spend ledger). On a >10% overrun
+# the POST emits EXACTLY ONE open `budget_variance` Decision-Queue item via the B2
+# feeder (idempotent per workstream until decided). Variance is the pure core's; no LLM,
+# no external send.
+app.include_router(budget_router)
 
 
 # AWS Lambda + API Gateway entrypoint (ARCHITECTURE.md §12).
