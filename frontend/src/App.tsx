@@ -9,6 +9,7 @@ import {
   Megaphone,
   Settings,
   ShieldCheck,
+  Wallet,
 } from 'lucide-react';
 import './theme.css';
 import Sidebar, { type SidebarItem } from './Sidebar';
@@ -25,6 +26,7 @@ import DecisionQueueWorkspace, {
 import SettingsWorkspace from './workspaces/SettingsWorkspace';
 import HelpWorkspace from './workspaces/HelpWorkspace';
 import SecurityWorkspace from './workspaces/SecurityWorkspace';
+import BudgetWorkspace from './workspaces/BudgetWorkspace';
 
 // GT Pulse app shell — a full-height blue LEFT nav rail beside the fluid main
 // column. There is NO top bar and NO page-header: the sidebar (GT Pulse logo +
@@ -38,6 +40,7 @@ type Workspace =
   | 'marketing'
   | 'leadership'
   | 'decisions'
+  | 'budget'
   | 'security'
   | 'settings'
   | 'help';
@@ -135,10 +138,18 @@ function AppShell(): JSX.Element {
     ...(openDecisions > 0 ? { badge: String(openDecisions) } : {}),
   };
 
+  // The Budget Tracker nav entry (B4), shown to leader + admin alongside the
+  // Decision Queue — an operator never sees the nav item OR the surface.
+  const budgetNav: SidebarItem<NavKey> = {
+    key: 'budget',
+    label: 'Budget',
+    icon: Wallet,
+  };
+
   const primaryNav: ReadonlyArray<SidebarItem<NavKey>> = isAdmin
-    ? [...ADMIN_PRIMARY_NAV, decisionsNav]
+    ? [...ADMIN_PRIMARY_NAV, decisionsNav, budgetNav]
     : isLeaderOrAdmin
-      ? [...REP_PRIMARY_NAV, decisionsNav]
+      ? [...REP_PRIMARY_NAV, decisionsNav, budgetNav]
       : REP_PRIMARY_NAV;
   const secondaryNav = isAdmin
     ? [SECURITY_NAV, ...SECONDARY_NAV]
@@ -147,7 +158,10 @@ function AppShell(): JSX.Element {
   // A rep must never land on (or deep-link to) an admin-only workspace. If the
   // active workspace isn't in the seat's nav, fall back to enrollment.
   const allowed = new Set<Workspace>(['home', 'enrollment', 'settings', 'help']);
-  if (isLeaderOrAdmin) allowed.add('decisions');
+  if (isLeaderOrAdmin) {
+    allowed.add('decisions');
+    allowed.add('budget');
+  }
   if (isAdmin) {
     allowed.add('marketing');
     allowed.add('leadership');
@@ -190,6 +204,9 @@ function AppShell(): JSX.Element {
           {activeWorkspace === 'decisions' && isLeaderOrAdmin && (
             <DecisionQueueWorkspace onChanged={refreshDecisions} />
           )}
+          {/* Budget Tracker (B4) — leader + admin only; gated by primaryNav AND
+              guarded here so an operator can never reach it even if forced. */}
+          {activeWorkspace === 'budget' && isLeaderOrAdmin && <BudgetWorkspace />}
           {activeWorkspace === 'security' && isAdmin && <SecurityWorkspace />}
           {activeWorkspace === 'settings' && <SettingsWorkspace />}
           {activeWorkspace === 'help' && <HelpWorkspace />}
