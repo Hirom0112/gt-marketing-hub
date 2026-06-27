@@ -42,6 +42,11 @@ from app.data.decisions_store import (
     InMemoryDecisionsStore,
     build_supabase_decisions_store,
 )
+from app.data.layouts_store import (
+    InMemoryLayoutsStore,
+    LayoutsStore,
+    build_supabase_layouts_store,
+)
 from app.data.notes_repository import InMemoryNotesRepository, NotesRepository
 from app.data.payments_store import (
     InMemoryPaymentsStore,
@@ -318,6 +323,40 @@ def _build_decisions_store() -> DecisionsStore:
 # ``_repository``. Default v1 = in-memory (A-3); production swaps the Supabase-backed
 # impl over the 0028 tables.
 _decisions_store: DecisionsStore = _build_decisions_store()
+
+
+def _build_layouts_store() -> LayoutsStore:
+    """Bind the B3 per-user Home layout store, MIRRORING ``_build_decisions_store``.
+
+    The same ``COCKPIT_REPO`` / ``SUPABASE_URL`` selection as the family, watermark,
+    payments, and decisions stores, so they never disagree on which backend is live
+    (the NFR-8 store seam):
+
+    - ``synthetic`` ⇒ FORCE the in-memory store (never Supabase).
+    - ``supabase`` ⇒ REQUIRE the live store; a missing ``SUPABASE_URL`` is a misconfig
+      ⇒ raise (fail loud, the family-store posture).
+    - ``auto`` (default) ⇒ Supabase when ``SUPABASE_URL`` is configured, else the
+      in-memory v1 fallback (A-3). Default CI is :class:`InMemoryLayoutsStore`.
+    """
+    repo_mode = Settings.from_env().cockpit_repo
+    if repo_mode == "synthetic":
+        return InMemoryLayoutsStore()
+    if repo_mode == "supabase":
+        supabase = build_supabase_layouts_store()
+        if supabase is None:
+            raise RuntimeError(
+                "COCKPIT_REPO=supabase requires SUPABASE_URL (+ "
+                "SUPABASE_SERVICE_ROLE_KEY) for the Home layouts store; none was "
+                "configured. Set them, or use COCKPIT_REPO=synthetic / auto."
+            )
+        return supabase
+    return build_supabase_layouts_store() or InMemoryLayoutsStore()
+
+
+# Singleton per-user Home layout store (B3) — the durable composable-Home placements
+# behind the same NFR-8 seam as ``_repository``. Default v1 = in-memory (A-3);
+# production swaps the Supabase-backed impl over the 0029 table.
+_layouts_store: LayoutsStore = _build_layouts_store()
 
 # Singleton env snapshot, read once at import (TECH_STACK §5; INV-11). Tests that
 # need a different env override `get_settings_dep`; named so it never clashes with
@@ -644,6 +683,11 @@ def get_payments_store() -> PaymentsStore:
 def get_decisions_store() -> DecisionsStore:
     """FastAPI dependency yielding the active Decision-Queue store (B2 seam)."""
     return _decisions_store
+
+
+def get_layouts_store() -> LayoutsStore:
+    """FastAPI dependency yielding the active per-user Home layout store (B3 seam)."""
+    return _layouts_store
 
 
 # ===========================================================================
