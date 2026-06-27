@@ -31,6 +31,7 @@ from app.api.notes import router as notes_router
 from app.api.payments import router as payments_router
 from app.api.publish import router as publish_router
 from app.api.scoreboard import router as scoreboard_router
+from app.api.scorecard import router as scorecard_router
 from app.api.seam import router as seam_router
 from app.api.security import SecurityEdgeMiddleware
 from app.api.security import router as security_router
@@ -200,6 +201,14 @@ app.include_router(evals_router)
 # rollup over the append-only audit spine (enrollment funnel, GEO lift vs the 0%
 # baseline, per-eval green/red). Read-only; nothing is logged.
 app.include_router(scoreboard_router)
+
+# Weekly KPI scorecard (B5; ARCH §6) — /scorecard/weekly GET. The canonical weekly
+# metric table (this-week/last-week/delta/sparkline/status/pace projection per metric),
+# identical for everyone (any authenticated seat — no role gate). The API samples the
+# per-metric weekly series from the audit spine (bucketed by ISO week) and threads it
+# through the pure build_weekly_scorecard transform (the status band + pacing goal_date
+# from params, INV-11). Read-only; nothing is logged.
+app.include_router(scorecard_router)
 
 # M7 security/observability surface (MULTI_AGENT_COCKPIT §7) — /security/posture
 # (Panel A: the LIVE RLS posture — the same test_migrations_rls invariants run at
