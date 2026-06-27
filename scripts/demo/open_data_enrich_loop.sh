@@ -12,7 +12,7 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$REPO_ROOT"
 PORT="${PORT:-8000}"
-DISTRICT="${DISTRICT:-031903}"   # a Texas district id the seeded set also knows
+DISTRICT="${DISTRICT:-011902}"   # Elgin ISD — real D-rated, 19% STAAR, 6,232 students: live data CHANGES the rec
 LOG_DIR="$(mktemp -d)"
 BACKEND_LOG="$LOG_DIR/backend.log"
 BACKEND_PID=""

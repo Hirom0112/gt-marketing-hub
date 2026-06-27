@@ -398,6 +398,7 @@ open_data:                  # E1 — tryopendata.ai Texas-education enrichment s
     accountability_ratings: tea/accountability-ratings
     staar: tea/staar-accountability
     peims_finance: tea/public-school-finance
+    student_enrollment: tea/student-enrollment
   per_run_query_cap: 25             # INV-8 per-run query budget; the (cap+1)th live /v1/query raises rather than overspending the metered API
   decision_change:                  # district-performance thresholds (the decision-change CORE that consumes these is a separate later unit)
     low_rating_grades: [D, F]       # A–F accountability grades that count as low-performing

@@ -1562,10 +1562,11 @@ class OpenDataDatasets(_StrictModel):
     accountability_ratings: str
     staar: str
     peims_finance: str
+    student_enrollment: str
 
     @model_validator(mode="after")
     def _non_empty(self) -> OpenDataDatasets:
-        for name in ("accountability_ratings", "staar", "peims_finance"):
+        for name in ("accountability_ratings", "staar", "peims_finance", "student_enrollment"):
             value = getattr(self, name)
             if not value or not str(value).strip():
                 raise ValueError(f"open_data.datasets.{name} must be non-empty")

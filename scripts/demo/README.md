@@ -49,13 +49,16 @@ move came from real data, not the seeded fallback.
 
 ### Run
 ```bash
-bash scripts/demo/open_data_enrich_loop.sh            # district 031903 by default
-DISTRICT=101912 bash scripts/demo/open_data_enrich_loop.sh   # pick another
+bash scripts/demo/open_data_enrich_loop.sh            # Elgin ISD (011902) by default
+DISTRICT=031903 bash scripts/demo/open_data_enrich_loop.sh   # a healthy district (no change)
 ```
 
 It pulls the key from `.env`, pins the DB to the local stack (migrated through
 0031), starts the backend in `OPEN_DATA_MODE=live`, mints a leader demo token,
 POSTs `/open-data/enrich`, and prints the response — `data_source: "live"` +
-`recommendation_changed: true` is the proof. The live edge runs behind the INV-8
-cap + kill switch; if it degrades to `seeded`, the script says why.
+`recommendation_changed: true` is the proof. The default district **Elgin ISD
+(011902)** is a real D‑rated, 19%‑STAAR, 6,232‑student district, so live data
+boosts the rec and feeds a Decision‑Queue card; a healthy district (e.g. 031903,
+B‑rated) correctly does **not** change. The live edge runs behind the INV‑8 cap +
+kill switch; if it degrades to `seeded`, the script says why.
 

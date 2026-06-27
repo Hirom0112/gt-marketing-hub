@@ -43,6 +43,25 @@ from app.core.params import OpenDataDatasets
 # product's own fixed path; INV-11 governs OUR knobs, not a third party's URLs).
 _QUERY_PATH = "/v1/query"
 
+# --- TEA dataset encoding (the platform's own schema/coding — the A-39/A-41
+# third-party-surface carve-out to INV-11; these describe TEA's data shape, not a
+# GT tunable, and are all verified live against api.tryopendata.ai). One home. ---
+# Modern A–F accountability grades (pre-2018 years store legacy "Met Standard"
+# strings; we skip those and take the latest real A–F grade).
+_AF_GRADES = ("A", "B", "C", "D", "F")
+# PEIMS General Fund (Maintenance & Operations) — the standard per-pupil basis.
+_GENERAL_FUND = 199
+# PEIMS expenditure object codes 6100–6499 (payroll / contracted services /
+# supplies / other operating). Excludes 5xxx REVENUE and 65xx debt service, so the
+# total is operating EXPENDITURE — a naive SUM(amount) double-counts revenue+spend.
+_EXP_OBJECT_LO, _EXP_OBJECT_HI = 6100, 6499
+# STAAR proficiency basis. TEA TAPR encodes performance in `metric_code`; for the
+# All-Students series the `…A001{level}{YY}{D|N|R}` codes carry TEA's own precomputed
+# RATE (suffix R, a percent). Level digit 2 = "Approaches Grade Level or Above" —
+# TEA's headline, most-inclusive standard. `DD000A0012__R` selects that rate for any
+# 2-digit year; we average it across the STAAR subject groups + latest year, /100.
+_STAAR_APPROACHES_RATE_LIKE = "DD000A0012__R"
+
 
 class LiveOpenDataAdapter(OpenDataAdapter):
     """Production ``OpenDataAdapter`` — live tryopendata.ai reads behind the cap (E1).
@@ -89,41 +108,127 @@ class LiveOpenDataAdapter(OpenDataAdapter):
                 f"seeded (INV-8) rather than overspend the metered tryopendata.ai API."
             )
         self._queries_made += 1
-        response = self._client.post(_QUERY_PATH, json={"query": sql})
+        # The tryopendata.ai /v1/query contract: POST {"sql": "<SQL>"} → a result
+        # object with `columns` (names) + `rows` (arrays of values) — NOT keyed dicts.
+        response = self._client.post(_QUERY_PATH, json={"sql": sql})
         response.raise_for_status()
         body: dict[str, Any] = response.json()
         return body
 
-    # --------------------------------------------------------------- interface
-    def district_enrichment(self, district_id: str) -> DistrictEnrichment:
-        """Query tryopendata.ai for ``district_id`` and map the ``tea/*`` row (E1).
+    def _scalar(self, body: dict[str, Any], *, what: str, district_id: str) -> Any:
+        """The single (row 0, col 0) value of a one-column result; fail loud if absent.
 
-        Issues a SQL ``POST /v1/query`` against the ``tea/*`` datasets (the A–F
-        accountability rating, STAAR proficiency, PEIMS per-pupil ``amount``, and
-        enrollment) and maps the returned aggregate columns onto a typed
-        :class:`DistrictEnrichment`. District-level only (INV-1/INV-6).
+        The /v1/query response is ``{"columns": [...], "rows": [[v, ...], ...]}``. A
+        ``SUM``/``AVG`` over no matching rows still returns one row whose value is
+        ``None`` — that (or no row at all) is missing data: raise rather than
+        fabricate a zero (the demo must degrade to seeded, never invent a statistic).
         """
-        sql = (
-            "SELECT rating, staar_proficiency, amount, enrollment "
-            f'FROM "{self._datasets.accountability_ratings}" '
-            f'JOIN "{self._datasets.staar}" USING (district_id) '
-            f'JOIN "{self._datasets.peims_finance}" USING (district_id) '
-            f"WHERE district_id = '{district_id}'"
-        )
-        body = self._request(sql)
-        rows = body.get("rows") or body.get("data") or []
-        if not rows:
+        rows = body.get("rows") or []
+        value = rows[0][0] if rows and rows[0] else None
+        if value is None:
             raise RuntimeError(
-                f"tryopendata.ai returned no tea/* row for district {district_id!r}; "
+                f"tryopendata.ai returned no {what} for district {district_id!r}; "
                 "cannot map a DistrictEnrichment (fail loud, never fabricate)."
             )
-        row: dict[str, Any] = rows[0]
-        # Map the aggregate tea/* columns onto the typed model. PEIMS per-pupil is
-        # carried as the `amount` column (RESEARCH_v2 §II.3).
+        return value
+
+    # --------------------------------------------------------------- interface
+    def district_enrichment(self, district_id: str) -> DistrictEnrichment:
+        """Query tryopendata.ai for ``district_id`` and map the live TEA data (E1).
+
+        Four district-level ``POST /v1/query`` reads against the real ``tea/*``
+        datasets (INV-1/INV-6 — no child-keyed row ever crosses this boundary), each
+        taking the LATEST available year:
+
+        * **A–F rating** — ``accountability-ratings.d_rating`` (latest A–F year).
+        * **enrollment** — ``SUM(student-enrollment.enrollment)`` over ethnicities.
+        * **per-pupil spend** — ``SUM`` of PEIMS General-Fund operating expenditures
+          (fund 199, object 6100–6499, actuals) ÷ enrollment.
+        * **STAAR proficiency** — TEA's precomputed "Approaches Grade Level or Above"
+          All-Students rate, averaged across subjects, as a fraction.
+
+        The TEA district key has two forms: the accountability/STAAR datasets use the
+        zero-padded 6-char string (``"031903"``); enrollment/finance use the integer
+        (``31903``). Both are derived from ``district_id`` here.
+        """
+        padded = district_id.strip().zfill(6)
+        try:
+            numeric = int(district_id)
+        except ValueError as exc:
+            raise RuntimeError(
+                f"district_id {district_id!r} is not a TEA numeric id — cannot query."
+            ) from exc
+
+        ratings = self._datasets.accountability_ratings
+        enroll = self._datasets.student_enrollment
+        finance = self._datasets.peims_finance
+        staar = self._datasets.staar
+        grades = ", ".join(f"'{g}'" for g in _AF_GRADES)
+
+        # 1) Latest A–F accountability grade.
+        rating = self._scalar(
+            self._request(
+                f'SELECT d_rating FROM "{ratings}" '
+                f"WHERE district = '{padded}' AND d_rating IN ({grades}) "
+                "ORDER BY school_year DESC LIMIT 1"
+            ),
+            what="A–F rating",
+            district_id=district_id,
+        )
+
+        # 2) Total enrollment (sum over the per-ethnicity rows) for the latest year.
+        enrollment = int(
+            self._scalar(
+                self._request(
+                    f'SELECT SUM(CAST(enrollment AS BIGINT)) FROM "{enroll}" '
+                    f"WHERE district = {numeric} AND year = "
+                    f'(SELECT MAX(year) FROM "{enroll}" WHERE district = {numeric})'
+                ),
+                what="enrollment",
+                district_id=district_id,
+            )
+        )
+
+        # 3) General-Fund operating expenditure (actuals, latest fundyear).
+        total_expenditure = float(
+            self._scalar(
+                self._request(
+                    f'SELECT SUM(amount) FROM "{finance}" '
+                    f"WHERE district = {numeric} AND report_type = 'actual' "
+                    f"AND fund = {_GENERAL_FUND} "
+                    f"AND object_code BETWEEN {_EXP_OBJECT_LO} AND {_EXP_OBJECT_HI} "
+                    f'AND fundyear = (SELECT MAX(fundyear) FROM "{finance}" '
+                    f"WHERE district = {numeric} AND report_type = 'actual' "
+                    f"AND fund = {_GENERAL_FUND})"
+                ),
+                what="PEIMS finance",
+                district_id=district_id,
+            )
+        )
+
+        # 4) STAAR "Approaches Grade Level or Above" rate (percent → fraction).
+        staar_pct = float(
+            self._scalar(
+                self._request(
+                    f'SELECT AVG(CAST(value AS DOUBLE)) FROM "{staar}" '
+                    f"WHERE district = '{padded}' "
+                    f"AND metric_code LIKE '{_STAAR_APPROACHES_RATE_LIKE}' "
+                    "AND CAST(value AS DOUBLE) BETWEEN 0 AND 100 "
+                    f'AND school_year = (SELECT MAX(school_year) FROM "{staar}" '
+                    f"WHERE district = '{padded}' "
+                    f"AND metric_code LIKE '{_STAAR_APPROACHES_RATE_LIKE}' "
+                    "AND CAST(value AS DOUBLE) >= 0)"
+                ),
+                what="STAAR proficiency",
+                district_id=district_id,
+            )
+        )
+
+        per_pupil = total_expenditure / enrollment if enrollment else 0.0
         return DistrictEnrichment(
-            district_id=str(row.get("district_id", district_id)),
-            d_rating=str(row["rating"]),
-            staar_proficiency=float(row["staar_proficiency"]),
-            per_pupil_spend=float(row["amount"]),
-            enrollment=int(row["enrollment"]),
+            district_id=district_id,
+            d_rating=str(rating),
+            staar_proficiency=round(staar_pct / 100.0, 4),
+            per_pupil_spend=round(per_pupil, 2),
+            enrollment=enrollment,
         )

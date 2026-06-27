@@ -47,22 +47,31 @@ def _datasets() -> OpenDataDatasets:
 _DISTRICT_ID = "101912"
 
 
+def _scripted(value: object) -> httpx.Response:
+    """A tryopendata.ai ``/v1/query`` result: ``{columns, rows}`` with one scalar."""
+    return httpx.Response(200, json={"columns": ["v"], "rows": [[value]]})
+
+
 def _tea_row_handler(request: httpx.Request) -> httpx.Response:
-    """A scripted tryopendata.ai — returns one synthetic ``tea/*`` row for any query."""
-    return httpx.Response(
-        200,
-        json={
-            "rows": [
-                {
-                    "district_id": _DISTRICT_ID,
-                    "rating": "A",
-                    "staar_proficiency": 0.78,
-                    "amount": 10500.0,
-                    "enrollment": 1500,
-                }
-            ]
-        },
-    )
+    """A scripted tryopendata.ai — routes by the SQL to the right ``{columns,rows}``.
+
+    The live adapter issues FOUR district-level queries (rating, enrollment, finance,
+    STAAR); this returns synthetic values chosen so the mapped enrichment is exactly
+    ``A / enrollment 1500 / per-pupil $10,500 / STAAR 0.78`` (finance SUM 15,750,000
+    ÷ 1500 = 10,500; STAAR 78% → 0.78). INV-1 synthetic, offline.
+    """
+    import json as _json
+
+    sql = _json.loads(request.content.decode("utf-8"))["sql"]
+    if "d_rating" in sql:
+        return _scripted("A")
+    if "SUM(CAST(enrollment" in sql:
+        return _scripted(1500)
+    if "object_code BETWEEN" in sql:
+        return _scripted(15_750_000.0)
+    if "metric_code LIKE" in sql:
+        return _scripted(78.0)
+    return _scripted(None)
 
 
 def _live_adapter(*, cap: int) -> LiveOpenDataAdapter:
@@ -104,14 +113,16 @@ def test_seeded_district_query_returns_typed_rows() -> None:
 
 # ------------------------------------------------------------------------ live
 def test_live_adapter_maps_tea_columns() -> None:
-    """A captured ``tea/*`` row maps onto a DistrictEnrichment via /v1/query + Bearer."""
-    captured: dict[str, str] = {}
+    """The four live ``tea/*`` queries map onto a DistrictEnrichment via /v1/query + Bearer."""
+    import json as _json
+
+    captured: dict[str, object] = {"bodies": [], "urls": [], "methods": [], "auths": []}
 
     def handler(request: httpx.Request) -> httpx.Response:
-        captured["url"] = str(request.url)
-        captured["method"] = request.method
-        captured["auth"] = request.headers.get("Authorization", "")
-        captured["body"] = request.content.decode("utf-8")
+        captured["urls"].append(str(request.url))  # type: ignore[union-attr]
+        captured["methods"].append(request.method)  # type: ignore[union-attr]
+        captured["auths"].append(request.headers.get("Authorization", ""))  # type: ignore[union-attr]
+        captured["bodies"].append(request.content.decode("utf-8"))  # type: ignore[union-attr]
         return _tea_row_handler(request)
 
     client = httpx.Client(
@@ -126,15 +137,17 @@ def test_live_adapter_maps_tea_columns() -> None:
 
     enrichment = adapter.district_enrichment(_DISTRICT_ID)
 
-    # The POST hits /v1/query with the Bearer od_live_ key.
-    assert captured["method"] == "POST"
-    assert captured["url"].endswith("/v1/query")
-    assert captured["auth"] == "Bearer od_live_synthetic"
-    # The SQL body queries the tea/* datasets for the district.
-    assert "tea/" in captured["body"]
-    assert _DISTRICT_ID in captured["body"]
+    # Every POST hits /v1/query with the Bearer od_live_ key and the {"sql": …} body.
+    assert captured["methods"] == ["POST"] * 4
+    assert all(u.endswith("/v1/query") for u in captured["urls"])  # type: ignore[union-attr]
+    assert set(captured["auths"]) == {"Bearer od_live_synthetic"}  # type: ignore[arg-type]
+    bodies = captured["bodies"]
+    assert all("sql" in _json.loads(b) and "query" not in _json.loads(b) for b in bodies)  # type: ignore[union-attr]
+    # The SQL queries the tea/* datasets for the district (both id forms appear).
+    joined = " ".join(bodies)  # type: ignore[arg-type]
+    assert "tea/" in joined and _DISTRICT_ID in joined
 
-    # The tea/* columns map correctly onto the typed enrichment.
+    # The four queries map correctly onto the typed enrichment.
     assert isinstance(enrichment, DistrictEnrichment)
     assert enrichment.district_id == _DISTRICT_ID
     assert enrichment.d_rating == "A"
@@ -154,11 +167,13 @@ def test_open_data_cap_degrades_to_seeded() -> None:
     )
     assert effective_open_data_mode(settings) == "simulate"
 
-    # Guard: the per-run query budget trips on the (cap+1)th call (INV-8).
-    adapter = _live_adapter(cap=1)
-    adapter.district_enrichment(_DISTRICT_ID)  # 1st query — within budget
+    # Guard: the per-run query budget trips on the (cap+1)th /v1/query (INV-8). One
+    # enrichment now issues FOUR queries, so cap=4 lets exactly one enrichment
+    # through; the next enrichment's first query (the 5th) is over budget.
+    adapter = _live_adapter(cap=4)
+    adapter.district_enrichment(_DISTRICT_ID)  # queries 1–4 — within budget
     with pytest.raises(OpenDataBudgetExceededError):
-        adapter.district_enrichment(_DISTRICT_ID)  # 2nd query — over budget
+        adapter.district_enrichment(_DISTRICT_ID)  # query 5 — over budget
 
 
 # ----------------------------------------------------------- live, no key, loud
