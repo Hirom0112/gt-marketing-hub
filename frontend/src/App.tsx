@@ -3,6 +3,7 @@ import {
   BarChart3,
   CircleHelp,
   ClipboardCheck,
+  Home as HomeIcon,
   LayoutGrid,
   LogOut,
   Megaphone,
@@ -13,6 +14,7 @@ import './theme.css';
 import Sidebar, { type SidebarItem } from './Sidebar';
 import LoginPage from './LoginPage';
 import { SessionProvider, useSession } from './session/SessionContext';
+import ComposableHome from './home/ComposableHome';
 import AdminDashboard from './workspaces/AdminDashboard';
 import AgentDashboard from './workspaces/AgentDashboard';
 import MarketingWorkspace from './workspaces/MarketingWorkspace';
@@ -31,6 +33,7 @@ import SecurityWorkspace from './workspaces/SecurityWorkspace';
 // surfaces). The main area is fully fluid (width:100%, scaling padding). The
 // Enrollment situation summary lives in the page CONTENT (not any header).
 type Workspace =
+  | 'home'
   | 'enrollment'
   | 'marketing'
   | 'leadership'
@@ -49,10 +52,12 @@ type NavKey = Workspace | 'switch-seat';
 // never the marketing/leadership lenses), so they are gated to the admin seat
 // exactly like the Security tab.
 const REP_PRIMARY_NAV: ReadonlyArray<SidebarItem<NavKey>> = [
+  { key: 'home', label: 'Home', icon: HomeIcon },
   { key: 'enrollment', label: 'Enrollment', icon: LayoutGrid },
 ];
 
 const ADMIN_PRIMARY_NAV: ReadonlyArray<SidebarItem<NavKey>> = [
+  { key: 'home', label: 'Home', icon: HomeIcon },
   { key: 'enrollment', label: 'Enrollment', icon: LayoutGrid },
   { key: 'marketing', label: 'Marketing', icon: Megaphone, badge: 'In progress' },
   { key: 'leadership', label: 'Leadership', icon: BarChart3, badge: 'In progress' },
@@ -141,7 +146,7 @@ function AppShell(): JSX.Element {
 
   // A rep must never land on (or deep-link to) an admin-only workspace. If the
   // active workspace isn't in the seat's nav, fall back to enrollment.
-  const allowed = new Set<Workspace>(['enrollment', 'settings', 'help']);
+  const allowed = new Set<Workspace>(['home', 'enrollment', 'settings', 'help']);
   if (isLeaderOrAdmin) allowed.add('decisions');
   if (isAdmin) {
     allowed.add('marketing');
@@ -167,6 +172,9 @@ function AppShell(): JSX.Element {
               Students/Reconcile/Team Roster) and the sales agent on the owner-scoped
               AgentDashboard (4-metric strip + motivation banner + Leads/Triage/
               Students/Reconcile/KPI Dashboard). Branch by seat. */}
+          {/* Composable Home (B3) — the per-user widget grid; available to every
+              signed-in seat as the customizable overview. */}
+          {activeWorkspace === 'home' && <ComposableHome />}
           {activeWorkspace === 'enrollment' &&
             (session.role === 'operator' ? (
               <AgentDashboard />
