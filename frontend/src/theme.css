@@ -18,17 +18,17 @@
 
 :root {
   /* ---- neutral base -------------------------------------------------------- */
-  --ink: oklch(0.26 0.028 222); /* near-black teal-blue — primary text + fills  */
-  --ink-soft: oklch(0.4 0.03 220); /* secondary text on paper (AA)             */
-  --paper: oklch(0.955 0.007 190); /* warm off-white app background, teal-tinted */
-  --surface: oklch(0.995 0.004 190); /* cards: warm near-white (never pure #fff) */
-  --surface-2: oklch(0.975 0.006 190); /* recessed inputs / inset wells        */
-  --line: oklch(0.88 0.012 190); /* hairline borders, teal-tinted             */
+  --ink: oklch(0.26 0.035 256); /* near-black blue — primary text + fills      */
+  --ink-soft: oklch(0.4 0.035 256); /* secondary text on paper (AA)            */
+  --paper: oklch(0.955 0.008 252); /* cool off-white app background, blue-tinted */
+  --surface: oklch(0.995 0.004 252); /* cards: cool near-white (never pure #fff) */
+  --surface-2: oklch(0.975 0.006 252); /* recessed inputs / inset wells        */
+  --line: oklch(0.88 0.013 252); /* hairline borders, blue-tinted             */
   --line-2: #eaeff2; /* internal hairline (dividers inside a surface)         */
   --line-strong: #c2cac4; /* emphasised hairline (hover/focus rails)         */
   --muted: #5f6f6c; /* mono micro-labels (AA on paper: 5.0:1)                 */
   --on-ink: #f4f6f4; /* text on an --ink fill                                 */
-  --on-ink-accent: #7fd8cb; /* bright teal accent on a dark (--ink) bar       */
+  --on-ink-accent: oklch(0.82 0.11 236); /* bright sky accent on a dark (--ink) bar */
 
   /* ---- signal · needs-attention (cockpit retune, more saturated) ---------- */
   --signal: #b5331c; /* AA on white: 5.0:1                                    */
@@ -37,10 +37,11 @@
   --signal-ink: #8a3415; /* AA text on --signal-wash: 6.4:1                   */
 
   /* ---- flow · healthy (cockpit retune — instrument teal) ------------------ */
-  --flow: #0f766e; /* AA on white: 4.8:1                                      */
-  --flow-strong: #0b5651;
-  --flow-wash: #e3f0eb;
-  --flow-ink: #14543f; /* AA text on --flow-wash: 6.9:1                       */
+  /* healthy/synced — shifted off teal to a clean green (distinct from blue chrome) */
+  --flow: oklch(0.5 0.1 150); /* AA on white ~4.7:1                            */
+  --flow-strong: oklch(0.41 0.09 150);
+  --flow-wash: oklch(0.95 0.025 150);
+  --flow-ink: oklch(0.42 0.085 150); /* AA text on --flow-wash                 */
 
   /* ---- gate · funding / placeholder (cockpit retune, deeper amber) -------- */
   --gate: #a35b07; /* AA on white: 4.9:1                                      */
@@ -150,9 +151,9 @@
   --s-8: 32px;
 
   /* ---- elevation + motion ------------------------------------------------- */
-  /* Flatter, teal-tinted elevation — editorial panels sit on hairlines, not shadow. */
-  --shadow-sm: 0 1px 1px rgba(15, 60, 55, 0.03);
-  --shadow-md: 0 8px 24px -10px rgba(15, 60, 55, 0.12);
+  /* Flatter, blue-tinted elevation. editorial panels sit on hairlines, not shadow. */
+  --shadow-sm: 0 1px 1px rgba(20, 40, 90, 0.03);
+  --shadow-md: 0 8px 24px -10px rgba(20, 40, 90, 0.12);
   --ease: cubic-bezier(0.22, 1, 0.36, 1); /* ease-out-quint */
   --dur: 200ms;
 
@@ -160,15 +161,15 @@
   --sidebar-w: 120px; /* the vertical nav rail — wide enough for the big brand logo + labels */
   --header-h: 76px; /* the page-header zone min height */
   --brand-tile: 100px; /* the sidebar GT Pulse logo width (the logo carries the wordmark) */
-  /* GT Pulse teal nav rail (committed-color chrome). Deep teal field carries the
-     brand; mono labels; a bright mint marks the active item. OKLCH, AA on the field. */
-  --sidebar-bg: oklch(0.31 0.045 184); /* deep teal rail            */
-  --sidebar-edge: oklch(0.37 0.05 184); /* the rail's right border  */
-  --sidebar-fg: oklch(0.74 0.03 184); /* muted nav text/icon on teal */
-  --sidebar-fg-active: oklch(0.985 0.01 184); /* active nav text/icon  */
-  --sidebar-hover: oklch(0.36 0.05 184); /* hover backdrop          */
-  --sidebar-active: oklch(0.43 0.07 184); /* active item backdrop    */
-  --sidebar-accent: oklch(0.82 0.13 178); /* bright mint — active icon tint */
+  /* GT Pulse blue nav rail (committed-color chrome). Deep blue field carries the
+     brand; mono labels; a bright sky marks the active item. OKLCH, AA on the field. */
+  --sidebar-bg: oklch(0.3 0.07 256); /* deep blue rail            */
+  --sidebar-edge: oklch(0.37 0.08 256); /* the rail's right border  */
+  --sidebar-fg: oklch(0.74 0.04 256); /* muted nav text/icon on blue */
+  --sidebar-fg-active: oklch(0.985 0.01 256); /* active nav text/icon  */
+  --sidebar-hover: oklch(0.36 0.08 256); /* hover backdrop          */
+  --sidebar-active: oklch(0.44 0.12 256); /* active item backdrop    */
+  --sidebar-accent: oklch(0.8 0.14 236); /* bright sky — active icon tint */
 }
 
 /* ---- base reset ----------------------------------------------------------- */
