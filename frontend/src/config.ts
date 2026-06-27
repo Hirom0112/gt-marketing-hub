@@ -9,39 +9,39 @@ export const apiBaseUrl: string =
   import.meta.env.VITE_GT_API_BASE_URL ?? DEFAULT_API_BASE_URL;
 
 // ---------------------------------------------------------------------------
-// Demo principal headers (M1). The login gate scopes the whole app by a demo
-// SEAT, and every cockpit API call must carry that seat so the backend's
-// get_demo_principal can enforce server-side scoping. The role rides on
-// X-Demo-Role and (for an agent seat) the canonical agent_id on
-// X-Demo-Agent-Id (MULTI_AGENT_COCKPIT.md §2.2, §4). This is a DEMO scope
-// switch, NOT auth, and carries NO secrets — never a service_role key (INV-5).
+// Verified-principal auth header (B1). The login gate trades a chosen SEAT for a
+// REAL signed JWT minted by the backend's `POST /auth/demo-token`, and every
+// cockpit API call carries it as `Authorization: Bearer <token>`. The backend's
+// get_principal verifies the signature and trusts ONLY `app_metadata.role` — it
+// no longer reads any client-spelled header. This REPLACES the old spoofable
+// client-spelled role/agent principal (it could be forged by hand); the signed
+// token cannot be tampered with. The token is synthetic-data-scoped and
+// carries NO service_role secret (INV-5).
 import { loadSession } from './LoginPage';
 
-/** Build the demo-principal headers from the currently stored seat. Returns an
- *  empty object when no seat is chosen (the login gate is the only surface that
- *  renders without a seat). */
-export function demoHeaders(): Record<string, string> {
+/** Build the bearer auth header from the currently stored seat's token. Returns
+ *  an empty object when no seat (and so no token) is stored — the login gate is
+ *  the only surface that renders without a seat. An expired token is NOT scrubbed
+ *  here on purpose: it simply 401s server-side and the user re-enters via the
+ *  login gate (see B1 expiry note in LoginPage). */
+export function authHeaders(): Record<string, string> {
   const session = loadSession();
-  if (session === null) return {};
-  const headers: Record<string, string> = { 'X-Demo-Role': session.role };
-  if (session.role === 'agent' && session.agentId) {
-    headers['X-Demo-Agent-Id'] = session.agentId;
-  }
-  return headers;
+  if (session === null || !session.token) return {};
+  return { Authorization: `Bearer ${session.token}` };
 }
 
-/** A thin fetch wrapper that prefixes `apiBaseUrl` and merges the demo-principal
- *  headers onto every cockpit API call. Call as `apiFetch('/work-queue')` or
+/** A thin fetch wrapper that prefixes `apiBaseUrl` and merges the bearer auth
+ *  header onto every cockpit API call. Call as `apiFetch('/work-queue')` or
  *  `apiFetch('/seam/x/reconcile', { method: 'POST', ... })`. The resolved
  *  `(url, init)` shape matches a plain `fetch` so existing call-site behavior
- *  and tests are unchanged — this only adds the X-Demo-* headers. */
+ *  and tests are unchanged — this only adds the `Authorization: Bearer` header. */
 export function apiFetch(
   path: string,
   init?: RequestInit,
 ): Promise<Response> {
   const merged: RequestInit = {
     ...init,
-    headers: { ...demoHeaders(), ...(init?.headers ?? {}) },
+    headers: { ...authHeaders(), ...(init?.headers ?? {}) },
   };
   return fetch(`${apiBaseUrl}${path}`, merged);
 }
