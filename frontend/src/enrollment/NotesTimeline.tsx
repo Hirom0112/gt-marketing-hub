@@ -134,7 +134,7 @@ const NotesTimeline = forwardRef<NotesTimelineHandle, NotesTimelineProps>(
             marginBottom: 'var(--s-2)',
           }}
         >
-          <NotebookPen size={11} aria-hidden /> Notes — timeline (manual + auto)
+          <NotebookPen size={11} aria-hidden /> Notes · timeline (manual + auto)
         </div>
 
         {/* Add a manual note */}

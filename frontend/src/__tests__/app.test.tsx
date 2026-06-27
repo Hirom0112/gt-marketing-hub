@@ -51,7 +51,7 @@ describe('App shell', () => {
     vi.unstubAllGlobals();
   });
 
-  it('has no top bar and no page-header chrome — the sidebar is the only chrome', async () => {
+  it('has no top bar and no page-header chrome · the sidebar is the only chrome', async () => {
     await enterCockpit();
     expect(screen.queryByTestId('app-topbar')).toBeNull();
     expect(screen.queryByTestId('app-wordmark')).toBeNull();
@@ -88,7 +88,7 @@ describe('App shell', () => {
     }
   });
 
-  it('a rep (sales agent) sees ONLY Enrollment — Marketing/Leadership/Security are admin-only', () => {
+  it('a rep (sales agent) sees ONLY Enrollment · Marketing/Leadership/Security are admin-only', () => {
     // Seat a rep session directly (the admin-only surfaces must be gated out).
     localStorage.setItem(
       'gt_demo_session',

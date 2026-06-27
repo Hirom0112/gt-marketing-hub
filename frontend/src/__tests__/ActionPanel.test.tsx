@@ -19,7 +19,7 @@ const SURFACED_DRAFT = {
   proposal: {
     action: 'email',
     family_id: 'fam-a',
-    body: 'Hi Alvarez family — your MAP placement is ready to review.',
+    body: 'Hi Alvarez family · your MAP placement is ready to review.',
     claims: [{ text: 'MAP placement', source_ref: 'map_score' }],
   },
 };

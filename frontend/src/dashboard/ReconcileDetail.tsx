@@ -156,7 +156,7 @@ export default function ReconcileDetail({
             <p className="admin-kv-sub" data-testid="reconcile-detail-sis-note">
               This family paid on GT&apos;s side but isn&apos;t matched in the
               school&apos;s Student Information System yet. This is a manual-check
-              item — confirm the enrollment in the SIS, then it clears on the next
+              item · confirm the enrollment in the SIS, then it clears on the next
               reconcile. No automated write is made from here.
             </p>
             <div style={{ display: 'flex', gap: 'var(--s-2)', flexWrap: 'wrap' }}>
@@ -176,7 +176,7 @@ export default function ReconcileDetail({
                 role="status"
                 data-testid="reconcile-sis-escalated"
               >
-                Flagged for a human SIS review — confirm the enrollment in the SIS,
+                Flagged for a human SIS review · confirm the enrollment in the SIS,
                 then it clears on the next reconcile.
               </p>
             )}

@@ -211,7 +211,7 @@ export default function Scoreboard(): JSX.Element {
         </Chip>
       </div>
 
-      {/* Enrollment funnel — KPI stat strip. */}
+      {/* Enrollment funnel · KPI stat strip. */}
       <Card className="scoreboard-enrollment">
         <PanelHeading label="Enrollment funnel" title="Proposal outcomes" />
         <dl
@@ -244,7 +244,7 @@ export default function Scoreboard(): JSX.Element {
         </dl>
       </Card>
 
-      {/* Marketing / GEO — coverage vs baseline + signed lift. */}
+      {/* Marketing / GEO · coverage vs baseline + signed lift. */}
       <Card className="scoreboard-marketing">
         <PanelHeading
           label="Marketing · GEO"
@@ -324,7 +324,7 @@ export default function Scoreboard(): JSX.Element {
         </div>
       </Card>
 
-      {/* Eval status — overall badge + per-eval pass/fail rows. */}
+      {/* Eval status · overall badge + per-eval pass/fail rows. */}
       <Card className="scoreboard-evals">
         <PanelHeading
           label="Eval status"

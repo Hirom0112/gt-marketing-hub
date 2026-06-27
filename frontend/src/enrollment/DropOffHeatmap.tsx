@@ -68,7 +68,7 @@ export default function DropOffHeatmap(): JSX.Element {
       >
         <TrendingDown size={14} aria-hidden />
         <span className="lab">
-          Apply-flow drop-off — where the cohort froze (aggregate)
+          Apply-flow drop-off · where the cohort froze (aggregate)
         </span>
       </div>
 
@@ -160,7 +160,7 @@ function HeatmapRow({
         >
           {path}
         </div>
-        {/* The intensity bar — width AND tint opacity scale with the count, so
+        {/* The intensity bar · width AND tint opacity scale with the count, so
             the busiest cell reads loudest. `--i` feeds the inline calc; the
             colour channel is the signal token (no raw hex). */}
         <div

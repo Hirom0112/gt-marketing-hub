@@ -21,12 +21,12 @@ const VIEWS = [
   {
     icon: ListOrdered,
     name: 'Triage',
-    body: 'The overflow console. One scoped list (Day / Week / All), ranked by recoverable-now everywhere, with bulk actions always attached — the order to attack the wave.',
+    body: 'The overflow console. One scoped list (Day / Week / All), ranked by recoverable-now everywhere, with bulk actions always attached · the order to attack the wave.',
   },
   {
     icon: History,
     name: 'History',
-    body: 'A read-only audit lookback of what was recovered or dismissed. No bulk, no red — its calm is the "nothing to do here" cue.',
+    body: 'A read-only audit lookback of what was recovered or dismissed. No bulk, no red · its calm is the "nothing to do here" cue.',
   },
 ] as const;
 
@@ -51,7 +51,7 @@ export default function HelpWorkspace(): JSX.Element {
             </li>
             <li>
               <span className="help-model-n mono">2</span> An operator nudges or
-              captures the warm ones — single or in bulk — and the action is
+              captures the warm ones · single or in bulk · and the action is
               recorded server-side.
             </li>
             <li>
@@ -93,7 +93,7 @@ export default function HelpWorkspace(): JSX.Element {
             <p className="help-block-head">The eval gate fails closed</p>
             <p className="help-view-body">
               Every AI action is gated by a tested eval. A generated message that
-              fails the grounding and safety checks is blocked and shown — never
+              fails the grounding and safety checks is blocked and shown · never
               quietly rewritten to pass. If an eval goes red, its action is
               visibly disabled in the UI. Fail closed, by design (INV-3/INV-4).
             </p>

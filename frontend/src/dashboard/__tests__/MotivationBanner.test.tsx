@@ -52,7 +52,7 @@ describe('MotivationBanner (R6 / D-11)', () => {
     );
   });
 
-  it('persists per agent — a different agent does not see the stored quote', () => {
+  it('persists per agent · a different agent does not see the stored quote', () => {
     window.localStorage.setItem(KEY, 'Agent seven only.');
     render(<MotivationBanner agentId="agent-9" />);
     expect(screen.getByTestId('motivation-quote')).not.toHaveTextContent(

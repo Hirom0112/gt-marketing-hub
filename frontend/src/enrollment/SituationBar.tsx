@@ -42,7 +42,7 @@ export default function SituationBar({
       <div
         data-testid={meta.testId}
         className="situation-pill"
-        aria-label={`${meta.label} — situation`}
+        aria-label={`${meta.label} · situation`}
       >
         <span className="lab situation-pill-eyebrow" aria-hidden>
           {meta.label}

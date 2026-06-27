@@ -15,7 +15,7 @@ const SCORECARD = {
       label: 'AI proposals',
       this_week: 7,
       last_week: 4,
-      delta: 3, // positive — improving
+      delta: 3, // positive · improving
       sparkline: [2, 4, 4, 7],
       target: 5,
       status: 'green',
@@ -26,7 +26,7 @@ const SCORECARD = {
       label: 'Human approvals',
       this_week: 1,
       last_week: 4,
-      delta: -3, // negative — declining
+      delta: -3, // negative · declining
       sparkline: [4, 3, 2, 1],
       target: 4,
       status: 'red',
@@ -76,7 +76,7 @@ describe('WeeklyScorecard', () => {
     expect(deltas[1]!).toHaveTextContent('-3');
   });
 
-  it('reflects the status in the pill — a red metric renders the red (signal) treatment', async () => {
+  it('reflects the status in the pill · a red metric renders the red (signal) treatment', async () => {
     render(<WeeklyScorecard />);
     const rows = await screen.findAllByTestId('scorecard-row');
     // green metric → flow-wash pill; red metric → signal-wash pill.
@@ -108,7 +108,7 @@ describe('WeeklyScorecard', () => {
     expect(projections[0]!).toHaveTextContent('at this pace → 9');
   });
 
-  it('fails safe on a fetch error — a quiet notice, no crash', async () => {
+  it('fails safe on a fetch error · a quiet notice, no crash', async () => {
     apiFetchMock = mockApi(() => Promise.reject(new Error('network down')));
     render(<WeeklyScorecard />);
     await waitFor(() =>

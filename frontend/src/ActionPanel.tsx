@@ -165,7 +165,7 @@ export default function ActionPanel({
           marginBottom: 'var(--s-2)',
         }}
       >
-        <Zap size={11} aria-hidden /> Actions — generated live, eval-gated
+        <Zap size={11} aria-hidden /> Actions · generated live, eval-gated
       </div>
       <h2 style={{ position: 'absolute', width: 1, height: 1, overflow: 'hidden', clip: 'rect(0 0 0 0)' }}>
         AI actions
@@ -315,7 +315,7 @@ function FailClosedBanner({
           marginBottom: 'var(--s-1)',
         }}
       >
-        <Icon size={11} aria-hidden /> Action disabled — fail closed
+        <Icon size={11} aria-hidden /> Action disabled · fail closed
       </div>
       {children}
     </div>
@@ -489,7 +489,7 @@ function DraftResult({
           {proposal.claims.map((claim) => (
             <li key={claim.text}>
               {claim.text}
-              {claim.source_ref ? ` — ${claim.source_ref}` : ''}
+              {claim.source_ref ? ` · ${claim.source_ref}` : ''}
             </li>
           ))}
         </ul>
@@ -497,7 +497,7 @@ function DraftResult({
 
       {/* Make the eval gate VISIBLE (INV-3/INV-4): this draft only reached the
           operator because the grounding/safety gate PASSED, so "Approve" reads
-          as a safety-checked commit — not a hidden check. */}
+          as a safety-checked commit · not a hidden check. */}
       <div
         data-testid="eval-gate-passed"
         className="eval-gate-passed"
@@ -511,7 +511,7 @@ function DraftResult({
         }}
       >
         <ShieldCheck size={13} aria-hidden />
-        Grounding &amp; safety gate passed — approving commits this send.
+        Grounding &amp; safety gate passed · approving commits this send.
       </div>
 
       <div

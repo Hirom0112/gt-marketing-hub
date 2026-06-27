@@ -15,7 +15,7 @@ import { DEMO_AGENTS } from '../LoginPage';
 // The deep close-panel/draft flows moved into the shared DetailPanel/AiDrafts and
 // are covered by their own unit tests; this file asserts the shell landing only.
 
-const AGENT = DEMO_AGENTS[0]!; // Riley Carter — closer seat
+const AGENT = DEMO_AGENTS[0]!; // Riley Carter · closer seat
 const FAKE_TOKEN = 'header.payload.signature';
 
 const QUEUE_ROWS = [

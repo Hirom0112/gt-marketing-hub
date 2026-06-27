@@ -83,7 +83,7 @@ describe('BulkBar', () => {
     // The dark dock is replaced by the reasons rail.
     expect(screen.queryByTestId('bulk-bar')).toBeNull();
     expect(screen.getByTestId('bulk-bar-reasons')).toHaveTextContent(
-      'dismiss 5 — pick a reason:',
+      'dismiss 5 · pick a reason:',
     );
 
     fireEvent.click(screen.getByTestId('bulk-reason-Declined'));

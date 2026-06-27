@@ -27,7 +27,7 @@ const BOARD_PAYLOAD = {
           student_id: 'stu-alex',
           family_id: 'fam-rivera',
           household_name: 'The Rivera Family',
-          display_label: 'Rivera household — Alex · Grade 3',
+          display_label: 'Rivera household · Alex · Grade 3',
           synthetic_first_name: 'Alex',
           grade: '3',
           current_stage: 'enroll',
@@ -45,7 +45,7 @@ const BOARD_PAYLOAD = {
           student_id: 'stu-bea',
           family_id: 'fam-rivera',
           household_name: 'The Rivera Family',
-          display_label: 'Rivera household — Bea · Grade 1',
+          display_label: 'Rivera household · Bea · Grade 1',
           synthetic_first_name: 'Bea',
           grade: '1',
           current_stage: 'apply',
@@ -70,7 +70,7 @@ const BOARD_PAYLOAD = {
           student_id: 'stu-cody',
           family_id: 'fam-chen',
           household_name: 'The Chen Family',
-          display_label: 'Chen household — Cody · Grade 5',
+          display_label: 'Chen household · Cody · Grade 5',
           synthetic_first_name: 'Cody',
           grade: '5',
           current_stage: 'interest',
@@ -115,13 +115,13 @@ describe('StudentBoard', () => {
 
     // Distinct per-student labels (also de-dupes the same-surname board problem).
     expect(
-      screen.getByText('Rivera household — Alex · Grade 3'),
+      screen.getByText('Rivera household · Alex · Grade 3'),
     ).toBeInTheDocument();
     expect(
-      screen.getByText('Rivera household — Bea · Grade 1'),
+      screen.getByText('Rivera household · Bea · Grade 1'),
     ).toBeInTheDocument();
     expect(
-      screen.getByText('Chen household — Cody · Grade 5'),
+      screen.getByText('Chen household · Cody · Grade 5'),
     ).toBeInTheDocument();
 
     // Rivera's two children render in the received order (Alex before Bea).

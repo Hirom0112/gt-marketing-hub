@@ -16,7 +16,7 @@ import { Button } from '../ui';
 const QUOTES: readonly string[] = [
   'Every call is a chance to change a family’s year.',
   'Small steps, taken daily, close big gaps.',
-  'You don’t have to be perfect — just present.',
+  'You don’t have to be perfect · just present.',
   'The next yes is closer than it feels.',
   'Follow up like it matters, because it does.',
   'Steady beats frantic. Work the list.',

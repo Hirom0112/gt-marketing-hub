@@ -91,7 +91,7 @@ export default function AdminDashboard(): JSX.Element {
 
   return (
     <section data-testid="admin-dashboard" aria-label="Admin dashboard">
-      {/* Cross-module data-confidence banner (A4) — renders only when CRM↔cockpit
+      {/* Cross-module data-confidence banner (A4) · renders only when CRM↔cockpit
           parity has dropped below the trusted threshold; otherwise nothing. */}
       <DataConfidenceBanner />
       <DashboardLayout

@@ -985,7 +985,7 @@ export default function DealView({
         </div>
       </div>
 
-      {/* Who to call — the household's primary contact person + click-to-dial,
+      {/* Who to call · the household's primary contact person + click-to-dial,
           so "The Rivera Family" becomes an actionable lead on the phone. */}
       <ContactBar contact={state.contact} />
 
@@ -1022,7 +1022,7 @@ export default function DealView({
         </div>
       </div>
 
-      {/* Where they left off — application completion + form progress (FR-2.2;
+      {/* Where they left off · application completion + form progress (FR-2.2;
           S9 Wave 4). Rendered only when the family has application/form data. */}
       {(deal.completion_pct != null || deal.forms_total != null) && (
         <div
@@ -1074,13 +1074,13 @@ export default function DealView({
         </div>
       )}
 
-      {/* Per-child progress (DH-5) — WHICH children this family has and where
+      {/* Per-child progress (DH-5) · WHICH children this family has and where
           EACH left off in the funnel. A single-child family shows its one child;
           a multi-child household (e.g. the Riveras) shows BOTH at their own
           (possibly different) stages. Sourced from GET /students (A-24). */}
       <ChildrenSection children={children} />
 
-      {/* Assignment-history timeline (LA-23) — the per-family ownership audit:
+      {/* Assignment-history timeline (LA-23) · the per-family ownership audit:
           every assign / reassign as an append-only from→to/reason fact. Omitted
           when the family has no history (an un-routed interest lead). */}
       <AssignmentTimeline events={assignments} names={agentNames} />
@@ -1104,7 +1104,7 @@ export default function DealView({
           score={deal.conversion_score ?? null}
           topFactorLabel={deal.conversion_top_factor_label ?? null}
         />
-        {/* Attribution + CRM seam are admin/marketing chrome — hidden for the rep
+        {/* Attribution + CRM seam are admin/marketing chrome · hidden for the rep
             lens (A-35: a rep closes deals, they don't reconcile the CRM seam). */}
         {!repView && (
           <DealField
@@ -1124,17 +1124,17 @@ export default function DealView({
         )}
       </dl>
 
-      {/* CRM seam indicator (S14 W4) — surfaces the HubSpot kill switch / CRM mode
+      {/* CRM seam indicator (S14 W4) · surfaces the HubSpot kill switch / CRM mode
           so the operator can SEE the seam state and the live-push fails closed when
           the kill switch is on (INV-3 pattern; INV-8). NO secret is shown. Admin
-          chrome — hidden for the rep lens (A-35). */}
+          chrome · hidden for the rep lens (A-35). */}
       {!repView && <CrmSeamBadge crm={crm} />}
 
-      {/* "Seed to HubSpot" (S10 W3) — push this synthetic family live into the
+      {/* "Seed to HubSpot" (S10 W3) · push this synthetic family live into the
           real portal, then surface the captured Deal + Contact ids as deep links.
           The deterministic backend route owns the write (INV-2); this button only
           triggers it and renders the proof. The live-push FAILS CLOSED when the
-          HubSpot kill switch is on (S14 W4; INV-8) — disabled with a reason. */}
+          HubSpot kill switch is on (S14 W4; INV-8) · disabled with a reason. */}
       <div
         style={{
           marginTop: 'var(--s-3)',
@@ -1144,7 +1144,7 @@ export default function DealView({
           flexWrap: 'wrap',
         }}
       >
-        {/* Seed-to-HubSpot is an admin/CRM-ops action — hidden for the rep lens
+        {/* Seed-to-HubSpot is an admin/CRM-ops action · hidden for the rep lens
             (A-35); the rep's actions (dismiss + log-outcome) stay. */}
         {!repView && (
           <>
@@ -1156,7 +1156,7 @@ export default function DealView({
               disabled={seed.status === 'seeding' || killSwitchOn}
               title={
                 killSwitchOn
-                  ? 'HubSpot kill switch is ON — live sync is disabled (INV-8). Clear HUBSPOT_KILL_SWITCH to re-enable.'
+                  ? 'HubSpot kill switch is ON · live sync is disabled (INV-8). Clear HUBSPOT_KILL_SWITCH to re-enable.'
                   : undefined
               }
             >
@@ -1168,7 +1168,7 @@ export default function DealView({
                 role="status"
                 style={{ fontSize: 'var(--fs-sm)', color: 'var(--signal-ink)' }}
               >
-                Kill switch ON — live sync disabled
+                Kill switch ON · live sync disabled
               </span>
             )}
             {seed.status === 'error' && (
@@ -1182,10 +1182,10 @@ export default function DealView({
             )}
           </>
         )}
-        {/* Dismiss this family (S12 W4; A-19) — an audited remove from the active
+        {/* Dismiss this family (S12 W4; A-19) · an audited remove from the active
             board. The WRITE is the parent's (one route); this only opens the
             reason picker and calls back. Hidden once already closed out (dismissed/
-            recovered/lost/dormant — A-35: no point dismissing a parked family). */}
+            recovered/lost/dormant · A-35: no point dismissing a parked family). */}
         {onDismiss !== undefined &&
           dismissReasons !== undefined &&
           deal.recovery_state !== 'dismissed' &&
@@ -1268,7 +1268,7 @@ export default function DealView({
         <CapturePanel data={seed.data} />
       )}
 
-      {/* Rep close-loop (A-35) — "log a call outcome" + the confirm-presumed-lost
+      {/* Rep close-loop (A-35) · "log a call outcome" + the confirm-presumed-lost
           gate. Hidden once a family is closed out (won/dismissed/lost/dormant): no
           point logging a call on a parked family. The writes are direct POSTs of
           append-only spine events (INV-2); confirm-lost only shows for a
@@ -1287,12 +1287,12 @@ export default function DealView({
           <div className="lab" style={{ marginBottom: 'var(--s-2)' }}>
             Log a call outcome
           </div>
-          {/* The shared contact-outcome form (enrollment/LogCallForm) — the SAME
+          {/* The shared contact-outcome form (enrollment/LogCallForm) · the SAME
               implementation the dashboard DetailPanel mounts. On a successful write
               it re-fetches this deal_view + notifies the parent (onChanged). */}
           <LogCallForm familyId={familyId} onLogged={onOutcomeLogged} />
 
-          {/* The human-confirm gate — only for a SURFACED presumed-lost family. */}
+          {/* The human-confirm gate · only for a SURFACED presumed-lost family. */}
           {deal.recovery_state === 'presumed_lost' && (
             <div style={{ marginTop: 'var(--s-2)' }}>
               {!confirmingLost ? (
@@ -1395,9 +1395,9 @@ function CrmSeamBadge({ crm }: { crm: CrmStatus | null }): JSX.Element | null {
         >
           <Chip
             tone="signal"
-            title="HubSpot kill switch is ON — live writes are disabled (INV-8)."
+            title="HubSpot kill switch is ON · live writes are disabled (INV-8)."
           >
-            Kill switch ON — live sync disabled
+            Kill switch ON · live sync disabled
           </Chip>
         </span>
       </div>
@@ -1414,8 +1414,8 @@ function CrmSeamBadge({ crm }: { crm: CrmStatus | null }): JSX.Element | null {
           tone={live ? 'flow' : 'neutral'}
           title={
             live
-              ? 'CRM seam is LIVE — synthetic pushes land in the real HubSpot portal.'
-              : 'CRM seam is simulated — pushes are recorded, never sent (INV-9).'
+              ? 'CRM seam is LIVE · synthetic pushes land in the real HubSpot portal.'
+              : 'CRM seam is simulated · pushes are recorded, never sent (INV-9).'
           }
         >
           {live ? 'CRM: LIVE' : 'CRM: Simulated'}

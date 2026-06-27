@@ -215,7 +215,7 @@ const STUDENT_BOARD = {
           student_id: 'stu-alex',
           family_id: 'fam-123',
           household_name: 'The Rivera Family',
-          display_label: 'Rivera household — Alex · Grade 3',
+          display_label: 'Rivera household · Alex · Grade 3',
           synthetic_first_name: 'Alex',
           grade: '3',
           current_stage: 'enroll',
@@ -231,7 +231,7 @@ const STUDENT_BOARD = {
           student_id: 'stu-mia',
           family_id: 'fam-123',
           household_name: 'The Rivera Family',
-          display_label: 'Rivera household — Mia · Grade 1',
+          display_label: 'Rivera household · Mia · Grade 1',
           synthetic_first_name: 'Mia',
           grade: '1',
           current_stage: 'tuition',
@@ -254,7 +254,7 @@ const STUDENT_BOARD = {
           student_id: 'stu-other',
           family_id: 'fam-OTHER',
           household_name: 'The Vance Family',
-          display_label: 'Vance household — Sam · Grade 5',
+          display_label: 'Vance household · Sam · Grade 5',
           synthetic_first_name: 'Sam',
           grade: '5',
           current_stage: 'apply',
@@ -286,7 +286,7 @@ function mockChildrenFetch(family: unknown = ENROLLED_PAYLOAD): void {
   );
 }
 
-describe('DealView — DH-5 per-child progress', () => {
+describe('DealView · DH-5 per-child progress', () => {
   afterEach(() => {
     vi.unstubAllGlobals();
     vi.restoreAllMocks();
@@ -357,7 +357,7 @@ function mockSeedFetch(): ReturnType<typeof vi.fn> {
   return fn as unknown as ReturnType<typeof vi.fn>;
 }
 
-describe('DealView — Seed to HubSpot capture panel', () => {
+describe('DealView · Seed to HubSpot capture panel', () => {
   afterEach(() => {
     vi.unstubAllGlobals();
     vi.restoreAllMocks();
@@ -422,7 +422,7 @@ const STALLED_PAYLOAD = {
   app_form: {},
 };
 
-describe('DealView — S12 W4 work-panel', () => {
+describe('DealView · S12 W4 work-panel', () => {
   afterEach(() => {
     vi.unstubAllGlobals();
     vi.restoreAllMocks();
@@ -536,7 +536,7 @@ function closeLoopFetch(state: string): ReturnType<typeof vi.fn> {
   });
 }
 
-describe('DealView — rep close-loop write UI', () => {
+describe('DealView · rep close-loop write UI', () => {
   afterEach(() => {
     vi.unstubAllGlobals();
     vi.restoreAllMocks();
@@ -614,7 +614,7 @@ describe('DealView — rep close-loop write UI', () => {
 // rep's own log-outcome + dismiss actions). The default (admin) keeps everything.
 // --------------------------------------------------------------------------- #
 
-describe('DealView — rep variant chrome cut', () => {
+describe('DealView · rep variant chrome cut', () => {
   afterEach(() => {
     vi.unstubAllGlobals();
     vi.restoreAllMocks();
@@ -681,7 +681,7 @@ function mockCrmFetch(
   return fn as unknown as ReturnType<typeof vi.fn>;
 }
 
-describe('DealView — S14 W4 CRM seam badge + kill switch', () => {
+describe('DealView · S14 W4 CRM seam badge + kill switch', () => {
   afterEach(() => {
     vi.unstubAllGlobals();
     vi.restoreAllMocks();
@@ -703,11 +703,11 @@ describe('DealView — S14 W4 CRM seam badge + kill switch', () => {
     // …with an operator-facing reason.
     expect(
       await screen.findByTestId('seed-kill-switch-note'),
-    ).toHaveTextContent('Kill switch ON — live sync disabled');
+    ).toHaveTextContent('Kill switch ON · live sync disabled');
     // …and the seam badge reads the kill-switch state.
     expect(await screen.findByTestId('crm-seam-badge')).toBeInTheDocument();
     expect(screen.getByTestId('crm-seam-state')).toHaveTextContent(
-      'Kill switch ON — live sync disabled',
+      'Kill switch ON · live sync disabled',
     );
   });
 
@@ -857,7 +857,7 @@ function mockHistoryFetch(history: unknown = ASSIGNMENT_HISTORY): void {
   );
 }
 
-describe('DealView — LA-23 assignment history', () => {
+describe('DealView · LA-23 assignment history', () => {
   afterEach(() => {
     vi.unstubAllGlobals();
     vi.restoreAllMocks();
@@ -921,7 +921,7 @@ const CONTACT_PAYLOAD = {
   },
 };
 
-describe('DealView — contact bar (who to call)', () => {
+describe('DealView · contact bar (who to call)', () => {
   afterEach(() => {
     vi.unstubAllGlobals();
     vi.restoreAllMocks();

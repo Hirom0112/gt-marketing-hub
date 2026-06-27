@@ -293,7 +293,7 @@ export default function ContentWorkspace(): JSX.Element {
         </h2>
       </header>
 
-      {/* Slice B: the campaign batch creator — sits ABOVE the free-text generator. */}
+      {/* Slice B: the campaign batch creator · sits ABOVE the free-text generator. */}
       <CampaignCreator
         theme={campaignTheme}
         channel={campaignChannel}
@@ -314,7 +314,7 @@ export default function ContentWorkspace(): JSX.Element {
       {/* The generator prompt + the staged-pipeline chip row. */}
       <Card style={{ display: 'grid', gap: 'var(--s-3)' }}>
         <p className="lab" style={{ margin: 0 }}>
-          Tell the generator what you want — generate many, keep the good ones
+          Tell the generator what you want · generate many, keep the good ones
         </p>
         <textarea
           data-testid="content-prompt"
@@ -746,7 +746,7 @@ function SurfacedCandidate({
                 decision === 'approve' ? 'var(--flow-ink)' : 'var(--muted)',
             }}
           >
-            {decision === 'approve' ? '✓ Kept — added to library' : 'Discarded'}
+            {decision === 'approve' ? '✓ Kept · added to library' : 'Discarded'}
           </p>
         ) : (
           <div
@@ -807,7 +807,7 @@ function BlockedCandidate({
           }}
         >
           <Ban size={15} aria-hidden style={{ flexShrink: 0 }} />
-          Blocked by the content gate — cannot be kept
+          Blocked by the content gate · cannot be kept
         </div>
         {candidate.failed_rules.length > 0 && (
           <ul
@@ -966,11 +966,11 @@ function LibraryPanel({
           Library
         </h3>
         <span className="lab" style={{ marginLeft: 'auto' }}>
-          GT's proven, on-brand copy — search and reuse
+          GT's proven, on-brand copy · search and reuse
         </span>
       </div>
 
-      {/* Search the kept archive (FR-3.4 — ?q= over title/body/tags). */}
+      {/* Search the kept archive (FR-3.4 · ?q= over title/body/tags). */}
       <div
         style={{
           display: 'flex',
@@ -988,7 +988,7 @@ function LibraryPanel({
           aria-label="Search the content library"
           value={query}
           onChange={(e) => onQueryChange(e.target.value)}
-          placeholder="Search proven copy — e.g. gifted, TEFA, socialization…"
+          placeholder="Search proven copy · e.g. gifted, TEFA, socialization…"
           style={{
             flex: 1,
             border: 'none',
@@ -1001,7 +1001,7 @@ function LibraryPanel({
         />
       </div>
 
-      {/* Segment control — Social posts / Blog & resources / Website pages. */}
+      {/* Segment control · Social posts / Blog & resources / Website pages. */}
       <div
         role="tablist"
         aria-label="Library segments"

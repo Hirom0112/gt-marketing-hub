@@ -141,7 +141,7 @@ export default function PostedGallery(): JSX.Element {
           Posted gallery
         </h3>
         <span className="lab" style={{ marginLeft: 'auto' }}>
-          Every post we made — by platform, ranked
+          Every post we made · by platform, ranked
         </span>
       </div>
 
@@ -279,7 +279,7 @@ function PlatformPosts({
           <strong style={{ fontSize: 'var(--fs-sm)' }}>{platformLabel(platform)}</strong>
         </span>
 
-        {/* Sort toggle — Most valuable / Most recent (re-fetches with ?sort=). */}
+        {/* Sort toggle · Most valuable / Most recent (re-fetches with ?sort=). */}
         <div
           role="group"
           aria-label="Sort posts"
@@ -402,7 +402,7 @@ function PostCard({ post }: { post: PostItem }): JSX.Element {
         flexDirection: 'column',
       }}
     >
-      {/* The real posted media — a <video controls> for video, else an <img>. */}
+      {/* The real posted media · a <video controls> for video, else an <img>. */}
       {isVideo ? (
         <video
           data-testid={`gallery-post-media-${post.id}`}

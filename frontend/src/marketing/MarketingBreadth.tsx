@@ -439,7 +439,7 @@ function SentimentPanel(): JSX.Element {
         </div>
       )}
       {/* OUT-5: surface the seeded placeholder records (excerpt + topic +
-          sentiment + channel) — context behind the summary tiles. The
+          sentiment + channel) · context behind the summary tiles. The
           placeholder source badge above says this is not a live feed. */}
       {state.status === 'ready' && (state.data.records ?? []).length > 0 && (
         <ul
@@ -719,7 +719,7 @@ function PipelinePanel(): JSX.Element {
                 fontWeight: 600,
               }}
             >
-              <Ban size={13} aria-hidden /> Blocked — {advance.reason}
+              <Ban size={13} aria-hidden /> Blocked · {advance.reason}
             </span>
           )}
         </div>
@@ -872,7 +872,7 @@ function ScheduledPostRow({ post }: { post: ScheduledPost }): JSX.Element {
       >
         {post.scheduled_for}
       </span>
-      {/* OUT-2: every v1 dispatch is simulated — badge it. */}
+      {/* OUT-2: every v1 dispatch is simulated · badge it. */}
       <span
         className="badge badge-simulated"
         data-testid={`schedule-mode-${post.id}`}
@@ -895,13 +895,13 @@ function ScheduledPostRow({ post }: { post: ScheduledPost }): JSX.Element {
             fontWeight: 600,
           }}
         >
-          <Ban size={13} aria-hidden /> Blocked — not dispatched
+          <Ban size={13} aria-hidden /> Blocked · not dispatched
         </span>
       ) : (
         <span className="schedule-status" data-testid={`schedule-status-${post.id}`}>
           <Chip tone={post.dispatch_status === 'simulated_sent' ? 'flow' : 'neutral'}>
             {post.dispatch_status === 'simulated_sent'
-              ? `Simulated sent${post.simulated_result ? ` — ${post.simulated_result}` : ''}`
+              ? `Simulated sent${post.simulated_result ? ` · ${post.simulated_result}` : ''}`
               : 'Queued'}
           </Chip>
         </span>
@@ -928,7 +928,7 @@ function GeoTargetingPanel(): JSX.Element {
           className="badge badge-aggregate"
           data-testid="geo-targeting-aggregate-badge"
         >
-          <Chip tone="flow">Aggregate-only — no child-keyed targeting</Chip>
+          <Chip tone="flow">Aggregate-only · no child-keyed targeting</Chip>
         </span>
       }
     >

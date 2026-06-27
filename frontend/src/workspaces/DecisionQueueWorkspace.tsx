@@ -39,7 +39,7 @@ type DecisionAction = 'approve' | 'reject' | 'need_info';
 
 type LoadState =
   | { status: 'loading' }
-  | { status: 'forbidden' } // 403 — leader/admin only
+  | { status: 'forbidden' } // 403 · leader/admin only
   | { status: 'error'; message: string }
   | { status: 'ready'; decisions: Decision[] };
 
@@ -73,7 +73,7 @@ export default function DecisionQueueWorkspace({
         return res.json() as Promise<Decision[]>;
       })
       .then((data) => {
-        if (data === null) return; // forbidden — already handled
+        if (data === null) return; // forbidden · already handled
         setState({ status: 'ready', decisions: data });
       })
       .catch((err: unknown) => {
@@ -203,7 +203,7 @@ function QueueHeader({ count }: { count: number | null }): JSX.Element {
       {count !== null && (
         <span data-testid="decision-open-count" style={{ color: 'var(--ink)' }}>
           {' '}
-          — {count} open
+          · {count} open
         </span>
       )}
     </div>
@@ -303,8 +303,8 @@ function SourceBadge({ dataSource }: { dataSource: 'live' | 'seeded' }): JSX.Ele
         tone={live ? 'flow' : 'gate'}
         title={
           live
-            ? 'Live OpenData — the query hit the real Texas Open Data portal.'
-            : 'Seeded — the signal came from the synthetic seed, not a live drain (INV-9).'
+            ? 'Live OpenData · the query hit the real Texas Open Data portal.'
+            : 'Seeded · the signal came from the synthetic seed, not a live drain (INV-9).'
         }
       >
         {live ? (
@@ -470,7 +470,7 @@ function OpenDataTrigger({ onChanged }: { onChanged: () => void }): JSX.Element 
         };
         if (data.recommendation_changed) {
           setTrigger({ status: 'changed', result });
-          onChanged(); // refresh the queue — the new card appears
+          onChanged(); // refresh the queue · the new card appears
         } else {
           setTrigger({ status: 'unchanged', result });
         }
@@ -541,7 +541,7 @@ function OpenDataTrigger({ onChanged }: { onChanged: () => void }): JSX.Element 
           data-testid="open-data-no-change"
           style={{ margin: 'var(--s-2) 0 0', fontSize: 'var(--fs-sm)', color: 'var(--muted)' }}
         >
-          No change — district {trigger.result.district_id} is well-rated.{' '}
+          No change · district {trigger.result.district_id} is well-rated.{' '}
           <SourceBadge dataSource={trigger.result.data_source} />
         </p>
       )}
@@ -748,7 +748,7 @@ export function useOpenDecisionCount(
     apiFetch('/decisions')
       .then((res) => (res.ok ? (res.json() as Promise<Decision[]>) : null))
       .then((data) => {
-        if (data === null) return; // 403 / non-OK — leave the count as-is
+        if (data === null) return; // 403 / non-OK · leave the count as-is
         setCount(data.filter((d) => d.state === 'open').length);
       })
       .catch(() => {

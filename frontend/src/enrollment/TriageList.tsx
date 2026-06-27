@@ -400,7 +400,7 @@ export default function TriageList({
     <section aria-label="Triage list" data-testid="triage-list">
       <Card pad={false}>
         <div className="triage-head" data-testid="triage-head">
-          {/* Tier 1 — the loud readout. */}
+          {/* Tier 1 · the loud readout. */}
           <div className="triage-head-readout" data-testid="triage-banner">
             <span
               className="triage-readout-money"
@@ -417,7 +417,7 @@ export default function TriageList({
             </span>
           </div>
 
-          {/* Tier 2 — the quiet control cluster. */}
+          {/* Tier 2 · the quiet control cluster. */}
           <div className="triage-controls">
             {adminFilter && (
               <>

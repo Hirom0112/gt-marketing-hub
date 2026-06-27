@@ -7,7 +7,7 @@ import { Button } from '../Button';
 // button that lives on a dark dock: transparent fill, white text, faint white
 // border). Both resolve through tokens — no raw hex except the on-ink hairline.
 
-describe('Button — cockpit variants', () => {
+describe('Button · cockpit variants', () => {
   it('flow renders the teal primary fill from tokens', () => {
     render(<Button variant="flow">Capture all</Button>);
     const btn = screen.getByRole('button', { name: 'Capture all' });

@@ -27,7 +27,7 @@ import { Button, Card, Chip, Stat } from '../ui';
 // GET /geo and POST /geo/sample response (matches the backend GEO endpoints).
 interface GeoTrackingView {
   coverage_mean: number; // 0.0..1.0
-  baseline: number; // 0.0 — the 0% baseline GT starts from
+  baseline: number; // 0.0 · the 0% baseline GT starts from
   lift: number; // coverage_mean - baseline
   variance: number;
   sample_count: number;
@@ -37,7 +37,7 @@ interface GeoTrackingView {
   engine: string;
   // GT-vs-competitor citation share (FR-3.7; growth-strategy Bet 3): GT ≈ 3% vs
   // competitors ≈ 50%. The ~3%-vs-~50% leadership view rendered as share bars.
-  gt_citation_share?: number; // 0.0..1.0 — GT's own slice of cited domains
+  gt_citation_share?: number; // 0.0..1.0 · GT's own slice of cited domains
   competitor_citation_share?: Record<string, number>; // domain → 0.0..1.0
 }
 
@@ -252,7 +252,7 @@ export default function GeoBoard(): JSX.Element {
       >
         <Globe size={16} aria-hidden style={{ color: 'var(--flow)' }} />
         <h2 style={{ fontSize: 'var(--fs-lg)', fontWeight: 700, margin: 0 }}>
-          GEO — generative engine coverage
+          GEO · generative engine coverage
         </h2>
         <span style={{ marginLeft: 'auto' }}>
           <Chip tone={evalGreen ? 'flow' : 'signal'}>
@@ -265,7 +265,7 @@ export default function GeoBoard(): JSX.Element {
         Coverage measured against the 0% baseline GT starts from
       </p>
 
-      {/* Metric strip — the headline GEO figures as big mono Stats. */}
+      {/* Metric strip · the headline GEO figures as big mono Stats. */}
       <div
         style={{
           display: 'grid',
@@ -303,13 +303,13 @@ export default function GeoBoard(): JSX.Element {
         </Card>
       </div>
 
-      {/* GT-vs-competitor citation share — the ~3%-GT vs ~50%-competitor
+      {/* GT-vs-competitor citation share · the ~3%-GT vs ~50%-competitor
           leadership view (growth-strategy Bet 3). GT's own bar first, then the
           gifted-school competitors high→low; the gap is the whole point. */}
       {hasShare && (
         <Card>
           <p className="lab" style={{ margin: 0 }}>
-            Citation share — who AI-search cites for these prompts
+            Citation share · who AI-search cites for these prompts
           </p>
           <div
             data-testid="geo-share-bars"
@@ -368,7 +368,7 @@ export default function GeoBoard(): JSX.Element {
               fontSize: 'var(--fs-sm)',
             }}
           >
-            <strong>Insufficient samples</strong> — the CI is widened; this is
+            <strong>Insufficient samples</strong> · the CI is widened; this is
             not a point estimate. Run more sampling before trusting the coverage
             figure.
           </div>
@@ -426,7 +426,7 @@ export default function GeoBoard(): JSX.Element {
               the failing rules show (fail-closed, INV-4). */}
           <Card style={{ display: 'grid', gap: 'var(--s-3)' }}>
             <p className="lab" style={{ margin: 0 }}>
-              Generate content to win a prompt — publishes, re-samples, moves coverage
+              Generate content to win a prompt · publishes, re-samples, moves coverage
             </p>
             <div style={{ display: 'flex', gap: 'var(--s-2)', flexWrap: 'wrap' }}>
               <input
@@ -472,7 +472,7 @@ export default function GeoBoard(): JSX.Element {
                 >
                   <Ban size={15} aria-hidden style={{ flexShrink: 0, marginTop: 2 }} />
                   <span>
-                    Blocked by the grounding gate — not published:{' '}
+                    Blocked by the grounding gate · not published:{' '}
                     <strong>{genResult.failed_rules.join(', ') || 'failed validation'}</strong>
                   </span>
                 </div>
@@ -482,7 +482,7 @@ export default function GeoBoard(): JSX.Element {
                   role="status"
                   style={{ color: 'var(--flow-ink)', fontSize: 'var(--fs-sm)' }}
                 >
-                  ✓ Published “{genResult.prompt}” — re-sampled; coverage{' '}
+                  ✓ Published “{genResult.prompt}” · re-sampled; coverage{' '}
                   {pct(geo.coverage_mean)}, lift {signedPct(geo.lift)}
                 </div>
               ) : null)}
@@ -521,7 +521,7 @@ export default function GeoBoard(): JSX.Element {
           >
             <Lock size={15} aria-hidden style={{ flexShrink: 0, marginTop: 2 }} />
             <span>
-              The GEO eval is <strong>red</strong> — the generate-to-win action
+              The GEO eval is <strong>red</strong> · the generate-to-win action
               is disabled until the eval passes. Coverage cannot be acted on
               while the eval gate is failing (fail closed).
             </span>

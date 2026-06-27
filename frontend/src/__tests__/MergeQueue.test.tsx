@@ -22,7 +22,7 @@ const CANDIDATES = [
     duplicate_family_id: 'fam-b',
     matched_on: ['email', 'region'],
     conflicting_keys: ['phone'],
-    summary: 'Same email + region, phones differ — review before merging.',
+    summary: 'Same email + region, phones differ · review before merging.',
   },
   {
     proposal_id: 'prop-2',
@@ -31,7 +31,7 @@ const CANDIDATES = [
     duplicate_family_id: 'fam-d',
     matched_on: ['phone'],
     conflicting_keys: ['email'],
-    summary: 'Shared phone, emails differ — ambiguous, review before merging.',
+    summary: 'Shared phone, emails differ · ambiguous, review before merging.',
   },
 ];
 
@@ -80,7 +80,7 @@ describe('MergeQueue', () => {
     expect(first).toHaveTextContent(/email/);
     expect(first).toHaveTextContent(/phone/);
     expect(first).toHaveTextContent(
-      'Same email + region, phones differ — review before merging.',
+      'Same email + region, phones differ · review before merging.',
     );
   });
 

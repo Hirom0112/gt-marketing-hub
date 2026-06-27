@@ -8,7 +8,7 @@ import { recencyClass } from '../recency';
 // red (overdue), light-green (followed_up), neutral (closed). This asserts the
 // correct tone class is applied per status (the tints themselves are tokens).
 
-describe('RecencyChip — contact color system', () => {
+describe('RecencyChip · contact color system', () => {
   it('applies the correct tone class per status', () => {
     const cases = [
       ['fresh', 'recency-fresh'],

@@ -143,7 +143,7 @@ export default function MergeQueue(): JSX.Element {
             fontWeight: 'normal',
           }}
         >
-          <GitMerge size={11} aria-hidden /> Merge queue — human review (never
+          <GitMerge size={11} aria-hidden /> Merge queue · human review (never
           auto-merge)
         </h2>
       </div>
@@ -248,7 +248,7 @@ export default function MergeQueue(): JSX.Element {
                       icon={Check}
                       variant="flow"
                       data-testid={`merge-approve-${c.proposal_id}`}
-                      title="Approve the merge — fold the duplicate into the primary (logged)"
+                      title="Approve the merge · fold the duplicate into the primary (logged)"
                       onClick={() => decide(c.proposal_id, 'approve')}
                     >
                       Approve
@@ -256,7 +256,7 @@ export default function MergeQueue(): JSX.Element {
                     <Button
                       icon={X}
                       data-testid={`merge-reject-${c.proposal_id}`}
-                      title="Reject — keep the households separate (logged)"
+                      title="Reject · keep the households separate (logged)"
                       onClick={() => decide(c.proposal_id, 'discard')}
                     >
                       Reject

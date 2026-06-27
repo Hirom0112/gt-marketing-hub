@@ -6,7 +6,7 @@ import { Stat } from '../Stat';
 // bar: a 4px track (--line-2) with a --flow fill at width:pct% — the leadership
 // KPI's share-of-funnel rail. Omitted by default; clamped 0–100.
 
-describe('Stat — funnel-share bar', () => {
+describe('Stat · funnel-share bar', () => {
   it('omits the bar when barPct is undefined', () => {
     render(<Stat label="Interest" value={42} />);
     expect(screen.queryByTestId('stat-bar')).toBeNull();

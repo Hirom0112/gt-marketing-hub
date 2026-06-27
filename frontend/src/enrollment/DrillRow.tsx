@@ -146,7 +146,7 @@ export default function DrillRow({
           {stuckStep}
           {funding ? <span className="drill-funding"> · {funding}</span> : null}
         </small>
-        {/* The magnitude bar — likelihood relative to the rest of the scope. */}
+        {/* The magnitude bar · likelihood relative to the rest of the scope. */}
         <span
           className="drill-bar-track"
           data-testid={`drill-row-bar-${familyId}`}

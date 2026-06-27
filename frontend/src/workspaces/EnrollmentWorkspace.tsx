@@ -403,7 +403,7 @@ export default function EnrollmentWorkspace(): JSX.Element {
           onDismiss={dismissOne}
           onChanged={handleActionApproved}
         />
-        {/* Apply-flow drop-off telemetry (S15 W2) — the last step before exit,
+        {/* Apply-flow drop-off telemetry (S15 W2) · the last step before exit,
             metadata only (INV-1/INV-6). Degrades cleanly on 204 / no telemetry. */}
         <DropOffPanel familyId={selectedFamilyId} />
         <div className="work-panel-rule" aria-hidden />
@@ -460,16 +460,16 @@ export default function EnrollmentWorkspace(): JSX.Element {
 
   const findHeadTitle =
     leftView === 'calendar'
-      ? 'Attribution calendar — intake by day, per-agent share + unowned alarm'
+      ? 'Attribution calendar · intake by day, per-agent share + unowned alarm'
       : leftView === 'triage'
-        ? 'Triage — recover in priority order, the order to attack the wave'
+        ? 'Triage · recover in priority order, the order to attack the wave'
         : leftView === 'intake'
-          ? 'Intake · Unassigned — route the unowned pool to an agent'
+          ? 'Intake · Unassigned · route the unowned pool to an agent'
           : leftView === 'students'
-            ? 'Students — one application per child, grouped by household'
+            ? 'Students · one application per child, grouped by household'
             : leftView === 'reconcile'
-              ? 'Reconcile — one row per household, where the pipeline disagrees with itself'
-              : 'History — recovered & dismissed (read-only audit)';
+              ? 'Reconcile · one row per household, where the pipeline disagrees with itself'
+              : 'History · recovered & dismissed (read-only audit)';
 
   // Picking an agent in the roster slices the working list to that agent and
   // jumps to the Triage view (the working surface); "everyone" clears the slice.
@@ -482,7 +482,7 @@ export default function EnrollmentWorkspace(): JSX.Element {
     <section aria-label="Enrollment workspace" className="enrollment-workspace">
       {recoveryRows !== null && <SituationBar rows={recoveryRows} />}
 
-      {/* The admin per-agent roster — queue / stall% / close% / load + the
+      {/* The admin per-agent roster · queue / stall% / close% / load + the
           unowned bucket. Clicking a row slices the working list to that agent. */}
       <AgentRoster
         activeAgentId={ownerFilter}
@@ -490,9 +490,9 @@ export default function EnrollmentWorkspace(): JSX.Element {
         refreshKey={queueRefresh}
       />
 
-      {/* M5 — the admin SIS reconcile roll-up (🔴 Assign / 🟡 Propose / ⚪ merge
+      {/* M5 · the admin SIS reconcile roll-up (🔴 Assign / 🟡 Propose / ⚪ merge
           queue). Read-only GET; action firing routes through M4 / the decision
-          spine — the panel never writes directly (INV-2/INV-4). */}
+          spine · the panel never writes directly (INV-2/INV-4). */}
       <SisBucketsPanel refreshKey={queueRefresh} />
 
       <div className="operator-grid">

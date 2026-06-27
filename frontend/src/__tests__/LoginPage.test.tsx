@@ -81,8 +81,8 @@ describe('Demo login gate', () => {
     const select = screen.getByTestId('login-agent-select') as HTMLSelectElement;
     const options = Array.from(select.options).map((o) => o.textContent);
     expect(options).toEqual([
-      'Riley Carter — Closer',
-      'Jordan Avery — Setter',
+      'Riley Carter · Closer',
+      'Jordan Avery · Setter',
     ]);
     // The visible tier badge reflects the (default first) selected agent.
     expect(screen.getByTestId('login-tier-badge')).toHaveTextContent('Closer');

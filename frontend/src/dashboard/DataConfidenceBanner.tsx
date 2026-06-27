@@ -70,7 +70,7 @@ export default function DataConfidenceBanner(): JSX.Element | null {
       <span style={{ flex: 1, minWidth: 0 }}>
         CRM↔cockpit sync parity has dropped to{' '}
         <strong data-testid="data-confidence-parity">{parityPct}%</strong>, below
-        the trusted threshold — figures may be stale until the seam reconciles.
+        the trusted threshold · figures may be stale until the seam reconciles.
       </span>
     </div>
   );

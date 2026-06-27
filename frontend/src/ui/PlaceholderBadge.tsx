@@ -13,7 +13,7 @@ export function PlaceholderBadge({
   return (
     <span
       className="mono"
-      title="Simulated surface — not a live integration (INV-9)"
+      title="Simulated surface · not a live integration (INV-9)"
       style={{
         display: 'inline-flex',
         alignItems: 'center',

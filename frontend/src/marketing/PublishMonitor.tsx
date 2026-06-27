@@ -154,7 +154,7 @@ function MonitorRow({ row }: { row: PublishMonitorRow }): JSX.Element {
           >
             <Ban size={14} aria-hidden style={{ flexShrink: 0 }} />
             <span>
-              Blocked by the grounding gate — no dispatch:{' '}
+              Blocked by the grounding gate · no dispatch:{' '}
               <strong>{row.failed_rules.join(', ')}</strong>
             </span>
           </div>
@@ -170,7 +170,7 @@ function MonitorRow({ row }: { row: PublishMonitorRow }): JSX.Element {
           ))}
         </div>
 
-        {/* Media thumbnails (placeholder ok — $0, OUT-1). */}
+        {/* Media thumbnails (placeholder ok · $0, OUT-1). */}
         {row.media.length > 0 && (
           <div
             data-testid="monitor-media"
@@ -357,7 +357,7 @@ export default function PublishMonitor(): JSX.Element {
       >
         <Send size={16} aria-hidden style={{ color: 'var(--flow)' }} />
         <h2 style={{ fontSize: 'var(--fs-lg)', fontWeight: 700, margin: 0 }}>
-          Publish &amp; Monitor — fan out across platforms
+          Publish &amp; Monitor · fan out across platforms
         </h2>
         <span style={{ marginLeft: 'auto' }}>
           <Chip tone={evalGreen ? 'flow' : 'signal'}>
@@ -538,10 +538,10 @@ export default function PublishMonitor(): JSX.Element {
         )}
       </Card>
 
-      {/* Monitor board — the dual-screen feed. */}
+      {/* Monitor board · the dual-screen feed. */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--s-2)' }}>
         <h3 style={{ fontSize: 'var(--fs-md)', fontWeight: 700, margin: 0 }}>
-          Monitor — per-platform tracking + HubSpot second screen
+          Monitor · per-platform tracking + HubSpot second screen
         </h3>
         <span style={{ marginLeft: 'auto' }}>
           <Button

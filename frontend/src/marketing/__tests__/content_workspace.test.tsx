@@ -26,7 +26,7 @@ const MIXED_BATCH = {
   candidates: [
     {
       proposal_id: 'cand-a',
-      copy: 'Unlock your child’s potential at GT School — enroll today.',
+      copy: 'Unlock your child’s potential at GT School · enroll today.',
       channel: 'email',
       surfaced: true,
       degraded: false,
@@ -44,7 +44,7 @@ const MIXED_BATCH = {
     },
     {
       proposal_id: 'cand-c',
-      copy: 'Our students score 4X higher — guaranteed!',
+      copy: 'Our students score 4X higher · guaranteed!',
       channel: 'email',
       surfaced: false,
       degraded: false,
@@ -63,7 +63,7 @@ const DEGRADED_BATCH = {
   candidates: [
     {
       proposal_id: 'cand-fallback',
-      copy: 'GT School — learn more about enrollment.',
+      copy: 'GT School · learn more about enrollment.',
       channel: 'email',
       surfaced: true,
       degraded: true,
@@ -78,17 +78,17 @@ const LIBRARY_ASSETS = [
   // platform so the segment filters can narrow them.
   {
     id: 'asset-1',
-    title: 'gifted_identity — proven caption',
+    title: 'gifted_identity · proven caption',
     asset_type: 'copy',
     channel: 'instagram',
-    body: 'Welcome to GT School — here is the next step for your gifted child.',
+    body: 'Welcome to GT School · here is the next step for your gifted child.',
     source_ref: 'https://gt.school/welcome',
     tags: ['gifted_identity', 'instagram', 'social', 'proven'],
     search_text: 'welcome to gt school',
   },
   {
     id: 'asset-2',
-    title: 'cost_tefa_esa — proven caption',
+    title: 'cost_tefa_esa · proven caption',
     asset_type: 'copy',
     channel: 'x',
     body: 'Texas families can apply TEFA toward GT School tuition.',
@@ -264,10 +264,10 @@ describe('ContentWorkspace', () => {
     // The Social segment is the default; its two copy assets render.
     expect(
       await screen.findByTestId('library-asset-asset-1'),
-    ).toHaveTextContent('gifted_identity — proven caption');
+    ).toHaveTextContent('gifted_identity · proven caption');
     expect(
       screen.getByTestId('library-asset-asset-2'),
-    ).toHaveTextContent('cost_tefa_esa — proven caption');
+    ).toHaveTextContent('cost_tefa_esa · proven caption');
   });
 
   it('test_library_segments_render_with_counts', async () => {

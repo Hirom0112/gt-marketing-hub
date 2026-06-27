@@ -18,12 +18,12 @@
 
 :root {
   /* ---- neutral base -------------------------------------------------------- */
-  --ink: #122130; /* near-black blue — primary text + active fills            */
-  --ink-soft: #2c3e4f; /* secondary text on paper (AA: 9.0:1)                 */
-  --paper: #eceff2; /* off-white app background (cockpit retune, cooler)      */
-  --surface: #ffffff; /* cards / raised surfaces                             */
-  --surface-2: #f7f9fa; /* recessed inputs / inset wells (cockpit retune)    */
-  --line: #d8ded9; /* hairline borders                                       */
+  --ink: oklch(0.26 0.028 222); /* near-black teal-blue — primary text + fills  */
+  --ink-soft: oklch(0.4 0.03 220); /* secondary text on paper (AA)             */
+  --paper: oklch(0.955 0.007 190); /* warm off-white app background, teal-tinted */
+  --surface: oklch(0.995 0.004 190); /* cards: warm near-white (never pure #fff) */
+  --surface-2: oklch(0.975 0.006 190); /* recessed inputs / inset wells        */
+  --line: oklch(0.88 0.012 190); /* hairline borders, teal-tinted             */
   --line-2: #eaeff2; /* internal hairline (dividers inside a surface)         */
   --line-strong: #c2cac4; /* emphasised hairline (hover/focus rails)         */
   --muted: #5f6f6c; /* mono micro-labels (AA on paper: 5.0:1)                 */
@@ -150,10 +150,11 @@
   --s-8: 32px;
 
   /* ---- elevation + motion ------------------------------------------------- */
-  --shadow-sm: 0 1px 2px rgba(18, 33, 48, 0.04);
-  --shadow-md: 0 4px 16px rgba(18, 33, 48, 0.08);
-  --ease: cubic-bezier(0.2, 0.6, 0.2, 1);
-  --dur: 140ms;
+  /* Flatter, teal-tinted elevation — editorial panels sit on hairlines, not shadow. */
+  --shadow-sm: 0 1px 1px rgba(15, 60, 55, 0.03);
+  --shadow-md: 0 8px 24px -10px rgba(15, 60, 55, 0.12);
+  --ease: cubic-bezier(0.22, 1, 0.36, 1); /* ease-out-quint */
+  --dur: 200ms;
 
   /* ---- app shell (GT Pulse: full-height left nav rail + per-page header) --- */
   --sidebar-w: 120px; /* the vertical nav rail — wide enough for the big brand logo + labels */

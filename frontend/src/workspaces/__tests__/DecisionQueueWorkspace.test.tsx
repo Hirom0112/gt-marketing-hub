@@ -203,7 +203,7 @@ function enrichmentDecision(dataSource: 'live' | 'seeded') {
       },
       recommendation: { base_priority: 50, new_priority: 78, delta: 28 },
       provenance: {
-        reason: 'Under-served district — Open Data signals boost outreach priority.',
+        reason: 'Under-served district · Open Data signals boost outreach priority.',
         signals: ['low_rating', 'staar_below_floor', 'enrollment_at_min'],
       },
       data_source: dataSource,
@@ -250,7 +250,7 @@ function stubEnrichApi(opts?: {
   return mock;
 }
 
-describe('DecisionQueueWorkspace — Open-Data enrichment (E1)', () => {
+describe('DecisionQueueWorkspace · Open-Data enrichment (E1)', () => {
   beforeEach(() => {
     localStorage.clear();
   });

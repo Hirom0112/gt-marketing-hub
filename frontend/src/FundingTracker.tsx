@@ -178,7 +178,7 @@ export default function FundingTracker({
           </span>
         </div>
 
-        {/* R2 voucher standing — the deadline countdown, the single next-action
+        {/* R2 voucher standing · the deadline countdown, the single next-action
             line, and an at-risk badge. The lane is FAIL-CLOSED: the countdown and
             the at-risk badge appear only when the backend proves an open
             reconfirm/select gap (a due_by + days_remaining); a confirmed family
@@ -279,7 +279,7 @@ export default function FundingTracker({
         {funding.installments !== null && (
           <>
             {/* The schedule is PROJECTED until funding is actually awarded +
-                disbursed (tuition still locked) — it's what they WOULD receive,
+                disbursed (tuition still locked) · it's what they WOULD receive,
                 not money in hand. Labelled so it never reads as "voucher
                 connected" next to funding_state=none (INV-10: GT-controlled
                 signals drive the real state). */}
@@ -293,7 +293,7 @@ export default function FundingTracker({
             >
               {unlocked
                 ? 'TEFA installment schedule'
-                : 'Projected schedule — pending award + first installment'}
+                : 'Projected schedule · pending award + first installment'}
             </div>
             <ol
               className="installment-schedule"

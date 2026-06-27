@@ -72,7 +72,7 @@ describe('ReconcileDetail', () => {
     expect(post?.[0]).toMatch(/\/seam\/fam-a\/reconcile$/);
   });
 
-  it('a flagged conflict fails closed — POSTs but stays unresolved (INV-4)', async () => {
+  it('a flagged conflict fails closed · POSTs but stays unresolved (INV-4)', async () => {
     mockReconcile({ family_id: 'fam-a', applied: false, seam_status: 'conflict' });
     render(<ReconcileDetail issue={SEAM_ISSUE} />);
 

@@ -100,7 +100,7 @@ export default function BulkBar({
           className="lab"
           style={{ alignSelf: 'center', marginRight: 'var(--s-1)' }}
         >
-          dismiss {count} — pick a reason:
+          dismiss {count} · pick a reason:
         </span>
         {reasons.map((r) => (
           <button

@@ -188,7 +188,7 @@ function BudgetHeader(): JSX.Element {
         color: 'var(--muted)',
       }}
     >
-      <Wallet size={12} aria-hidden /> Budget tracker — four workstreams
+      <Wallet size={12} aria-hidden /> Budget tracker · four workstreams
     </h2>
   );
 }
@@ -380,7 +380,7 @@ function BurnChart({
           marginBottom: 'var(--s-3)',
         }}
       >
-        Burn — planned vs actual
+        Burn · planned vs actual
       </div>
       <div data-testid="burn-chart" style={{ display: 'grid', gap: 'var(--s-3)' }}>
         {burn.map((b) => {
@@ -408,14 +408,14 @@ function BurnChart({
                   {fmtUSD(b.actual)} / {fmtUSD(b.planned)}
                 </span>
               </div>
-              {/* Planned bar — the neutral baseline track-fill. */}
+              {/* Planned bar · the neutral baseline track-fill. */}
               <Bar
                 pct={plannedPct}
                 color="var(--line-strong)"
                 testid={`burn-bar-planned-${b.workstream}`}
                 label="planned"
               />
-              {/* Actual bar — flow normally, signal when over budget. */}
+              {/* Actual bar · flow normally, signal when over budget. */}
               <Bar
                 pct={actualPct}
                 color={over ? 'var(--signal)' : 'var(--flow)'}
@@ -511,7 +511,7 @@ function AddEntryForm({
         return res.json();
       })
       .then((data) => {
-        if (data === null) return; // forbidden — already handled
+        if (data === null) return; // forbidden · already handled
         setAmount('');
         setNote('');
         onAdded(); // re-read the roll-up (picks up any auto-created decision)

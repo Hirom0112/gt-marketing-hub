@@ -240,7 +240,7 @@ describe('TriageList (S13 redesign)', () => {
     expect(onScopeChange).toHaveBeenCalledWith('all', undefined);
   });
 
-  it('keeps bulk ALWAYS attached — the select-all rail wires onSelectAll', async () => {
+  it('keeps bulk ALWAYS attached · the select-all rail wires onSelectAll', async () => {
     vi.stubGlobal('fetch', activeFetch());
     const onSelectAll = vi.fn();
     renderList({ scope: 'all', bulk: noopBulk({ onSelectAll }) });

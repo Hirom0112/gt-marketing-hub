@@ -122,7 +122,7 @@ function IntakeRow({
         </div>
       </div>
 
-      {/* The per-row router proposal — the recommended agent/tier. M4 computes;
+      {/* The per-row router proposal · the recommended agent/tier. M4 computes;
           the desk shows the field (or "—" when the backend omits it). */}
       <div data-testid="intake-router-proposal" className="intake-proposal">
         {rec ? (
@@ -137,7 +137,7 @@ function IntakeRow({
         )}
       </div>
 
-      {/* The Assign verb (M4) — fires POST /enrollment/families/bulk-assign for
+      {/* The Assign verb (M4) · fires POST /enrollment/families/bulk-assign for
           this one family, targeting its DISPLAYED recommended agent (the
           backend's route_family owns the math; the desk assigns to what it
           shows). Disabled with no recommendation, or while a write is in flight.
@@ -353,7 +353,7 @@ export default function IntakeDesk({
             · <b data-testid="intake-total">{ordered.length}</b> unowned · route
             to an agent
           </span>
-          {/* Auto-route all — assigns every listed family to its displayed
+          {/* Auto-route all · assigns every listed family to its displayed
               recommended agent (the backend's route_family math), then re-pulls.
               Disabled while a write is in flight or nothing is routable. */}
           <Button
@@ -401,7 +401,7 @@ export default function IntakeDesk({
               style={{ fontWeight: 700, marginBottom: 'var(--s-1)' }}
             >
               Routed {routeReceipt.filter((r) => !r.result.held).length} ·
-              held {routeReceipt.filter((r) => r.result.held).length} — why:
+              held {routeReceipt.filter((r) => r.result.held).length} · why:
             </div>
             <ul
               style={{
@@ -461,7 +461,7 @@ export default function IntakeDesk({
                 }}
               >
                 <AlarmClock size={12} aria-hidden />
-                Unowned alarm · {alarmCount} past the routing window — route first
+                Unowned alarm · {alarmCount} past the routing window · route first
               </div>
             )}
             {ordered.map((fam) => (

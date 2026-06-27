@@ -46,14 +46,14 @@ export default function LeadershipWorkspace(): JSX.Element {
         </span>
       </div>
 
-      {/* Cross-module data-confidence banner (A4) — renders only when CRM↔cockpit
+      {/* Cross-module data-confidence banner (A4) · renders only when CRM↔cockpit
           parity has dropped below the trusted threshold; otherwise nothing. */}
       <DataConfidenceBanner />
 
-      {/* 1. Funnel scoreboard (KPI strip) + CRM-seam ledger — live GET /pipeline. */}
+      {/* 1. Funnel scoreboard (KPI strip) + CRM-seam ledger · live GET /pipeline. */}
       <LandingDashboard />
 
-      {/* 2. Pipeline board — the per-stage funnel, moved off the operator page. */}
+      {/* 2. Pipeline board · the per-stage funnel, moved off the operator page. */}
       <section
         aria-label="Pipeline overview"
         style={{ display: 'grid', gap: 'var(--s-3)' }}
@@ -75,7 +75,7 @@ export default function LeadershipWorkspace(): JSX.Element {
       {/* 3. FR-6.1 growth rollup (both funnels + eval status). */}
       <Scoreboard />
 
-      {/* 4. Apply-flow drop-off heatmap (S15 W2) — where the cohort froze,
+      {/* 4. Apply-flow drop-off heatmap (S15 W2) · where the cohort froze,
           aggregate only (INV-6). Degrades to an empty state off live telemetry. */}
       <DropOffHeatmap />
 

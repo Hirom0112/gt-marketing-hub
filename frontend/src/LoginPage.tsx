@@ -193,7 +193,7 @@ export default function LoginPage({
         {/* The logo art is white-on-transparent; we recolor it to the brand navy
             via a CSS mask so it reads on the white card with NO background tile. */}
         <span className="login-logo" role="img" aria-label="GT Pulse" />
-        <p className="login-sub">Demo sign-in — pick a seat</p>
+        <p className="login-sub">Demo sign-in · pick a seat</p>
 
         <div
           className="login-roles"
@@ -226,7 +226,7 @@ export default function LoginPage({
             >
               {DEMO_AGENTS.map((a) => (
                 <option key={a.id} value={a.id}>
-                  {`${a.name} — ${tierLabel(a.tier)}`}
+                  {`${a.name} · ${tierLabel(a.tier)}`}
                 </option>
               ))}
             </select>
@@ -257,7 +257,7 @@ export default function LoginPage({
         )}
 
         <p className="login-foot">
-          Demo sign-in — a real signed token over synthetic seats, no PII.
+          Demo sign-in · a real signed token over synthetic seats, no PII.
         </p>
       </form>
     </div>

@@ -18,8 +18,8 @@ const HOUSEHOLDS_PAYLOAD = {
       family_id: 'fam-a',
       worst_stage: 'interest',
       children: [
-        { student_id: 'stu-1', display_label: 'Rivera — Alex · Grade 3', stage: 'enroll' },
-        { student_id: 'stu-2', display_label: 'Rivera — Mia · Grade 1', stage: 'interest' },
+        { student_id: 'stu-1', display_label: 'Rivera · Alex · Grade 3', stage: 'enroll' },
+        { student_id: 'stu-2', display_label: 'Rivera · Mia · Grade 1', stage: 'interest' },
       ],
     },
     {
@@ -27,7 +27,7 @@ const HOUSEHOLDS_PAYLOAD = {
       family_id: 'fam-b',
       worst_stage: 'apply',
       children: [
-        { student_id: 'stu-3', display_label: 'Chen — Sam · Grade 5', stage: 'apply' },
+        { student_id: 'stu-3', display_label: 'Chen · Sam · Grade 5', stage: 'apply' },
       ],
     },
     {
@@ -35,7 +35,7 @@ const HOUSEHOLDS_PAYLOAD = {
       family_id: 'fam-c',
       worst_stage: 'enroll',
       children: [
-        { student_id: 'stu-4', display_label: 'Okafor — Zoe · Grade 2', stage: 'enroll' },
+        { student_id: 'stu-4', display_label: 'Okafor · Zoe · Grade 2', stage: 'enroll' },
       ],
     },
   ],
@@ -114,8 +114,8 @@ describe('HouseholdReconcileBoard', () => {
 
     // Each child's derived stage is shown under its household.
     const rowA = screen.getByTestId('household-row-fam-a');
-    expect(rowA).toHaveTextContent('Rivera — Alex · Grade 3');
-    expect(rowA).toHaveTextContent('Rivera — Mia · Grade 1');
+    expect(rowA).toHaveTextContent('Rivera · Alex · Grade 3');
+    expect(rowA).toHaveTextContent('Rivera · Mia · Grade 1');
     expect(screen.getAllByTestId('household-child')).toHaveLength(4);
 
     // The seam status is joined from GET /seam (conflict / unsynced / synced).
@@ -146,7 +146,7 @@ describe('HouseholdReconcileBoard', () => {
     expect(post?.[1].method).toBe('POST');
   });
 
-  it('Test C: FLAG_CONFLICT on a conflict row fails closed — POSTs but the row stays conflict (INV-4)', async () => {
+  it('Test C: FLAG_CONFLICT on a conflict row fails closed · POSTs but the row stays conflict (INV-4)', async () => {
     render(<HouseholdReconcileBoard />);
 
     await screen.findByTestId('household-row-fam-a');
@@ -174,7 +174,7 @@ describe('HouseholdReconcileBoard', () => {
     expect(screen.getByTestId('merge-queue-fam-a')).toBeInTheDocument();
   });
 
-  it('Test E: FAIL CLOSED — when the CRM seam is down the push/flag controls are DISABLED', async () => {
+  it('Test E: FAIL CLOSED · when the CRM seam is down the push/flag controls are DISABLED', async () => {
     vi.unstubAllGlobals();
     mockApi(CRM_DOWN);
     render(<HouseholdReconcileBoard />);

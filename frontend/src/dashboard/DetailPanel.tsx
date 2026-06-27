@@ -252,7 +252,7 @@ export default function DetailPanel({ familyId }: DetailPanelProps): JSX.Element
           {deal.display_name}
         </h2>
 
-        {/* 1 — Parents */}
+        {/* 1 · Parents */}
         <Section title="Parents" icon={Users} testId="detail-parents">
           <Parent
             name={deal.primary_contact_name}
@@ -269,7 +269,7 @@ export default function DetailPanel({ familyId }: DetailPanelProps): JSX.Element
 
         <div className="admin-panel-rule" />
 
-        {/* 2 — Contact: both emails + both phones */}
+        {/* 2 · Contact: both emails + both phones */}
         <Section title="Contact" icon={Phone} testId="detail-contact">
           <ContactLink
             kind="email"
@@ -295,7 +295,7 @@ export default function DetailPanel({ familyId }: DetailPanelProps): JSX.Element
 
         <div className="admin-panel-rule" />
 
-        {/* 3 — Location (aggregate labels only; D-5) */}
+        {/* 3 · Location (aggregate labels only; D-5) */}
         <Section title="Location" icon={MapPin} testId="detail-location">
           <span className="admin-kv-name" data-testid="detail-location-value">
             {[deal.neighborhood, deal.region, deal.state]
@@ -306,7 +306,7 @@ export default function DetailPanel({ familyId }: DetailPanelProps): JSX.Element
 
         <div className="admin-panel-rule" />
 
-        {/* 4 — Children & per-child progress */}
+        {/* 4 · Children & per-child progress */}
         <Section
           title="Children & progress"
           icon={GraduationCap}
@@ -344,7 +344,7 @@ export default function DetailPanel({ familyId }: DetailPanelProps): JSX.Element
 
         <div className="admin-panel-rule" />
 
-        {/* 5 — Funding type (inline TYPE field only; the TEFA tracker is removed) */}
+        {/* 5 · Funding type (inline TYPE field only; the TEFA tracker is removed) */}
         <Section title="Funding type" icon={Tag} testId="detail-funding">
           <span data-testid="detail-funding-value">
             <Chip tone={deal.funding_type.toLowerCase().includes('tefa') ? 'gate' : 'flow'}>
@@ -355,7 +355,7 @@ export default function DetailPanel({ familyId }: DetailPanelProps): JSX.Element
 
         <div className="admin-panel-rule" />
 
-        {/* 6 — Conversion factor (likelihood to convert) */}
+        {/* 6 · Conversion factor (likelihood to convert) */}
         <Section title="Conversion factor" icon={TrendingUp} testId="detail-conversion">
           <span className="admin-kv-name" data-testid="detail-conversion-value">
             {convHeadline}
@@ -369,7 +369,7 @@ export default function DetailPanel({ familyId }: DetailPanelProps): JSX.Element
 
         <div className="admin-panel-rule" />
 
-        {/* 7 — Source (attribution) */}
+        {/* 7 · Source (attribution) */}
         <Section title="Source" icon={Building2} testId="detail-source">
           <span className="admin-kv-name" data-testid="detail-source-value">
             {deal.attribution_source || PLACEHOLDER}
@@ -378,7 +378,7 @@ export default function DetailPanel({ familyId }: DetailPanelProps): JSX.Element
 
         <div className="admin-panel-rule" />
 
-        {/* 8 — HubSpot sync status */}
+        {/* 8 · HubSpot sync status */}
         <Section title="HubSpot sync" icon={Sparkles} testId="detail-seam">
           <span
             data-testid="detail-seam-value"
@@ -393,28 +393,28 @@ export default function DetailPanel({ familyId }: DetailPanelProps): JSX.Element
 
         <div className="admin-panel-rule" />
 
-        {/* 9 — How to close (eval-gated grounded tips) */}
+        {/* 9 · How to close (eval-gated grounded tips) */}
         <div data-testid="detail-close-tips">
           <CloseTipsPanel familyId={familyId} />
         </div>
 
         <div className="admin-panel-rule" />
 
-        {/* 10 — AI drafts (ungated email + sms, editable; D-1) */}
+        {/* 10 · AI drafts (ungated email + sms, editable; D-1) */}
         <Section title="AI drafts" icon={Sparkles} testId="detail-ai-drafts">
           <AiDrafts familyId={familyId} />
         </Section>
 
         <div className="admin-panel-rule" />
 
-        {/* 11 — Manual notes */}
+        {/* 11 · Manual notes */}
         <div data-testid="detail-notes">
           <NotesTimeline familyId={familyId} />
         </div>
 
         <div className="admin-panel-rule" />
 
-        {/* 12 — Log a call (the shared enrollment/LogCallForm) */}
+        {/* 12 · Log a call (the shared enrollment/LogCallForm) */}
         <Section title="Log a call" icon={Phone} testId="detail-log-call">
           <LogCallForm
             familyId={familyId}

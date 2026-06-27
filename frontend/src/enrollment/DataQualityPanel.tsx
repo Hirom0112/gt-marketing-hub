@@ -179,7 +179,7 @@ export default function DataQualityPanel(): JSX.Element {
             fontWeight: 'normal',
           }}
         >
-          <Database size={11} aria-hidden /> CRM-Ops data quality — sync parity
+          <Database size={11} aria-hidden /> CRM-Ops data quality · sync parity
         </h2>
         <span
           data-testid="data-quality-parity"
@@ -194,7 +194,7 @@ export default function DataQualityPanel(): JSX.Element {
         </span>
       </div>
 
-      {/* Data-confidence banner — reuses the shared signal-wash warning treatment. */}
+      {/* Data-confidence banner · reuses the shared signal-wash warning treatment. */}
       {data_confidence_banner && (
         <div
           className="dash-banner"
@@ -210,7 +210,7 @@ export default function DataQualityPanel(): JSX.Element {
           <AlertTriangle size={16} aria-hidden style={{ flexShrink: 0 }} />
           <span style={{ flex: 1, minWidth: 0 }}>
             CRM↔cockpit sync parity has dropped to{' '}
-            <strong>{parityPct}%</strong>, below the trusted threshold — figures
+            <strong>{parityPct}%</strong>, below the trusted threshold · figures
             may be stale until the seam reconciles.
           </span>
         </div>
@@ -284,7 +284,7 @@ export default function DataQualityPanel(): JSX.Element {
                                 key={`utm-${k}`}
                                 data-testid={`data-quality-utm-chip-${issue.entity_id}`}
                               >
-                                <Chip tone="signal" title="Broken UTM — flagged">
+                                <Chip tone="signal" title="Broken UTM · flagged">
                                   ⚠ utm: {k}
                                 </Chip>
                               </span>
@@ -293,7 +293,7 @@ export default function DataQualityPanel(): JSX.Element {
                             <span
                               data-testid={`data-quality-utm-chip-${issue.entity_id}`}
                             >
-                              <Chip tone="signal" title="Broken UTM — flagged">
+                              <Chip tone="signal" title="Broken UTM · flagged">
                                 ⚠ broken UTM
                               </Chip>
                             </span>
@@ -329,13 +329,13 @@ export default function DataQualityPanel(): JSX.Element {
 
                     {/* Conflict with a logged proposal → human reconcile verdict
                         on the existing spine. No proposal id ⇒ read-only/flagged.
-                        Broken UTMs get NO action — they stay flagged red. */}
+                        Broken UTMs get NO action · they stay flagged red. */}
                     <div style={{ flexShrink: 0 }}>
                       {canReconcile ? (
                         <Button
                           variant="signal"
                           data-testid={`data-quality-reconcile-${issue.proposal_id}`}
-                          title="Reconcile — record the human verdict on the spine (logged)"
+                          title="Reconcile · record the human verdict on the spine (logged)"
                           onClick={() => reconcile(issue.proposal_id as string)}
                         >
                           Reconcile
@@ -360,7 +360,7 @@ export default function DataQualityPanel(): JSX.Element {
         </Card>
       )}
 
-      {/* Field-reliability badges — the honest low-trust markers. */}
+      {/* Field-reliability badges · the honest low-trust markers. */}
       {field_flags.length > 0 && (
         <div style={{ marginTop: 'var(--s-3)' }}>
           <h3
@@ -393,7 +393,7 @@ export default function DataQualityPanel(): JSX.Element {
                 >
                   <Chip tone={unreliable ? 'signal' : 'flow'}>
                     {f.field}: {unreliable ? 'unreliable' : 'reliable'}
-                    {unreliable && f.reason ? ` — ${f.reason}` : ''}
+                    {unreliable && f.reason ? ` · ${f.reason}` : ''}
                   </Chip>
                 </span>
               );

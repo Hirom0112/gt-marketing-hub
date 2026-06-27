@@ -33,7 +33,7 @@ export default function SettingsWorkspace(): JSX.Element {
     {
       label: 'CRM mode',
       value: `${CRM_MODE} (recorded)`,
-      note: 'simulated adapter — no live HubSpot writes (INV-9, A-17)',
+      note: 'simulated adapter · no live HubSpot writes (INV-9, A-17)',
       tone: 'gate',
     },
     {
@@ -92,7 +92,7 @@ export default function SettingsWorkspace(): JSX.Element {
             </p>
             <p className="settings-guarantee-body">
               Every outbound send and CRM write runs through a simulated adapter
-              and is recorded server-side only — nothing leaves the cockpit this
+              and is recorded server-side only · nothing leaves the cockpit this
               run. The deterministic core owns all writes; LLM output is a
               proposal that a human approves (INV-2). Tunables live in
               <span className="mono"> params/params.yaml</span>, not in this view.

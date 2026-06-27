@@ -15,7 +15,7 @@ import FundingTracker from '../FundingTracker';
 // award_full_vs_prorated). A confirmed family has no open reconfirm gap.
 const CONFIRMED_STANDING = {
   program: 'tx_tefa',
-  next_action: 'Voucher confirmed — no action needed.',
+  next_action: 'Voucher confirmed · no action needed.',
   due_by: null,
   days_remaining: null,
   at_risk: false,

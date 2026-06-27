@@ -157,7 +157,7 @@ export default function EvalGate(): JSX.Element {
                 marginTop: 2,
               }}
             >
-              Eval suite — fail-closed gate
+              Eval suite · fail-closed gate
             </h2>
           </div>
           <Chip tone={board.overall_green ? 'flow' : 'signal'}>

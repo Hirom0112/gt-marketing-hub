@@ -119,7 +119,7 @@ export default function CloseTipsPanel({
           marginBottom: 'var(--s-2)',
         }}
       >
-        <Lightbulb size={11} aria-hidden /> How to close — grounded, eval-gated
+        <Lightbulb size={11} aria-hidden /> How to close · grounded, eval-gated
       </div>
 
       {gatingRed && (
@@ -143,7 +143,7 @@ export default function CloseTipsPanel({
         >
           <ShieldAlert size={16} aria-hidden style={{ flexShrink: 0, marginTop: 1 }} />
           <span>
-            The <strong>{GATING_EVAL}</strong> eval is <strong>red</strong> — the
+            The <strong>{GATING_EVAL}</strong> eval is <strong>red</strong> · the
             close-tips action is disabled until the eval passes. Fail closed: a red
             eval disables the action in the UI.
           </span>
@@ -211,7 +211,7 @@ function CloseTipsResult({ data }: { data: CloseTipsResponse }): JSX.Element {
             marginBottom: 'var(--s-1)',
           }}
         >
-          <ShieldAlert size={11} aria-hidden /> Tips blocked — fail closed
+          <ShieldAlert size={11} aria-hidden /> Tips blocked · fail closed
         </div>
         <p style={{ fontSize: 'var(--fs-sm)' }}>
           The close tips were <strong>blocked by the eval gate</strong> (a tip was
@@ -257,7 +257,7 @@ function CloseTipsResult({ data }: { data: CloseTipsResponse }): JSX.Element {
           {tip.source_ref && (
             <span className="mono" style={{ color: 'var(--muted)', fontSize: 'var(--fs-sm)' }}>
               {' '}
-              — {tip.source_ref}
+              · {tip.source_ref}
             </span>
           )}
         </li>

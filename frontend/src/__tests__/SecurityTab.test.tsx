@@ -21,7 +21,7 @@ import { DEMO_AGENTS } from '../LoginPage';
 // fetch is mocked (mirrors EvalGate/RepWorkspace tests); the app enters via the
 // persisted demo seat (one storage key), same as the other shell tests.
 
-const AGENT = DEMO_AGENTS[0]!; // Riley Carter — closer seat (a rep)
+const AGENT = DEMO_AGENTS[0]!; // Riley Carter · closer seat (a rep)
 
 // GET /security/posture → PostureView { green, checks:[{name,passed,detail}] }.
 // All invariants pass ⇒ green banner.
@@ -115,7 +115,7 @@ function openSecurity(): void {
   fireEvent.click(screen.getByTestId('sidebar-nav-security'));
 }
 
-describe('SecurityTab (M7 — admin-only Security / observability)', () => {
+describe('SecurityTab (M7 · admin-only Security / observability)', () => {
   beforeEach(() => {
     localStorage.clear();
     installFetch(POSTURE_GREEN);

@@ -9,7 +9,7 @@ import { recencyClass } from '../recency';
 
 const FID = 'fam-9';
 
-describe('CalendarChip — score segments', () => {
+describe('CalendarChip · score segments', () => {
   it('derives the on-segment count from the score thresholds', () => {
     expect(scoreSegments(0.9)).toBe(3);
     expect(scoreSegments(0.85)).toBe(3);

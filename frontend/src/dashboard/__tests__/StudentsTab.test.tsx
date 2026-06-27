@@ -40,11 +40,11 @@ const STUDENTS = {
   households: [
     {
       family_id: 'fam-work',
-      students: [{ synthetic_first_name: 'Mateo', display_label: 'Working — Mateo · Grade 3' }],
+      students: [{ synthetic_first_name: 'Mateo', display_label: 'Working · Mateo · Grade 3' }],
     },
     {
       family_id: 'fam-none',
-      students: [{ synthetic_first_name: 'Priya', display_label: 'Nocontact — Priya · Grade 1' }],
+      students: [{ synthetic_first_name: 'Priya', display_label: 'Nocontact · Priya · Grade 1' }],
     },
   ],
 };

@@ -96,7 +96,7 @@ describe('SisBucketsPanel (M5 acceptance)', () => {
     expect(within(confirmed).queryByRole('button')).toBeNull();
   });
 
-  it('delegates Assign/Propose to the parent — never a silent write', async () => {
+  it('delegates Assign/Propose to the parent · never a silent write', async () => {
     installFetch(PAYLOAD);
     const onAssign = vi.fn();
     const onPropose = vi.fn();

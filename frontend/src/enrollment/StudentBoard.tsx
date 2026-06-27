@@ -160,7 +160,7 @@ export default function StudentBoard({
           gap: 'var(--s-1)',
         }}
       >
-        <Users size={11} aria-hidden /> Students — one application per child,
+        <Users size={11} aria-hidden /> Students · one application per child,
         grouped by household
       </span>
       {scopeToggle}

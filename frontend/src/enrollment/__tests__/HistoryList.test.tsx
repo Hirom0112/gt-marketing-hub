@@ -90,7 +90,7 @@ describe('HistoryList (S13 redesign)', () => {
     expect(screen.queryByTestId(`drill-row-${FAM_R}`)).not.toBeInTheDocument();
   });
 
-  it('is control-less — no checkbox, no bulk, no scope dial', async () => {
+  it('is control-less · no checkbox, no bulk, no scope dial', async () => {
     vi.stubGlobal('fetch', historyFetch());
     render(<HistoryList />);
 

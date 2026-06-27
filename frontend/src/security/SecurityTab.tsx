@@ -380,7 +380,7 @@ function EventsPanel(): JSX.Element {
               Suspicious-activity feed
             </h2>
           </div>
-          {/* INV-9 honesty: the v1 stream is SIMULATED, not a live drain — label it. */}
+          {/* INV-9 honesty: the v1 stream is SIMULATED, not a live drain · label it. */}
           <Chip
             tone="gate"
             title="v1 runs on a simulated suspicious-event stream (not a live drain)"
@@ -408,7 +408,7 @@ function EventsPanel(): JSX.Element {
           />
           <span>
             Monitoring, not inline blocking. This is a{' '}
-            <strong>simulated</strong> suspicious-event stream (v1, INV-9) — each
+            <strong>simulated</strong> suspicious-event stream (v1, INV-9) · each
             row carries its OWASP mapping and an acknowledge action.
           </span>
         </p>

@@ -94,7 +94,7 @@ export default function PipelineBoard(): JSX.Element {
   return (
     <section aria-label="Pipeline board" data-testid="pipeline-board">
       <div className="lab" style={{ marginBottom: 'var(--s-2)' }}>
-        Pipeline board — the four-stage funnel
+        Pipeline board · the four-stage funnel
         {hasStudents && (
           <span data-testid="pipeline-grain-note" style={{ color: 'var(--muted)' }}>
             {' '}· households + children

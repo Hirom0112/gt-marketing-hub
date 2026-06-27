@@ -417,8 +417,8 @@ export default function RepWorkspace(): JSX.Element {
           <div className="find-head">
             <span className="lab find-head-title">
               {queueView === 'calendar'
-                ? 'My Calendar — when my families went quiet; the day to reach out'
-                : 'My Queue — my families, ranked; work the overdue first'}
+                ? 'My Calendar · when my families went quiet; the day to reach out'
+                : 'My Queue · my families, ranked; work the overdue first'}
             </span>
             <div data-testid="rep-view-toggle">
               <WorkspaceToggle

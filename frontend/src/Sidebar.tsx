@@ -41,7 +41,7 @@ export default function Sidebar<K extends string>({
         type="button"
         role="tab"
         aria-selected={on}
-        title={badge ? `${label} — ${badge}` : label}
+        title={badge ? `${label} · ${badge}` : label}
         data-testid={`sidebar-nav-${key}`}
         className={`sidebar-item${on ? ' is-active' : ''}`}
         onClick={() => onSelect(key)}

@@ -186,7 +186,7 @@ function AppShell(): JSX.Element {
               Students/Reconcile/Team Roster) and the sales agent on the owner-scoped
               AgentDashboard (4-metric strip + motivation banner + Leads/Triage/
               Students/Reconcile/KPI Dashboard). Branch by seat. */}
-          {/* Composable Home (B3) — the per-user widget grid; available to every
+          {/* Composable Home (B3) · the per-user widget grid; available to every
               signed-in seat as the customizable overview. */}
           {activeWorkspace === 'home' && <ComposableHome />}
           {activeWorkspace === 'enrollment' &&
@@ -195,16 +195,16 @@ function AppShell(): JSX.Element {
             ) : (
               <AdminDashboard />
             ))}
-          {/* Admin-only surfaces — gated by primaryNav AND guarded here so a rep
+          {/* Admin-only surfaces · gated by primaryNav AND guarded here so a rep
               can never reach Marketing/Leadership/Security even if forced. */}
           {activeWorkspace === 'marketing' && isAdmin && <MarketingWorkspace />}
           {activeWorkspace === 'leadership' && isAdmin && <LeadershipWorkspace />}
-          {/* Decision Queue (B2) — leader + admin only; gated by primaryNav AND
+          {/* Decision Queue (B2) · leader + admin only; gated by primaryNav AND
               guarded here so an operator can never reach it even if forced. */}
           {activeWorkspace === 'decisions' && isLeaderOrAdmin && (
             <DecisionQueueWorkspace onChanged={refreshDecisions} />
           )}
-          {/* Budget Tracker (B4) — leader + admin only; gated by primaryNav AND
+          {/* Budget Tracker (B4) · leader + admin only; gated by primaryNav AND
               guarded here so an operator can never reach it even if forced. */}
           {activeWorkspace === 'budget' && isLeaderOrAdmin && <BudgetWorkspace />}
           {activeWorkspace === 'security' && isAdmin && <SecurityWorkspace />}

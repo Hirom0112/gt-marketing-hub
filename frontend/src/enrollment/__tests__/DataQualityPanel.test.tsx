@@ -110,7 +110,7 @@ describe('DataQualityPanel (C1)', () => {
     ).not.toBeInTheDocument();
   });
 
-  it('renders the dq queue in severity order — conflict before utm_broken (server order preserved)', async () => {
+  it('renders the dq queue in severity order · conflict before utm_broken (server order preserved)', async () => {
     mockApi(OPS);
     render(<DataQualityPanel />);
 

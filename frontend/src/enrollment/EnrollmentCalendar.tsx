@@ -406,7 +406,7 @@ export default function EnrollmentCalendar({
             })}
           </div>
 
-          {/* Widen affordances — the scope dial proper lives on the triage list. */}
+          {/* Widen affordances · the scope dial proper lives on the triage list. */}
           <div
             className="calendar-scope-cta"
             data-testid="calendar-scope-cta"

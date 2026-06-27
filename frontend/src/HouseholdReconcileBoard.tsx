@@ -216,7 +216,7 @@ export default function HouseholdReconcileBoard({
             fontWeight: 'normal',
           }}
         >
-          <GitMerge size={11} aria-hidden /> Household reconciliation — one row per
+          <GitMerge size={11} aria-hidden /> Household reconciliation · one row per
           household
         </h2>
       </div>
@@ -351,7 +351,7 @@ export default function HouseholdReconcileBoard({
                           disabled={crmDown}
                           title={
                             crmDown
-                              ? 'CRM seam unavailable — reconcile disabled'
+                              ? 'CRM seam unavailable · reconcile disabled'
                               : 'Force the local truth to the CRM mirror'
                           }
                           onClick={() => reconcile(hh.family_id)}
@@ -365,7 +365,7 @@ export default function HouseholdReconcileBoard({
                           disabled={crmDown}
                           title={
                             crmDown
-                              ? 'CRM seam unavailable — reconcile disabled'
+                              ? 'CRM seam unavailable · reconcile disabled'
                               : 'Flag the divergence as a conflict (fail-closed)'
                           }
                           onClick={() => reconcile(hh.family_id)}
