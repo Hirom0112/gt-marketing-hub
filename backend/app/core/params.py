@@ -1354,6 +1354,52 @@ class Programs(_StrictModel):
         return self
 
 
+class Budget(_StrictModel):
+    """B4 marketing-budget partition + variance-flag threshold (INV-11).
+
+    The single canonical home for the $365K marketing budget plan the variance
+    reconciler (``core/budget.py``) reads; this block ONLY owns the surface,
+    never a code literal:
+
+    * ``total_usd`` — the whole marketing budget (whole USD).
+    * ``variance_threshold`` — the actual-vs-planned OVERRUN fraction past which a
+      workstream auto-flags (``> threshold`` flags; at/under does not). A FRACTION
+      in (0, 1].
+    * ``workstreams`` — per-workstream planned spend (whole USD), keyed by
+      workstream token.
+
+    A ``model_validator(mode="after")`` enforces the PARTITION GUARD:
+    ``sum(workstreams.values()) == total_usd`` exactly — this is the
+    sum-to-$365K guarantee, and any drift raises at load (CLAUDE.md §4.1). The
+    total and every workstream amount MUST be ``>= 1``.
+    """
+
+    total_usd: int
+    variance_threshold: float
+    workstreams: dict[str, int]
+
+    @model_validator(mode="after")
+    def _partition_guard(self) -> Budget:
+        if self.total_usd < 1:
+            raise ValueError(f"budget.total_usd must be >= 1, got {self.total_usd!r}")
+        if not 0.0 < self.variance_threshold <= 1.0:
+            raise ValueError(
+                f"budget.variance_threshold must be in (0, 1], got {self.variance_threshold!r}"
+            )
+        if not self.workstreams:
+            raise ValueError("budget.workstreams must be non-empty")
+        bad = {k: v for k, v in self.workstreams.items() if v < 1}
+        if bad:
+            raise ValueError(f"budget.workstreams amounts must be >= 1, got {bad!r}")
+        allocated = sum(self.workstreams.values())
+        if allocated != self.total_usd:
+            raise ValueError(
+                f"budget.workstreams must partition total_usd exactly: "
+                f"sum {allocated!r} != total_usd {self.total_usd!r}"
+            )
+        return self
+
+
 class Params(_StrictModel):
     """Typed view of the whole params file — one field per §8 top-level block."""
 
@@ -1390,6 +1436,7 @@ class Params(_StrictModel):
     data_confidence: DataConfidence
     resilience: Resilience
     rbac: Rbac
+    budget: Budget
 
 
 def _resolve_path(path: Path | None) -> Path:

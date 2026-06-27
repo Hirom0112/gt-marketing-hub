@@ -398,6 +398,15 @@ resilience:                 # A5 — retry/backoff tunables for retryable adapte
   base_delay_ms: 200                # exponential-backoff base
   max_delay_ms: 5000                # backoff ceiling
 
+budget:                     # B4 — marketing budget partition + variance-flag threshold; single home for the $365K plan (INV-11)
+  total_usd: 365000                 # the whole marketing budget (USD); MUST equal the sum of workstreams (partition guard)
+  variance_threshold: 0.10          # >10% actual-vs-planned OVERRUN on a workstream auto-flags it (B4 → B2 decision wiring)
+  workstreams:                      # per-workstream planned spend (USD); these partition total_usd exactly
+    grassroots: 210000              # grassroots / community channels
+    content: 90000                  # content engine
+    guerrilla: 40000                # guerrilla / experiential
+    ops: 25000                      # marketing ops
+
 rbac:                       # B1 — role-based access-control matrix; single home for the three-role permission grid (CLAUDE.md §7; INV-11)
   roles: [admin, leader, operator]  # the closed role set; the three canonical roles MUST be present
   permissions:                      # permission name → roles that hold it (permission → roles); permits = role in permissions[perm]
