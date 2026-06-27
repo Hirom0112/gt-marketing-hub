@@ -29,6 +29,7 @@ from app.api.layouts import router as layouts_router
 from app.api.marketing import router as marketing_router
 from app.api.merge import router as merge_router
 from app.api.notes import router as notes_router
+from app.api.open_data import router as open_data_router
 from app.api.payments import router as payments_router
 from app.api.publish import router as publish_router
 from app.api.scoreboard import router as scoreboard_router
@@ -252,6 +253,16 @@ app.include_router(layouts_router)
 # feeder (idempotent per workstream until decided). Variance is the pure core's; no LLM,
 # no external send.
 app.include_router(budget_router)
+
+# Open Data enrichment → Decision Queue (E1; TODO_v2 §E1; INV-2/8/11) —
+# /open-data/enrich POST. Runs a Texas-district Open Data query through the
+# OpenDataAdapter seam (seeded v1 / live go-live, §7 registry), applies the pure
+# enrich_decision rule, and — when the recommendation CHANGES — feeds exactly one
+# open card into the B2 Decision Queue via the shared flag_decision feeder, carrying
+# full provenance + the data SOURCE (live OpenData vs the seeded fallback). An
+# unchanged rec enqueues nothing (honest); the response surfaces the change + source
+# either way. Any authenticated seat; no live external write (INV-9).
+app.include_router(open_data_router)
 
 
 # AWS Lambda + API Gateway entrypoint (ARCHITECTURE.md §12).

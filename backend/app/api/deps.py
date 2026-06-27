@@ -25,6 +25,7 @@ from app.adapters.funding.base import FundingSignalAdapter
 from app.adapters.geo_sampling.base import GeoSamplingAdapter
 from app.adapters.hubspot.crm_adapter import CRMAdapter, SimulatedCRMAdapter
 from app.adapters.media.base import MediaGenAdapter
+from app.adapters.open_data.base import OpenDataAdapter
 from app.adapters.payments.base import PaymentsAdapter
 from app.adapters.sentiment.base import SentimentAdapter
 from app.adapters.social.base import SocialAdapter
@@ -715,6 +716,17 @@ def get_payments_adapter_dep() -> PaymentsAdapter:
     a `SimulatedPaymentsAdapter` constructed with a known webhook secret.
     """
     return registry.get_payments_adapter()
+
+
+def get_open_data_adapter_dep() -> OpenDataAdapter:
+    """FastAPI dependency yielding the Open Data enrichment adapter (E1; INV-8/INV-9).
+
+    Delegates to the §7 registry (v1 ⇒ the seeded synthetic source; live ⇒ the
+    tryopendata.ai adapter behind the per-run query cap + kill switch, or its
+    fail-loud misconfig). Mirrors :func:`get_payments_adapter_dep`. Tests override
+    this with a `SeededOpenDataAdapter`.
+    """
+    return registry.get_open_data_adapter()
 
 
 def get_payments_store() -> PaymentsStore:
