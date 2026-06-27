@@ -11,6 +11,7 @@ from fastapi.staticfiles import StaticFiles
 from mangum import Mangum
 
 from app.api.ai_actions import router as ai_actions_router
+from app.api.auth import router as auth_router
 from app.api.contact_outcome import router as contact_outcome_router
 from app.api.content import router as content_router
 from app.api.crm_status import router as crm_status_router
@@ -84,6 +85,14 @@ async def health() -> dict[str, str]:
     """Liveness probe — returns 200 with a fixed status body."""
     return {"status": "ok"}
 
+
+# Demo-auth bridge (B1 task 5a; the demo-login token endpoint) — POST
+# /auth/demo-token. Mints a SIGNED seat JWT over synthetic data so the frontend can
+# authenticate against `get_principal` without a real Supabase login (v1 has none).
+# AUTH_MODE-gated: ABSENT (404) under AUTH_MODE=live (real Supabase issues tokens),
+# 503 with no JWT secret. NOT the spoofable S1 header — tokens are verified on every
+# request; this only issues them in demo mode (ASSUMPTIONS A-40).
+app.include_router(auth_router)
 
 # Read-only landing API (FR-2.1/2.2) — /pipeline, /families, /families/{id}.
 app.include_router(families_router)
