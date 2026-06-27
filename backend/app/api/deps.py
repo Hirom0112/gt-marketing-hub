@@ -37,6 +37,11 @@ from app.core.program import Program, resolve_program
 from app.core.sales_agents import lookup as lookup_sales_agent
 from app.core.seam import MirrorState
 from app.core.settings import Settings
+from app.data.budget_store import (
+    BudgetStore,
+    InMemoryBudgetStore,
+    build_supabase_budget_store,
+)
 from app.data.decisions_store import (
     DecisionsStore,
     InMemoryDecisionsStore,
@@ -357,6 +362,43 @@ def _build_layouts_store() -> LayoutsStore:
 # behind the same NFR-8 seam as ``_repository``. Default v1 = in-memory (A-3);
 # production swaps the Supabase-backed impl over the 0029 table.
 _layouts_store: LayoutsStore = _build_layouts_store()
+
+
+def _build_budget_store() -> BudgetStore:
+    """Bind the B4 Budget Tracker store, MIRRORING ``_build_decisions_store``.
+
+    The same ``COCKPIT_REPO`` / ``SUPABASE_URL`` selection as the family, watermark,
+    payments, decisions, and layouts stores, so they never disagree on which backend is
+    live (the NFR-8 store seam):
+
+    - ``synthetic`` ⇒ FORCE the in-memory store (never Supabase); the four workstreams
+      are SEEDED from ``params.budget.workstreams`` (INV-11 — the allocations' one home).
+    - ``supabase`` ⇒ REQUIRE the live store; a missing ``SUPABASE_URL`` is a misconfig
+      ⇒ raise (fail loud, the family-store posture).
+    - ``auto`` (default) ⇒ Supabase when ``SUPABASE_URL`` is configured, else the
+      in-memory v1 fallback (A-3). Default CI is the params-seeded
+      :class:`InMemoryBudgetStore`.
+    """
+    repo_mode = Settings.from_env().cockpit_repo
+    if repo_mode == "synthetic":
+        return InMemoryBudgetStore(params=_params)
+    if repo_mode == "supabase":
+        supabase = build_supabase_budget_store()
+        if supabase is None:
+            raise RuntimeError(
+                "COCKPIT_REPO=supabase requires SUPABASE_URL (+ "
+                "SUPABASE_SERVICE_ROLE_KEY) for the Budget Tracker store; none was "
+                "configured. Set them, or use COCKPIT_REPO=synthetic / auto."
+            )
+        return supabase
+    return build_supabase_budget_store() or InMemoryBudgetStore(params=_params)
+
+
+# Singleton Budget Tracker store (B4) — the params-seeded workstreams + append-only
+# spend ledger behind the same NFR-8 seam as ``_repository``. Default v1 = in-memory
+# (A-3), seeded from ``params.budget``; production swaps the Supabase-backed impl over
+# the 0030 tables.
+_budget_store: BudgetStore = _build_budget_store()
 
 # Singleton env snapshot, read once at import (TECH_STACK §5; INV-11). Tests that
 # need a different env override `get_settings_dep`; named so it never clashes with
@@ -688,6 +730,11 @@ def get_decisions_store() -> DecisionsStore:
 def get_layouts_store() -> LayoutsStore:
     """FastAPI dependency yielding the active per-user Home layout store (B3 seam)."""
     return _layouts_store
+
+
+def get_budget_store() -> BudgetStore:
+    """FastAPI dependency yielding the active Budget Tracker store (B4 seam)."""
+    return _budget_store
 
 
 # ===========================================================================
