@@ -31,6 +31,9 @@ from app.adapters.hubspot.crm_adapter import CRMAdapter, SimulatedCRMAdapter
 from app.adapters.hubspot.live_adapter import LiveHubSpotCRMAdapter
 from app.adapters.media.base import MediaGenAdapter
 from app.adapters.media.placeholder import PlaceholderMediaGenAdapter
+from app.adapters.open_data.base import OpenDataAdapter
+from app.adapters.open_data.live import LiveOpenDataAdapter
+from app.adapters.open_data.seeded import SeededOpenDataAdapter
 from app.adapters.payments.base import PaymentsAdapter
 from app.adapters.payments.live import LivePaymentsAdapter
 from app.adapters.payments.simulated import SimulatedPaymentsAdapter
@@ -40,7 +43,7 @@ from app.adapters.sis.base import EnrollmentSystemAdapter
 from app.adapters.social.base import SocialAdapter
 from app.adapters.social.simulated import SimulatedSocialAdapter
 from app.core.params import AwardAmounts, Crm, Params, load_params
-from app.core.settings import CrmMode, Settings, StripeMode, get_settings
+from app.core.settings import CrmMode, OpenDataMode, Settings, StripeMode, get_settings
 
 # Default on-disk home for the persistent brand-memory store when no override is
 # supplied (ASSUMPTIONS A-11). The path is a config seam (env > default), not a
@@ -52,6 +55,9 @@ _HUBSPOT_BASE_URL = "https://api.hubapi.com"
 
 # Stripe API base URL — the fixed third-party API host (not a tunable; A3).
 _STRIPE_BASE_URL = "https://api.stripe.com"
+
+# tryopendata.ai API base URL — the fixed third-party API host (not a tunable; E1).
+_OPEN_DATA_BASE_URL = "https://api.tryopendata.ai"
 
 # Committed example params, used as a fallback when no local params.yaml exists
 # (it is gitignored / absent in this env). Resolved relative to the repo root:
@@ -263,6 +269,98 @@ def get_payments_adapter() -> PaymentsAdapter:
         calls_per_run_cap=cap,
         tolerance_seconds=stripe_params.tolerance_seconds,
         resilience=_load_params().resilience,
+    )
+
+
+def effective_open_data_mode(settings: Settings) -> OpenDataMode:
+    """The Open Data mode the registry would ACTUALLY select for ``settings`` (pure).
+
+    The single source of truth for the E1/INV-8 precedence, extracted so a
+    read-only status surface can REPORT the effective seam state without
+    constructing a live adapter (or an httpx client) and without forking the
+    precedence (INV-11 — one canonical home). :func:`get_open_data_adapter`
+    consumes this; nothing here reads the env or does I/O. Mirrors
+    :func:`effective_crm_mode` / :func:`effective_payments_mode`.
+
+    - ``OPEN_DATA_MODE=simulate`` ⇒ ``"simulate"`` (the v1 default seeded source; INV-9).
+    - ``OPEN_DATA_MODE=live`` + key + **kill switch on** ⇒ ``"simulate"`` — INV-8
+      degrades to the seeded source; never a live query when the kill switch is on.
+    - ``OPEN_DATA_MODE=live`` + key + no kill switch ⇒ ``"live"``.
+    - ``OPEN_DATA_MODE=live`` + **no key** ⇒ ``"live"`` — a live INTENT that is
+      misconfigured; :func:`get_open_data_adapter` fails loud (``RuntimeError``)
+      rather than silently degrade (INV-9). Reported as ``"live"`` so the misconfig
+      stays visible, not hidden behind a false ``"simulate"``.
+    """
+    if settings.open_data_mode == "simulate":
+        return "simulate"
+    # OPEN_DATA_MODE == "live": the kill switch forces simulate even with a key
+    # (INV-8). A missing key is a live INTENT that fails loud at construction
+    # (get_open_data_adapter) — reported here as the "live" intent.
+    if settings.open_data_api_key is not None and settings.open_data_kill_switch:
+        return "simulate"
+    return "live"
+
+
+def get_open_data_adapter() -> OpenDataAdapter:
+    """Return the Open Data adapter impl for the current ``OPEN_DATA_MODE`` (E1; INV-8/9).
+
+    The tryopendata.ai Texas-education enrichment boundary keys on its own
+    ``OPEN_DATA_MODE`` seam, independent of the v1 ``SEND_MODE`` lock (mirroring
+    ``CRM_MODE`` / ``STRIPE_MODE``):
+
+    - ``simulate`` (default) ⇒ a fresh :class:`SeededOpenDataAdapter` (synthetic,
+      offline, no key; INV-9) — the v1 default.
+    - ``live`` + key + **kill switch set** ⇒ degrade to :class:`SeededOpenDataAdapter`
+      (INV-8) — never a live query when the kill switch is on.
+    - ``live`` + key + no kill switch ⇒ :class:`LiveOpenDataAdapter` (real
+      tryopendata.ai over httpx behind the per-run query cap).
+    - ``live`` + **no key** ⇒ ``RuntimeError`` — fail loud on misconfig rather than
+      silently degrading (the CRM/Stripe live-without-token precedent; INV-9).
+
+    The cap is the env override ``open_data_per_run_query_cap`` when set, else the
+    canonical ``params.open_data.per_run_query_cap`` (INV-11). Config (key,
+    datasets, cap) is injected — the adapter reads no settings/params itself. A
+    runtime cap-exhaustion (the (cap+1)th query) raises
+    :class:`~app.adapters.open_data.base.OpenDataBudgetExceededError`, which the
+    caller degrades to seeded on (INV-8) — the coarser kill-switch sibling is here.
+
+    Raises:
+        RuntimeError: when ``OPEN_DATA_MODE=live`` but no ``od_live_`` key is configured.
+    """
+    settings = get_settings()
+
+    # OPEN_DATA_MODE == "live" + no key ⇒ fail loud on misconfig (INV-9).
+    # effective_open_data_mode reports the live INTENT; the RuntimeError lives here.
+    if settings.open_data_mode == "live" and settings.open_data_api_key is None:
+        raise RuntimeError(
+            "OPEN_DATA_MODE='live' requires OPEN_DATA_API_KEY (an od_live_ key) — none is "
+            "configured. Fail loud on misconfig rather than silently degrade to seeded "
+            "(INV-9). Set the key or use OPEN_DATA_MODE='simulate'."
+        )
+
+    # Single canonical precedence: simulate (default), or live degraded to simulate
+    # by the kill switch (INV-8). A live result needs a key (guaranteed non-None
+    # by the guard above).
+    if effective_open_data_mode(settings) == "simulate":
+        return SeededOpenDataAdapter()
+
+    # A live result implies a key — the no-key case raised above. Bind to a local
+    # so the type narrows from ``str | None`` to ``str``.
+    api_key = settings.open_data_api_key
+    if api_key is None:  # pragma: no cover — unreachable past the fail-loud guard
+        raise RuntimeError("OPEN_DATA_MODE='live' requires OPEN_DATA_API_KEY — none is configured.")
+    open_data_params = _load_params().open_data
+    cap = (
+        settings.open_data_per_run_query_cap
+        if settings.open_data_per_run_query_cap is not None
+        else open_data_params.per_run_query_cap
+    )
+    client = httpx.Client(base_url=_OPEN_DATA_BASE_URL)
+    return LiveOpenDataAdapter(
+        client=client,
+        api_key=api_key,
+        datasets=open_data_params.datasets,
+        per_run_query_cap=cap,
     )
 
 

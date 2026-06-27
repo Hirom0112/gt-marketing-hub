@@ -45,6 +45,14 @@ SisMode = Literal["simulate", "live"]
 # + kill switch. Separate from the `send_mode` lock — the payments seam keys on
 # its own var, mirroring CRM_MODE.
 StripeMode = Literal["simulate", "live"]
+# OPEN_DATA_MODE is the tryopendata.ai Texas-education enrichment seam (E1, INV-9):
+# it selects the OpenDataAdapter impl the decision-change core reads. v1 default
+# `simulate` ⇒ the SeededOpenDataAdapter (synthetic, offline, no key); `live` ⇒ the
+# LiveOpenDataAdapter (real tryopendata.ai over httpx behind the INV-8 query cap +
+# kill switch). Separate from the `send_mode` lock — keys on its own var, mirroring
+# CRM_MODE/STRIPE_MODE. `live` + kill switch (or cap-exhausted) degrades to seeded
+# (INV-8); `live` + NO key fails loud at the registry (INV-9 misconfig).
+OpenDataMode = Literal["simulate", "live"]
 # AUTH_MODE is the demo-auth bridge seam (B1 task 5a, INV-9-style): it selects how
 # the cockpit obtains a verified principal. v1 default `demo` — there is no real
 # Supabase login in v1, so the `POST /auth/demo-token` endpoint mints a SIGNED seat
@@ -191,6 +199,19 @@ class Settings(BaseModel):
     stripe_kill_switch: bool = False
     stripe_calls_per_run_cap: int | None = None
 
+    # Open Data (tryopendata.ai) enrichment seam (§5.4; E1, INV-8/INV-9). `open_data_mode`
+    # flips to `live` independently of the send-mode lock (mirrors CRM_MODE/STRIPE_MODE)
+    # so the cockpit can query the real Texas-education datasets behind the cap + kill
+    # switch. The `od_live_` API key defaults to ``None`` — absence is first-class: with
+    # no key the enrichment edge can only run `simulate` (the registry fails loud on
+    # `live` w/o a key, INV-9). `open_data_per_run_query_cap` is an OPTIONAL env override
+    # of the params cap (mirrors HubSpot/Stripe); ``None`` ⇒ use the params value.
+    # `open_data_kill_switch` disables all live queries and degrades to seeded (INV-8).
+    open_data_mode: OpenDataMode = "simulate"
+    open_data_api_key: str | None = None
+    open_data_kill_switch: bool = False
+    open_data_per_run_query_cap: int | None = None
+
     # Browser origins allowed to call the API (CORS; §5.1). The React app runs on
     # a separate origin (Vite dev server / built host) so it must be allow-listed
     # explicitly — never `*`, which would let any site call the API. Defaults to
@@ -232,6 +253,7 @@ class Settings(BaseModel):
         crm_mode = os.environ.get("CRM_MODE", "simulate").strip() or "simulate"
         sis_mode = os.environ.get("SIS_MODE", "simulate").strip() or "simulate"
         stripe_mode = os.environ.get("STRIPE_MODE", "simulate").strip() or "simulate"
+        open_data_mode = os.environ.get("OPEN_DATA_MODE", "simulate").strip() or "simulate"
         auth_mode = os.environ.get("AUTH_MODE", "demo").strip() or "demo"
 
         # COCKPIT_REPO: lower-cased; empty / unset / a `<…>` sentinel ⇒ `auto` (the
@@ -288,6 +310,25 @@ class Settings(BaseModel):
             else None
         )
 
+        # OPEN_DATA_API_KEY: the free `od_live_` Bearer key; a placeholder/sentinel
+        # (the .env.example angle-bracket form or an empty string) counts as "unset"
+        # ⇒ None ⇒ the enrichment edge can only run `simulate` (same first-class-absence
+        # posture as ANTHROPIC_API_KEY / the HubSpot token).
+        open_data_key = os.environ.get("OPEN_DATA_API_KEY")
+        if open_data_key is not None and (
+            open_data_key.strip() == "" or open_data_key.strip().startswith("<")
+        ):
+            open_data_key = None
+
+        # OPEN_DATA_PER_RUN_QUERY_CAP: an OPTIONAL env override of the params cap;
+        # empty / unset ⇒ None ⇒ the params value is used (mirrors STRIPE_CALLS_PER_RUN_CAP).
+        open_data_cap_raw = os.environ.get("OPEN_DATA_PER_RUN_QUERY_CAP")
+        open_data_per_run_query_cap = (
+            int(open_data_cap_raw)
+            if open_data_cap_raw is not None and open_data_cap_raw.strip() != ""
+            else None
+        )
+
         # The posted-catalog root: empty / unset / a `<…>` sentinel ⇒ None (fall back to
         # the library gallery + skip the static media mount). Same posture as the secrets.
         catalog_raw = os.environ.get("GT_POSTED_CATALOG_ROOT")
@@ -321,6 +362,10 @@ class Settings(BaseModel):
             stripe_webhook_secret=stripe_webhook_secret,
             stripe_kill_switch=_env_bool("STRIPE_KILL_SWITCH", False),
             stripe_calls_per_run_cap=stripe_calls_per_run_cap,
+            open_data_mode=open_data_mode,  # type: ignore[arg-type]
+            open_data_api_key=open_data_key,
+            open_data_kill_switch=_env_bool("OPEN_DATA_KILL_SWITCH", False),
+            open_data_per_run_query_cap=open_data_per_run_query_cap,
             cockpit_repo=cockpit_repo,  # type: ignore[arg-type]
             gt_program_id=gt_program_id,
             supabase_jwt_secret=jwt_secret,
