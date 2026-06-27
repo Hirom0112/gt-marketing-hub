@@ -6,6 +6,15 @@
 -- env has no local Postgres/pg_prove); the unconditional build-time guard is
 -- tests/unit/test_migrations_rls.py::test_program_id_restrictive_isolation.
 --
+-- VERIFIED PASSING 2026-06-27 against the local Supabase stack (1..4 all ok).
+-- Bootstrap (no pg_prove needed — run directly via psql):
+--   psql "$DB" -c 'CREATE EXTENSION IF NOT EXISTS pgtap;'
+--   # basejump helpers (the `tests.*` fns): fetch supabase_test_helpers--0.0.6.sql
+--   # from github.com/usebasejump/supabase-test-helpers, strip the `\echo/\quit`
+--   # extension guard, and apply the body:
+--   #   grep -vE '^\\(echo|quit)' sth.sql | psql "$DB" -f -
+--   psql "$DB" -Xqt -f backend/tests/db/pgtap/test_program_isolation.sql
+--
 -- Proves the two A1 boundaries hold for an authenticated CLIENT principal:
 --   (1) PROGRAM isolation — a principal whose app_metadata.program_id =
 --       'fall_enrollment' sees the seeded FALL row and ZERO summer_camp rows
