@@ -17,8 +17,8 @@ import {
 // home as LoginPage (ONE storage key; this module reuses load/save/clear rather
 // than duplicating persistence). The login gate calls `enter`; "Switch seat"
 // calls `leave`. DEMO-ONLY scope switch, not real auth (INV-1). Later slices read
-// `useSession()` to scope reads; the API layer reads the stored session to attach
-// the X-Demo-Role / X-Demo-Agent-Id headers (config.ts).
+// `useSession()` to scope reads; the API layer reads the stored session's signed
+// token to attach the `Authorization: Bearer` header (config.ts).
 
 export interface SessionContextValue {
   /** The current seat, or null when sitting at the login gate. */

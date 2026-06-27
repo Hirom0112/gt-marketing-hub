@@ -98,7 +98,9 @@ function enterAsRep(): void {
   localStorage.setItem(
     'gt_demo_session',
     JSON.stringify({
-      role: 'agent',
+      role: 'operator',
+      token: 'header.payload.signature',
+      expiresAt: Date.now() + 3_600_000,
       agentId: AGENT.id,
       agentRank: AGENT.rank,
       tier: AGENT.tier,

@@ -28,7 +28,7 @@ vi.mock('../../config', () => ({
 }));
 
 vi.mock('../../session/SessionContext', () => ({
-  useSession: () => ({ session: { role: 'agent', agentId: 'agent-1' } }),
+  useSession: () => ({ session: { role: 'operator', agentId: 'agent-1' } }),
 }));
 
 vi.mock('../../dashboard/MotivationBanner', () => ({

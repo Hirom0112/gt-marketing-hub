@@ -29,7 +29,8 @@ import type { SendPartition } from '../enrollment/BulkBar';
 //     read, one source of truth).
 //   · LEFT: "My Queue" = the EXISTING TriageList (no new list — §4), with its
 //     recency facets (overdue/fresh/working). It is owner-scoped AUTOMATICALLY:
-//     apiFetch attaches X-Demo-Agent-Id and the backend clamps the agent to its
+//     apiFetch attaches the signed bearer token (agent_id in app_metadata) and
+//     the backend clamps the agent to its
 //     own assigned_rep_id (the IDOR defense, M1). No owner param, no client-side
 //     security filter, no unscoped read.
 //   · RIGHT: the close panel — the EXISTING DealView + ActionPanel + CloseTips +

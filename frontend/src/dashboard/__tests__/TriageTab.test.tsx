@@ -3,8 +3,8 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import TriageTab from '../TriageTab';
 
 // Acceptance test (CLAUDE §4.2) for the agent Triage tab (R6 / D-12). The tab
-// reads the owner-scoped GET /work-queue (the X-Demo-Agent-Id header already
-// scopes the rows to this agent's assigned families) and surfaces ONLY the
+// reads the owner-scoped GET /work-queue (the verified agent_id in the bearer
+// token already scopes the rows to this agent's assigned families) and surfaces ONLY the
 // "falling through the cracks" rows: no `last_contact_at` logged OR an overdue
 // follow-up. A contacted/working family with a recent contact is excluded. A row
 // click selects the family; no cracks rows → the clean empty state.

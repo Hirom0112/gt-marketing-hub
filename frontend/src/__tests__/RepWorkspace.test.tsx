@@ -9,12 +9,14 @@ import { DEMO_AGENTS } from '../LoginPage';
 // Leads/Triage/Students/Reconcile/KPI-Dashboard tabs), and an admin seat on the
 // AdminDashboard. The enduring contract this still pins:
 //   · the agent gets the AGENT surface, the admin gets the ADMIN surface (role gate);
-//   · the agent's /work-queue read rides THROUGH apiFetch carrying X-Demo-Agent-Id
-//     (owner-scoped server-side — the IDOR defense, M1 — no client-side filter).
+//   · the agent's /work-queue read rides THROUGH apiFetch carrying the signed
+//     Authorization: Bearer token (owner-scoped server-side by the verified
+//     app_metadata.agent_id — the IDOR defense, M1 — no client-side filter).
 // The deep close-panel/draft flows moved into the shared DetailPanel/AiDrafts and
 // are covered by their own unit tests; this file asserts the shell landing only.
 
 const AGENT = DEMO_AGENTS[0]!; // Riley Carter — closer seat
+const FAKE_TOKEN = 'header.payload.signature';
 
 const QUEUE_ROWS = [
   {
@@ -87,7 +89,9 @@ function enterAsRep(): void {
   localStorage.setItem(
     'gt_demo_session',
     JSON.stringify({
-      role: 'agent',
+      role: 'operator',
+      token: FAKE_TOKEN,
+      expiresAt: Date.now() + 3_600_000,
       agentId: AGENT.id,
       agentRank: AGENT.rank,
       tier: AGENT.tier,
@@ -140,7 +144,7 @@ describe('Agent seat lands on the redesigned AgentDashboard', () => {
     }
   });
 
-  it('reads /work-queue THROUGH apiFetch carrying the agent header (owner-scoped, no client filter)', async () => {
+  it('reads /work-queue THROUGH apiFetch carrying the bearer token (owner-scoped, no client filter)', async () => {
     enterAsRep();
     await screen.findByTestId('agent-dashboard');
     await waitFor(() => {
@@ -148,8 +152,7 @@ describe('Agent seat lands on the redesigned AgentDashboard', () => {
     });
     const wq = calls.find((c) => c.url.includes('/work-queue'))!;
     const headers = wq.init?.headers as Record<string, string> | undefined;
-    expect(headers?.['X-Demo-Role']).toBe('agent');
-    expect(headers?.['X-Demo-Agent-Id']).toBe(AGENT.id);
+    expect(headers?.['Authorization']).toBe(`Bearer ${FAKE_TOKEN}`);
   });
 
   it('regression: an ADMIN seat lands on the AdminDashboard (3-metric strip), not the agent one', async () => {

@@ -5,8 +5,8 @@ import { fmtPct } from '../enrollment/format';
 
 // AgentKpiTab (R6 / D-14) — the sales agent's personal performance dashboard
 // (sales-agent brief Tab 5). A Day/Week/Month/All-time window control scopes a
-// single read: GET /enrollment/agent-kpis?window=… (owner-scoped by the
-// X-Demo-Agent-Id principal header that apiFetch attaches, so the agent only
+// single read: GET /enrollment/agent-kpis?window=… (owner-scoped by the verified
+// agent_id in the bearer token that apiFetch attaches, so the agent only
 // ever sees their own numbers — assigned-only, INV-1). The seven KPIs render in
 // a clean scannable grid (Stat primitive inside .dash-kpi-grid); no charts per
 // the brief. Read-only GET (INV-2). Changing the window refetches.

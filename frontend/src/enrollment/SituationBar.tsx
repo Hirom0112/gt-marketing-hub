@@ -7,7 +7,8 @@ import { fmtUSD } from './format';
 // the caller owns the read and the scoping.
 //
 // The REP variant ("my book") is fed the agent's OWNER-SCOPED /work-queue rows:
-// because the caller reads through apiFetch (which attaches X-Demo-Agent-Id) and
+// because the caller reads through apiFetch (which attaches the signed bearer
+// token whose app_metadata carries the agent_id) and
 // the backend clamps the agent to its own assigned_rep_id, these rows are already
 // only that rep's families — the bar does no filtering of its own. M3's admin
 // "team total" variant can reuse this same component with the team-wide rows.

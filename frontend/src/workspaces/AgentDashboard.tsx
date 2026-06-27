@@ -28,7 +28,8 @@ import type { ReconcileIssue, WorkQueueRow } from '../dashboard/types';
 // (BOOKED / CONTACTED / OVERDUE / ACTIVE), a quiet daily-motivation banner, then
 // two columns — left a tabbed work area (Leads / Triage / Students / Reconcile /
 // KPI Dashboard), right the contextual detail panel. ASSIGNED families only — the
-// backend owner-scopes every read via the X-Demo-Agent-Id header (M1 IDOR defense),
+// backend owner-scopes every read via the verified agent_id in the bearer token's
+// app_metadata (M1 IDOR defense),
 // so the shared tabs need no client-side filter. Composed from the same shared
 // dashboard/* components as the admin shell (D-10).
 

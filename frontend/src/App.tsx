@@ -81,7 +81,7 @@ function AppShell(): JSX.Element {
   const [workspace, setWorkspace] = useState<Workspace>('enrollment');
 
   // No seat chosen yet ⇒ the demo login gate (M1). The gate's chosen seat scopes
-  // the whole app (and rides on the X-Demo-* headers via apiFetch).
+  // the whole app (and rides as a signed `Authorization: Bearer` token via apiFetch).
   if (session === null) {
     return (
       <LoginPage
@@ -131,7 +131,7 @@ function AppShell(): JSX.Element {
               AgentDashboard (4-metric strip + motivation banner + Leads/Triage/
               Students/Reconcile/KPI Dashboard). Branch by seat. */}
           {activeWorkspace === 'enrollment' &&
-            (session.role === 'agent' ? (
+            (session.role === 'operator' ? (
               <AgentDashboard />
             ) : (
               <AdminDashboard />

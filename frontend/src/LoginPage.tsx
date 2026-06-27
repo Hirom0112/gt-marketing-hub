@@ -1,32 +1,46 @@
 import { useState } from 'react';
+import { apiBaseUrl } from './config';
 
-// The demo sign-in gate (M1 login, MULTI_AGENT_COCKPIT.md §10.2). A simple blue
-// page with a centered white rounded card carrying the GT Pulse logo and a seat
-// picker. DEMO-ONLY role switch — NOT real authentication, no PII (INV-1); the
-// server-side scoping is the M1 backend piece. Picking a seat enters the cockpit
-// as that role; "Switch seat" (in the shell) returns here.
+// The demo sign-in gate (M1 login → B1 verified auth, MULTI_AGENT_COCKPIT.md
+// §10.2). A simple blue page with a centered white rounded card carrying the GT
+// Pulse logo and a seat picker. Picking a seat now trades it for a REAL signed
+// JWT minted by the backend (`POST /auth/demo-token`) — the verified-principal
+// bridge that replaced the old spoofable client-spelled role header. Still DEMO-only and
+// synthetic (INV-1): the token is signed over synthetic seats, no PII, no real
+// account. "Switch seat" (in the shell) returns here.
 
-export type DemoRole = 'admin' | 'agent';
+/** The three backend roles (app_metadata.role): the leadership/admin lens, the
+ *  leadership read view, and a single sales operator's owner-scoped seat. The old
+ *  M1 `agent` seat is now `operator` (preserving its agent_id). */
+export type DemoRole = 'admin' | 'leader' | 'operator';
 
-/** A sales agent's tier — "closer" is a tier, NOT a third role
+/** A sales operator's tier — "closer" is a tier, NOT a role
  *  (MULTI_AGENT_COCKPIT.md §2.2). */
 export type AgentTier = 'closer' | 'setter';
 
 export interface DemoSession {
   role: DemoRole;
-  /** The chosen agent's canonical agent_id uuid (only when role === 'agent'). */
+  /** The signed seat JWT minted by `POST /auth/demo-token`; sent as
+   *  `Authorization: Bearer <token>` on every cockpit API call (config.ts). */
+  token?: string;
+  /** Absolute expiry (epoch ms) derived from the mint's `expires_in`. Stored for
+   *  observability/debugging; expiry is enforced server-side (an expired token
+   *  401s and the user re-enters) — there is NO client-side silent refresh. */
+  expiresAt?: number;
+  /** The chosen agent's canonical agent_id uuid (only when role === 'operator'). */
   agentId?: string;
   /** The agent's pipeline rank (1 = closer seat, 2 = setter). */
   agentRank?: number;
-  /** The agent's tier (only when role === 'agent'). */
+  /** The agent's tier (only when role === 'operator'). */
   tier?: AgentTier;
-  /** The agent's synthetic display name (only when role === 'agent'). */
+  /** The agent's synthetic display name (only when role === 'operator'). */
   agentName?: string;
 }
 
 export interface DemoAgent {
   /** The canonical seeded agent_id uuid (migration 0013) — this is the value
-   *  carried on X-Demo-Agent-Id so the backend's get_demo_principal scopes. */
+   *  signed into the operator token's `app_metadata.agent_id` so the backend's
+   *  get_principal owner-scopes the seat. */
   readonly id: string;
   readonly rank: number;
   readonly tier: AgentTier;
@@ -35,8 +49,8 @@ export interface DemoAgent {
 
 // The demo runs exactly N=2 agents: rank 1 = closer (the founder's own seat),
 // rank 2 = average/setter (MULTI_AGENT_COCKPIT.md §2.2, §10.1). "Closer" is a
-// tier, not a third role. agent_ids are the canonical seeded uuids (migration
-// 0013) — the header value MUST match them. Synthetic names, no PII (INV-1).
+// tier, not a role. agent_ids are the canonical seeded uuids (migration 0013) —
+// the signed token's agent_id MUST match them. Synthetic names, no PII (INV-1).
 export const DEMO_AGENTS: ReadonlyArray<DemoAgent> = [
   {
     id: 'a0000000-0000-4000-8000-000000000001',
@@ -85,6 +99,33 @@ export function clearSession(): void {
   }
 }
 
+/** The OAuth-bearer-shaped response from `POST /auth/demo-token`. */
+interface DemoTokenResponse {
+  access_token: string;
+  token_type: string;
+  expires_in: number;
+}
+
+/** Trade a chosen seat for a REAL signed JWT from the backend's demo-auth bridge
+ *  (`POST /auth/demo-token`, body `{role, agent_id?}`). Throws on a non-OK
+ *  response so the gate can surface an error and NOT store a broken session. */
+async function fetchDemoToken(
+  role: DemoRole,
+  agentId?: string,
+): Promise<DemoTokenResponse> {
+  const body: { role: DemoRole; agent_id?: string } = { role };
+  if (agentId) body.agent_id = agentId;
+  const res = await fetch(`${apiBaseUrl}/auth/demo-token`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) {
+    throw new Error(`demo-token mint failed (${res.status})`);
+  }
+  return (await res.json()) as DemoTokenResponse;
+}
+
 export default function LoginPage({
   onEnter,
 }: {
@@ -93,25 +134,51 @@ export default function LoginPage({
   const [role, setRole] = useState<DemoRole>('admin');
   const firstAgent = DEMO_AGENTS[0];
   const [agentId, setAgentId] = useState<string>(firstAgent?.id ?? '');
+  const [busy, setBusy] = useState<boolean>(false);
+  const [error, setError] = useState<string | null>(null);
 
-  function enter(): void {
-    if (role === 'admin') {
-      onEnter({ role: 'admin' });
+  async function enter(): Promise<void> {
+    setError(null);
+    setBusy(true);
+    // The operator seat carries its canonical agent_id; admin/leader do not.
+    const agent =
+      role === 'operator'
+        ? (DEMO_AGENTS.find((a) => a.id === agentId) ?? firstAgent)
+        : undefined;
+    if (role === 'operator' && !agent) {
+      setBusy(false);
       return;
     }
-    const agent = DEMO_AGENTS.find((a) => a.id === agentId) ?? firstAgent;
-    if (!agent) return;
-    onEnter({
-      role: 'agent',
-      agentId: agent.id,
-      agentRank: agent.rank,
-      tier: agent.tier,
-      agentName: agent.name,
-    });
+    try {
+      const minted = await fetchDemoToken(role, agent?.id);
+      const session: DemoSession = {
+        role,
+        token: minted.access_token,
+        expiresAt: Date.now() + minted.expires_in * 1000,
+      };
+      if (agent) {
+        session.agentId = agent.id;
+        session.agentRank = agent.rank;
+        session.tier = agent.tier;
+        session.agentName = agent.name;
+      }
+      onEnter(session);
+    } catch {
+      // Fail closed: surface the error, store NOTHING (no broken/partial seat).
+      setError('Could not sign in. Is the API running? Try again.');
+    } finally {
+      setBusy(false);
+    }
   }
 
   const selectedAgent =
     DEMO_AGENTS.find((a) => a.id === agentId) ?? firstAgent;
+
+  const ROLE_SEATS: ReadonlyArray<{ value: DemoRole; label: string }> = [
+    { value: 'admin', label: 'Admin' },
+    { value: 'leader', label: 'Leadership' },
+    { value: 'operator', label: 'Sales Agent' },
+  ];
 
   return (
     <div className="login-page" data-testid="login-page">
@@ -120,7 +187,7 @@ export default function LoginPage({
         data-testid="login-card"
         onSubmit={(e) => {
           e.preventDefault();
-          enter();
+          void enter();
         }}
       >
         {/* The logo art is white-on-transparent; we recolor it to the brand navy
@@ -133,29 +200,22 @@ export default function LoginPage({
           role="tablist"
           aria-label="Choose your seat"
         >
-          <button
-            type="button"
-            role="tab"
-            aria-selected={role === 'admin'}
-            data-testid="login-role-admin"
-            className={`login-role-btn${role === 'admin' ? ' is-active' : ''}`}
-            onClick={() => setRole('admin')}
-          >
-            Admin
-          </button>
-          <button
-            type="button"
-            role="tab"
-            aria-selected={role === 'agent'}
-            data-testid="login-role-agent"
-            className={`login-role-btn${role === 'agent' ? ' is-active' : ''}`}
-            onClick={() => setRole('agent')}
-          >
-            Sales Agent
-          </button>
+          {ROLE_SEATS.map((seat) => (
+            <button
+              key={seat.value}
+              type="button"
+              role="tab"
+              aria-selected={role === seat.value}
+              data-testid={`login-role-${seat.value}`}
+              className={`login-role-btn${role === seat.value ? ' is-active' : ''}`}
+              onClick={() => setRole(seat.value)}
+            >
+              {seat.label}
+            </button>
+          ))}
         </div>
 
-        {role === 'agent' && (
+        {role === 'operator' && (
           <div className="login-agent-pick">
             <select
               className="login-select"
@@ -181,12 +241,23 @@ export default function LoginPage({
           </div>
         )}
 
-        <button type="submit" className="login-enter" data-testid="login-enter">
-          Enter
+        <button
+          type="submit"
+          className="login-enter"
+          data-testid="login-enter"
+          disabled={busy}
+        >
+          {busy ? 'Signing in…' : 'Enter'}
         </button>
 
+        {error && (
+          <p className="login-error" role="alert" data-testid="login-error">
+            {error}
+          </p>
+        )}
+
         <p className="login-foot">
-          Demo role switch — not real authentication. All data is synthetic.
+          Demo sign-in — a real signed token over synthetic seats, no PII.
         </p>
       </form>
     </div>

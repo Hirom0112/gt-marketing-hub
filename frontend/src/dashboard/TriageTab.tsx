@@ -7,8 +7,9 @@ import { EmptyState } from './EmptyState';
 import type { WorkQueueRow } from './types';
 
 // The agent Triage tab (R6 / D-12). Answers "who is falling through the cracks
-// right now?" off the owner-scoped GET /work-queue (the X-Demo-Agent-Id header
-// already scopes the response to this agent's assigned families). A row surfaces
+// right now?" off the owner-scoped GET /work-queue (the verified agent_id in the
+// bearer token already scopes the response to this agent's assigned families). A
+// row surfaces
 // when ANY of the brief's signals hold: no contact recorded / no logged sales
 // activity / no follow-up recorded — i.e. no `last_contact_at` — OR an overdue
 // follow-up (`contact_status === 'overdue'`). Recency semantics come from

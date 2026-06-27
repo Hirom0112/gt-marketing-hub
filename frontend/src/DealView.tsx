@@ -833,7 +833,7 @@ export default function DealView({
     // and keep only THIS family's children, so the deal panel can show which
     // children the family has + where EACH left off. scope=all so a recovered /
     // dismissed sibling still appears (the deal panel is the close view, not the
-    // active-only triage board). X-Demo-* headers ride along via apiFetch. Fail
+    // active-only triage board). The bearer token rides along via apiFetch. Fail
     // safe: any error / unknown shape ⇒ no children (never a crash). Read-only.
     let cancelled = false;
     setChildren(null);
