@@ -2,12 +2,14 @@ import { useCallback, useEffect, useState } from 'react';
 import {
   Check,
   ClipboardCheck,
+  Database,
   HelpCircle,
   Lock,
+  Radio,
   XCircle,
 } from 'lucide-react';
 import { apiFetch } from '../config';
-import { Button } from '../ui';
+import { Button, Chip } from '../ui';
 import { EmptyState } from '../dashboard/EmptyState';
 
 // Consolidated Decision Queue workspace (TODO_v2 §B2). A leader/admin-only review
@@ -52,8 +54,13 @@ export default function DecisionQueueWorkspace({
 }: DecisionQueueWorkspaceProps): JSX.Element {
   const [state, setState] = useState<LoadState>({ status: 'loading' });
 
-  const load = useCallback(() => {
-    setState({ status: 'loading' });
+  // `silent` refreshes (after an action or an enrichment) keep the current
+  // rendered tree mounted — they do NOT blank to the loading state. This both
+  // avoids a flicker AND preserves the OpenDataTrigger's inline result state
+  // (the loading branch doesn't render the trigger, so a hard reload would
+  // unmount and reset it).
+  const load = useCallback((silent = false) => {
+    if (!silent) setState({ status: 'loading' });
     apiFetch('/decisions')
       .then((res) => {
         // Fail-closed: an operator reaching this surface is 403 — render the
@@ -90,7 +97,7 @@ export default function DecisionQueueWorkspace({
         return res.json();
       })
       .then(() => {
-        load(); // refresh the queue
+        load(true); // silent refresh of the queue (keep the tree mounted)
         onChanged?.(); // let App re-pull the nav badge count
       })
       .catch((err: unknown) => {
@@ -153,6 +160,8 @@ export default function DecisionQueueWorkspace({
     <section data-testid="decision-queue" aria-label="Decision queue">
       <QueueHeader count={open.length} />
 
+      <OpenDataTrigger onChanged={() => load(true)} />
+
       {open.length === 0 ? (
         <div data-testid="decision-queue-empty" style={{ marginTop: 'var(--s-3)' }}>
           <EmptyState
@@ -214,6 +223,342 @@ function summarizeValue(value: unknown): string {
   }
 }
 
+// ---------------------------------------------------------------------------
+// Open-Data enrichment (TODO_v2 §E1). When a Texas-district Open Data query
+// boosts a recommendation the backend enqueues an `open_data_enrichment`
+// decision whose payload carries the district enrichment, the recommendation
+// change, the provenance, and the `data_source` (live OpenData vs seeded). The
+// card renders that change + provenance + a SOURCE BADGE so a leader sees both
+// the decision AND where the signal came from (live vs simulated, INV-9).
+
+interface DistrictEnrichment {
+  district_id: string;
+  d_rating: string;
+  staar_proficiency: number;
+  per_pupil_spend: number;
+  enrollment: number;
+}
+
+interface EnrichmentPayload {
+  district_id: string;
+  enrichment: DistrictEnrichment;
+  recommendation: {
+    base_priority: number;
+    new_priority: number;
+    delta: number;
+  };
+  provenance: { reason: string; signals: string[] };
+  data_source: 'live' | 'seeded';
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null;
+}
+
+// Defensively narrow a raw decision payload to the enrichment shape. Returns
+// null on any shape mismatch so a malformed payload falls back to the generic
+// dl rendering rather than crashing the card (fail-safe).
+function parseEnrichment(payload: Record<string, unknown>): EnrichmentPayload | null {
+  const enr = payload.enrichment;
+  const rec = payload.recommendation;
+  const prov = payload.provenance;
+  const ds = payload.data_source;
+  if (!isRecord(enr) || !isRecord(rec) || !isRecord(prov)) return null;
+  if (ds !== 'live' && ds !== 'seeded') return null;
+  const signals = Array.isArray(prov.signals)
+    ? prov.signals.filter((s): s is string => typeof s === 'string')
+    : [];
+  return {
+    district_id: String(payload.district_id ?? enr.district_id ?? '—'),
+    enrichment: {
+      district_id: String(enr.district_id ?? '—'),
+      d_rating: String(enr.d_rating ?? '—'),
+      staar_proficiency: Number(enr.staar_proficiency ?? 0),
+      per_pupil_spend: Number(enr.per_pupil_spend ?? 0),
+      enrollment: Number(enr.enrollment ?? 0),
+    },
+    recommendation: {
+      base_priority: Number(rec.base_priority ?? 0),
+      new_priority: Number(rec.new_priority ?? 0),
+      delta: Number(rec.delta ?? 0),
+    },
+    provenance: {
+      reason: String(prov.reason ?? '—'),
+      signals,
+    },
+    data_source: ds,
+  };
+}
+
+// The SOURCE BADGE. `live` → a distinct flow-tone "Live OpenData" chip (the
+// query hit the real Texas Open Data portal); `seeded` → the muted INV-9
+// gate-tone "Seeded" chip — the SAME simulated-surface treatment the app uses
+// elsewhere (PlaceholderBadge / "CRM: Simulated"), telling the leader the
+// signal came from the synthetic seed, not a live drain.
+function SourceBadge({ dataSource }: { dataSource: 'live' | 'seeded' }): JSX.Element {
+  const live = dataSource === 'live';
+  return (
+    <span data-testid="enrichment-source-badge" data-source={dataSource}>
+      <Chip
+        tone={live ? 'flow' : 'gate'}
+        title={
+          live
+            ? 'Live OpenData — the query hit the real Texas Open Data portal.'
+            : 'Seeded — the signal came from the synthetic seed, not a live drain (INV-9).'
+        }
+      >
+        {live ? (
+          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+            <Radio size={9} aria-hidden /> Live OpenData
+          </span>
+        ) : (
+          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+            <Database size={9} aria-hidden /> Seeded
+          </span>
+        )}
+      </Chip>
+    </span>
+  );
+}
+
+// The enrichment detail body: the district vitals (rating / STAAR / enrollment),
+// the recommendation change (base → new, +delta), and the provenance (reason +
+// signal chips).
+function OpenDataEnrichmentDetail({
+  enrichment,
+}: {
+  enrichment: EnrichmentPayload;
+}): JSX.Element {
+  const { enrichment: e, recommendation: r, provenance: p } = enrichment;
+  const deltaSign = r.delta > 0 ? '+' : '';
+  return (
+    <div data-testid="enrichment-detail" style={{ fontSize: 'var(--fs-sm)' }}>
+      <div
+        data-testid="enrichment-district"
+        style={{ color: 'var(--ink)', fontWeight: 600 }}
+      >
+        District {enrichment.district_id}
+      </div>
+
+      <dl
+        data-testid="enrichment-vitals"
+        style={{
+          display: 'grid',
+          gridTemplateColumns: 'auto 1fr',
+          gap: '2px var(--s-3)',
+          margin: 'var(--s-2) 0 0',
+        }}
+      >
+        <dt className="mono" style={{ color: 'var(--muted)' }}>
+          rating
+        </dt>
+        <dd data-testid="enrichment-rating" style={{ margin: 0, color: 'var(--ink)' }}>
+          {e.d_rating}
+        </dd>
+        <dt className="mono" style={{ color: 'var(--muted)' }}>
+          STAAR
+        </dt>
+        <dd data-testid="enrichment-staar" style={{ margin: 0, color: 'var(--ink)' }}>
+          {(e.staar_proficiency * 100).toFixed(0)}%
+        </dd>
+        <dt className="mono" style={{ color: 'var(--muted)' }}>
+          enrollment
+        </dt>
+        <dd
+          data-testid="enrichment-enrollment"
+          style={{ margin: 0, color: 'var(--ink)' }}
+        >
+          {e.enrollment.toLocaleString()}
+        </dd>
+      </dl>
+
+      <div
+        data-testid="enrichment-recommendation"
+        style={{
+          marginTop: 'var(--s-3)',
+          display: 'inline-flex',
+          alignItems: 'center',
+          gap: 'var(--s-2)',
+        }}
+      >
+        <span className="mono" style={{ color: 'var(--muted)' }}>
+          priority
+        </span>
+        <span style={{ color: 'var(--ink)' }}>
+          {r.base_priority} → {r.new_priority}
+        </span>
+        <Chip tone="flow" title="Priority boost from the Open Data signal.">
+          {deltaSign}
+          {r.delta}
+        </Chip>
+      </div>
+
+      <div data-testid="enrichment-provenance" style={{ marginTop: 'var(--s-3)' }}>
+        <div style={{ color: 'var(--ink)' }}>{p.reason}</div>
+        {p.signals.length > 0 && (
+          <div
+            data-testid="enrichment-signals"
+            style={{
+              display: 'flex',
+              flexWrap: 'wrap',
+              gap: 'var(--s-1)',
+              marginTop: 'var(--s-2)',
+            }}
+          >
+            {p.signals.map((signal) => (
+              <Chip key={signal} tone="neutral" title={`Open Data signal: ${signal}`}>
+                {signal}
+              </Chip>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// The trigger: a small leader/admin control that runs a Texas-district Open Data
+// query (POST /open-data/enrich). On a `recommendation_changed:true` response it
+// refreshes the queue (the new card appears) and surfaces the change + source
+// inline; on `recommendation_changed:false` it shows a quiet "no change — the
+// district is well-rated" note (honest — not every query changes a decision).
+// Fail-safe: a fetch error renders a quiet error and never crashes the queue.
+
+interface EnrichResult {
+  district_id: string;
+  recommendation_changed: boolean;
+  new_priority: number;
+  data_source: 'live' | 'seeded';
+}
+
+type TriggerState =
+  | { status: 'idle' }
+  | { status: 'running' }
+  | { status: 'changed'; result: EnrichResult }
+  | { status: 'unchanged'; result: EnrichResult }
+  | { status: 'error'; message: string };
+
+function OpenDataTrigger({ onChanged }: { onChanged: () => void }): JSX.Element {
+  const [districtId, setDistrictId] = useState('');
+  const [trigger, setTrigger] = useState<TriggerState>({ status: 'idle' });
+
+  function run(): void {
+    const id = districtId.trim();
+    if (id === '') return;
+    setTrigger({ status: 'running' });
+    apiFetch('/open-data/enrich', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ district_id: id }),
+    })
+      .then((res) => {
+        if (!res.ok) throw new Error(`enrich failed: ${res.status}`);
+        return res.json() as Promise<{
+          district_id: string;
+          recommendation_changed: boolean;
+          new_priority: number;
+          data_source: 'live' | 'seeded';
+        }>;
+      })
+      .then((data) => {
+        const result: EnrichResult = {
+          district_id: data.district_id,
+          recommendation_changed: data.recommendation_changed,
+          new_priority: data.new_priority,
+          data_source: data.data_source,
+        };
+        if (data.recommendation_changed) {
+          setTrigger({ status: 'changed', result });
+          onChanged(); // refresh the queue — the new card appears
+        } else {
+          setTrigger({ status: 'unchanged', result });
+        }
+      })
+      .catch((err: unknown) => {
+        const message = err instanceof Error ? err.message : 'unknown error';
+        setTrigger({ status: 'error', message });
+      });
+  }
+
+  return (
+    <div
+      data-testid="open-data-trigger"
+      style={{
+        marginTop: 'var(--s-3)',
+        padding: 'var(--s-3)',
+        borderRadius: 'var(--r-md)',
+        border: '1px solid var(--line)',
+        background: 'var(--surface-2)',
+      }}
+    >
+      <div className="lab" style={{ color: 'var(--muted)', marginBottom: 'var(--s-2)' }}>
+        <Database size={12} aria-hidden /> Run Open Data enrichment
+      </div>
+      <div style={{ display: 'flex', gap: 'var(--s-2)', flexWrap: 'wrap', alignItems: 'center' }}>
+        <input
+          data-testid="open-data-district-input"
+          aria-label="District id"
+          value={districtId}
+          onChange={(e) => setDistrictId(e.target.value)}
+          placeholder="Texas district id"
+          style={{
+            flex: '1 1 200px',
+            fontFamily: 'var(--sans)',
+            fontSize: 'var(--fs-body)',
+            color: 'var(--ink)',
+            background: 'var(--surface)',
+            border: '1px solid var(--line)',
+            borderRadius: 'var(--r-sm)',
+            padding: 'var(--s-2)',
+          }}
+        />
+        <Button
+          variant="signal"
+          icon={Database}
+          data-testid="open-data-run"
+          disabled={trigger.status === 'running' || districtId.trim() === ''}
+          onClick={run}
+        >
+          {trigger.status === 'running' ? 'Querying…' : 'Run query'}
+        </Button>
+      </div>
+
+      {trigger.status === 'changed' && (
+        <p
+          data-testid="open-data-changed"
+          style={{ margin: 'var(--s-2) 0 0', fontSize: 'var(--fs-sm)', color: 'var(--ink)' }}
+        >
+          Recommendation changed for {trigger.result.district_id}: new priority{' '}
+          {trigger.result.new_priority}.{' '}
+          <SourceBadge dataSource={trigger.result.data_source} /> A new decision card was
+          added to the queue.
+        </p>
+      )}
+
+      {trigger.status === 'unchanged' && (
+        <p
+          data-testid="open-data-no-change"
+          style={{ margin: 'var(--s-2) 0 0', fontSize: 'var(--fs-sm)', color: 'var(--muted)' }}
+        >
+          No change — district {trigger.result.district_id} is well-rated.{' '}
+          <SourceBadge dataSource={trigger.result.data_source} />
+        </p>
+      )}
+
+      {trigger.status === 'error' && (
+        <p
+          data-testid="open-data-error"
+          role="alert"
+          style={{ margin: 'var(--s-2) 0 0', fontSize: 'var(--fs-sm)', color: 'var(--signal-ink)' }}
+        >
+          Could not run the Open Data query: {trigger.message}
+        </p>
+      )}
+    </div>
+  );
+}
+
 interface DecisionCardProps {
   decision: Decision;
   onAct: (id: string, action: DecisionAction, comment?: string) => void;
@@ -253,12 +598,27 @@ function DecisionCard({ decision, onAct }: DecisionCardProps): JSX.Element {
       <div
         className="lab"
         data-testid="decision-source"
-        style={{ color: 'var(--muted)', marginBottom: 'var(--s-2)' }}
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: 'var(--s-2)',
+          color: 'var(--muted)',
+          marginBottom: 'var(--s-2)',
+        }}
       >
-        {decision.source}
+        <span>{decision.source}</span>
+        {decision.source === 'open_data_enrichment' &&
+          parseEnrichment(decision.payload) !== null && (
+            <SourceBadge
+              dataSource={parseEnrichment(decision.payload)!.data_source}
+            />
+          )}
       </div>
 
-      {entries.length > 0 ? (
+      {decision.source === 'open_data_enrichment' &&
+      parseEnrichment(decision.payload) !== null ? (
+        <OpenDataEnrichmentDetail enrichment={parseEnrichment(decision.payload)!} />
+      ) : entries.length > 0 ? (
         <dl
           data-testid="decision-payload"
           style={{
