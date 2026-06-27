@@ -402,6 +402,7 @@ rbac:                       # B1 — role-based access-control matrix; single ho
   roles: [admin, leader, operator]  # the closed role set; the three canonical roles MUST be present
   permissions:                      # permission name → roles that hold it (permission → roles); permits = role in permissions[perm]
     decision_queue.view: [admin, leader]        # the leadership decision queue — leaders/admins only, NOT operators
+    decision_queue.decide: [admin, leader]      # B2 — act on (approve/reject/need_info) a queued decision; leaders/admins only, NOT operators
     budget.view: [admin, leader]                # budget/spend visibility — leaders/admins only
     families.view: [admin, leader, operator]    # family records — every role can view
   demo_token_ttl_seconds: 3600      # B1 demo-auth bridge — lifetime (s) of a seat JWT minted by POST /auth/demo-token (single home; INV-11)
