@@ -37,6 +37,11 @@ from app.core.program import Program, resolve_program
 from app.core.sales_agents import lookup as lookup_sales_agent
 from app.core.seam import MirrorState
 from app.core.settings import Settings
+from app.data.decisions_store import (
+    DecisionsStore,
+    InMemoryDecisionsStore,
+    build_supabase_decisions_store,
+)
 from app.data.notes_repository import InMemoryNotesRepository, NotesRepository
 from app.data.payments_store import (
     InMemoryPaymentsStore,
@@ -278,6 +283,41 @@ def _build_payments_store() -> PaymentsStore:
 # + payment money ledger behind the same NFR-8 seam as ``_repository``. Default v1 =
 # in-memory (A-3); production swaps the Supabase-backed impl over the 0026 tables.
 _payments_store: PaymentsStore = _build_payments_store()
+
+
+def _build_decisions_store() -> DecisionsStore:
+    """Bind the B2 Decision-Queue store, MIRRORING ``_build_payments_store``.
+
+    The same ``COCKPIT_REPO`` / ``SUPABASE_URL`` selection as the family, watermark,
+    and payments stores, so the four never disagree on which backend is live (the
+    NFR-8 store seam):
+
+    - ``synthetic`` ⇒ FORCE the in-memory store (never Supabase).
+    - ``supabase`` ⇒ REQUIRE the live store; a missing ``SUPABASE_URL`` is a misconfig
+      ⇒ raise (fail loud, the family-store posture).
+    - ``auto`` (default) ⇒ Supabase when ``SUPABASE_URL`` is configured, else the
+      in-memory v1 fallback (A-3). Default CI is :class:`InMemoryDecisionsStore`.
+    """
+    repo_mode = Settings.from_env().cockpit_repo
+    if repo_mode == "synthetic":
+        return InMemoryDecisionsStore()
+    if repo_mode == "supabase":
+        supabase = build_supabase_decisions_store()
+        if supabase is None:
+            raise RuntimeError(
+                "COCKPIT_REPO=supabase requires SUPABASE_URL (+ "
+                "SUPABASE_SERVICE_ROLE_KEY) for the Decision-Queue store; none was "
+                "configured. Set them, or use COCKPIT_REPO=synthetic / auto."
+            )
+        return supabase
+    return build_supabase_decisions_store() or InMemoryDecisionsStore()
+
+
+# Singleton Decision-Queue store (B2) — the durable per-program human-decision queue
+# (decision + append-only decision_event) behind the same NFR-8 seam as
+# ``_repository``. Default v1 = in-memory (A-3); production swaps the Supabase-backed
+# impl over the 0028 tables.
+_decisions_store: DecisionsStore = _build_decisions_store()
 
 # Singleton env snapshot, read once at import (TECH_STACK §5; INV-11). Tests that
 # need a different env override `get_settings_dep`; named so it never clashes with
@@ -599,6 +639,11 @@ def get_payments_adapter_dep() -> PaymentsAdapter:
 def get_payments_store() -> PaymentsStore:
     """FastAPI dependency yielding the active Stripe payments store (A3 seam)."""
     return _payments_store
+
+
+def get_decisions_store() -> DecisionsStore:
+    """FastAPI dependency yielding the active Decision-Queue store (B2 seam)."""
+    return _decisions_store
 
 
 # ===========================================================================
