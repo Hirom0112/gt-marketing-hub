@@ -16,6 +16,7 @@ from app.api.contact_outcome import router as contact_outcome_router
 from app.api.content import router as content_router
 from app.api.crm_status import router as crm_status_router
 from app.api.crm_sync import router as crm_sync_router
+from app.api.decisions import router as decisions_router
 from app.api.deps import get_params, get_security_event_log
 from app.api.enrollment import router as enrollment_router
 from app.api.evals import router as evals_router
@@ -205,6 +206,13 @@ app.include_router(scoreboard_router)
 # acknowledge action. DETECTION, not inline blocking; the populate path is the
 # app-layer service_role feed (no public definer-rights helper, D-RLS-7).
 app.include_router(security_router)
+
+# Cross-module human Decision Queue (B2; PLAN_v2 §B2; INV-2) — /decisions GET
+# (leader-gated open queue) + POST (open submit — any module/principal flags an
+# item) + /decisions/{id}/action POST (leader-gated decide: approve/reject/need_info
+# through the pure state machine, fail-closed on an illegal transition). The actor is
+# the VERIFIED principal; every decided action is LOGGED to the §10 spine (NFR-6).
+app.include_router(decisions_router)
 
 
 # AWS Lambda + API Gateway entrypoint (ARCHITECTURE.md §12).
