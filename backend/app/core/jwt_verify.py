@@ -1,8 +1,8 @@
 """Stdlib HS256 JWT verification — the verified-identity core (B1; no new dep).
 
 This is the cryptographic check beneath the verified-identity principal that
-REPLACES the spoofable ``X-Demo-Role`` header (the security audit's top finding,
-S1). Supabase signs its end-user JWTs with an HS256 shared secret
+REPLACES the spoofable client-supplied role header (the security audit's top
+finding, S1). Supabase signs its end-user JWTs with an HS256 shared secret
 (``SUPABASE_JWT_SECRET``, TECH_STACK §5.2); this module recomputes that signature
 with the stdlib and checks expiry — protecting the ≤15-dependency budget (no
 ``pyjwt``/``python-jose``): only ``hmac``/``hashlib``/``base64``/``json``.
@@ -30,6 +30,40 @@ class JwtError(Exception):
     A single exception type so the API layer has exactly one thing to catch and
     map to a 401 — there is no "soft" failure mode (fail-closed; INV-4 posture).
     """
+
+
+def _b64url_encode(raw: bytes) -> str:
+    """base64url WITHOUT padding — the JWT wire form (the inverse of decode)."""
+    return base64.urlsafe_b64encode(raw).rstrip(b"=").decode("ascii")
+
+
+def sign_hs256(claims: dict[str, Any], *, secret: str) -> str:
+    """Sign ``claims`` into a compact HS256 JWS — the inverse of :func:`verify_hs256`.
+
+    Mirrors Supabase's HS256 signing (the same ``hmac.new(secret, …, sha256)`` the
+    verifier recomputes) using only the stdlib (no ``pyjwt`` — protects the
+    ≤15-dependency budget). The header is the fixed ``{"alg":"HS256","typ":"JWT"}``;
+    the payload is ``claims`` serialized as JSON. The verifier round-trips any token
+    this produces (``verify_hs256(sign_hs256(c, secret=s), secret=s, now=…) == c``).
+
+    This is the production signer the coworker proxy uses to mint the closer's
+    ``Authorization: Bearer`` token (it authenticates AS a fixed operator), and the
+    test helper (:func:`tests.api._jwt.mint_jwt`) builds Supabase-shaped claims on
+    top of it. It performs NO clock read and NO I/O.
+
+    Args:
+        claims: The JWT payload (e.g. ``sub`` / ``exp`` / ``app_metadata``).
+        secret: The HS256 shared secret to sign with (``SUPABASE_JWT_SECRET``).
+
+    Returns:
+        The compact JWS string (``header.payload.signature``).
+    """
+    header = {"alg": "HS256", "typ": "JWT"}
+    header_b64 = _b64url_encode(json.dumps(header).encode("utf-8"))
+    payload_b64 = _b64url_encode(json.dumps(claims).encode("utf-8"))
+    signing_input = f"{header_b64}.{payload_b64}".encode("ascii")
+    sig = hmac.new(secret.encode("utf-8"), signing_input, hashlib.sha256).digest()
+    return f"{header_b64}.{payload_b64}.{_b64url_encode(sig)}"
 
 
 def _b64url_decode(segment: str) -> bytes:
