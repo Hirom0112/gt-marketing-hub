@@ -812,6 +812,40 @@ class KpiWindows(_StrictModel):
     month: int
 
 
+class Scorecard(_StrictModel):
+    """kpi.scorecard — the weekly KPI scorecard's status band + pacing horizon (B5).
+
+    The weekly scorecard (``core/weekly_scorecard.py``) reshapes the existing KPI
+    sources into a per-metric this-week/last-week/delta/status/pace table; this is
+    the single canonical home (INV-11) for the two dials it can't derive from the
+    series itself:
+
+    * status band — ``green_at``/``yellow_at`` as FRACTIONS of the metric's target.
+      A metric is ``green`` when ``this_week >= green_at * target``, ``yellow`` when
+      ``this_week >= yellow_at * target`` (but below green), else ``red``. The band
+      must satisfy ``green_at >= yellow_at > 0`` (a higher bar can't sit below a
+      lower one) — a drifted band fails the build at load (CLAUDE.md §4.1).
+    * ``goal_date`` — the pacing horizon: the date the deterministic projection
+      extrapolates the current value to. Weeks-to-goal is ``(goal_date - as_of)``
+      with the injected reference date, so the projection carries no wall-clock.
+    """
+
+    green_at: float
+    yellow_at: float
+    goal_date: date
+
+    @model_validator(mode="after")
+    def _band_guard(self) -> Scorecard:
+        if self.yellow_at <= 0.0:
+            raise ValueError(f"kpi.scorecard.yellow_at must be > 0, got {self.yellow_at!r}")
+        if self.green_at < self.yellow_at:
+            raise ValueError(
+                f"kpi.scorecard band must satisfy green_at >= yellow_at, got "
+                f"green_at={self.green_at!r} < yellow_at={self.yellow_at!r}"
+            )
+        return self
+
+
 class Kpi(_StrictModel):
     """FR-3.11 per-channel KPI rollup vs baseline/target (+ D-14 agent-KPI windows)."""
 
@@ -820,6 +854,8 @@ class Kpi(_StrictModel):
     # Agent-dashboard time-window day-counts (D-14/D-15). Optional with the canonical
     # day/week/month defaults so a params file predating the field still loads.
     windows: KpiWindows = KpiWindows(day=1, week=7, month=30)
+    # B5 weekly-scorecard status band + pacing horizon (the one canonical home).
+    scorecard: Scorecard
 
 
 class Scheduler(_StrictModel):

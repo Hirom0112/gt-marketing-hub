@@ -305,6 +305,10 @@ kpi:                        # FR-3.11 — per-channel KPI rollup vs baseline/tar
     blog:      { baseline: 0.0, target: 0.06 }
     landing_page: { baseline: 0.0, target: 0.08 }
     geo:       { baseline: 0.0, target: 0.02 }
+  scorecard:                # B5 — weekly KPI scorecard status band + pacing horizon (INV-11)
+    green_at: 1.0           # this_week >= green_at * target ⇒ green (band: green_at >= yellow_at > 0)
+    yellow_at: 0.7          # this_week >= yellow_at * target (but below green) ⇒ yellow; below ⇒ red
+    goal_date: 2026-09-30   # the pacing horizon — the deterministic projection's target date
 
 scheduler:                  # FR-3.6 / OUT-2 — dispatch is SIMULATED in v1
   dispatch_mode: simulated          # never 'live' in v1 (INV-9, OUT-2)
