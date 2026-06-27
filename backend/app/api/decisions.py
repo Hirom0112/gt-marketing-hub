@@ -1,4 +1,4 @@
-"""Decision-Queue endpoints — leader-gated view/decide + open submit (B2).
+"""Decision-Queue endpoints — leader+admin VIEW, leader-only DECIDE, open submit (B2).
 
 The composition layer that wires the B2 decision core (``app.core.decision_queue``)
 and the store seam (``app.data.decisions_store``) behind REST. Thin by design: the
@@ -7,8 +7,12 @@ orchestrates, gates by role, maps HTTP errors, and LOGS every decided action to 
 §10 observability spine (NFR-6).
 
   ``GET  /decisions``
-    The open queue — every OPEN decision for the active program. **Leader-gated**
-    (``leader``/``admin``); an operator is 403.
+    The open queue — every OPEN decision for the active program. **View-gated**
+    (``leader``/``admin`` — the admin has full module access); an operator is 403.
+
+  ``POST /decisions/{id}/action``
+    Decide on an item — **leader-only** (spec Module 11 reserves decision-making to
+    leadership). An admin may view but is 403 here; an operator is 403.
 
   ``POST /decisions``
     Submit a decision — open to ANY authenticated principal (any module / anyone
@@ -56,18 +60,29 @@ from app.observability.log_store import ObservabilityLog
 
 router = APIRouter(tags=["decisions"])
 
-# The leader/admin guard, built ONCE at MODULE level so FastAPI can resolve it from
-# the route's (string, PEP 563) annotation — a closure-local guard is invisible to
+# Spec Module 11 access control splits VIEW from DECIDE:
+#   • VIEW (GET the full queue): leadership AND admin. The role table (spec §2) gives
+#     the admin/Marketing-Lead "full access to all modules EXCEPT Decision Queue
+#     decision-making" — so an admin may SEE the queue; an operator is 403.
+#   • DECIDE (act on an item): the LEADER exclusively. The same role table reserves
+#     "Decision Queue decision-making" to leadership; admin can submit but never
+#     decide. So the act path is require_role("leader") — admin is 403 here.
+# Both guards are built ONCE at MODULE level so FastAPI can resolve them from the
+# route's (string, PEP 563) annotation — a closure-local guard is invisible to
 # `get_type_hints` and the route param would degrade to a query param (then 422).
-_DECIDE_GUARD = require_role("leader", "admin")
+_VIEW_GUARD = require_role("leader", "admin")
+_DECIDE_GUARD = require_role("leader")
 
 # Dependency aliases (Annotated keeps the call in the type — ruff B008; the
 # idiomatic FastAPI style matching app/api/seam.py).
 StoreDep = Annotated[DecisionsStore, Depends(get_decisions_store)]
 ProgramDep = Annotated[Program, Depends(get_active_program)]
 LogDep = Annotated[ObservabilityLog, Depends(get_observability_log)]
-# The leader-gated principal — resolves the verified principal AND enforces the gate.
-LeaderDep = Annotated[Principal, Depends(_DECIDE_GUARD)]
+# The view-gated principal (leader OR admin) — resolves the verified principal AND
+# enforces the VIEW gate.
+LeaderDep = Annotated[Principal, Depends(_VIEW_GUARD)]
+# The decide-gated principal (LEADER only) — the act path's exclusive gate.
+DecideDep = Annotated[Principal, Depends(_DECIDE_GUARD)]
 # Any authenticated principal (the open-submit path — NOT role-gated).
 AnyPrincipalDep = Annotated[Principal, Depends(get_principal)]
 
@@ -148,9 +163,10 @@ def act_on_decision(
     store: StoreDep,
     program: ProgramDep,
     log: LogDep,
-    principal: LeaderDep,
+    principal: DecideDep,
 ) -> DecisionResponse:
-    """Decide on a queued item — leader-gated; logged to the §10 spine (NFR-6).
+    """Decide on a queued item — LEADER-only (spec Module 11; admin is 403); logged
+    to the §10 spine (NFR-6).
 
     404 on an unknown decision. The next state is computed by the pure
     :func:`apply_action` (422 on an illegal transition or a ``need_info`` with no

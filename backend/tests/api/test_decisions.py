@@ -1,10 +1,11 @@
 """Decision-Queue API tests (B2) — the leader-gate + open-submit + decide path.
 
-The headline invariant is the LEADER-GATE: viewing the queue and acting on a
-decision require a ``leader``/``admin`` JWT; an ``operator`` is 403. SUBMITTING a
-decision (the "any module / anyone flags an item" path) is open to ANY
-authenticated principal — an operator may enqueue. A no-token request inherits the
-default-deny 401 from ``get_principal``.
+The headline invariant is the split gate (spec Module 11): VIEWING the queue
+requires a ``leader``/``admin`` JWT (the admin has full module access), but
+DECIDING on an item is ``leader``-only — an admin may view yet is 403 on the act
+route, and an ``operator`` is 403 on both. SUBMITTING a decision (the "any module /
+anyone flags an item" path) is open to ANY authenticated principal — an operator
+may enqueue. A no-token request inherits the default-deny 401 from ``get_principal``.
 
 These tests hit the REAL main app (with ``decisions_router`` registered), overriding
 only :func:`app.api.deps.get_decisions_store` to a fresh in-memory store per test.
@@ -63,7 +64,8 @@ def test_get_decisions_leader_ok(client: TestClient) -> None:
 
 
 def test_get_decisions_admin_ok(client: TestClient) -> None:
-    """Admin JWT → GET /decisions → 200 (admin is a superset of leader)."""
+    """Admin JWT → GET /decisions → 200 (admin has full module access — VIEW only;
+    the decide path is leader-only, asserted by test_action_admin_forbidden)."""
     resp = client.get("/decisions", headers=_auth("admin"))
     assert resp.status_code == 200, resp.text
 
@@ -133,6 +135,23 @@ def test_action_operator_forbidden(client: TestClient) -> None:
     resp = client.post(
         f"/decisions/{decision_id}/action",
         headers=_auth("operator"),
+        json={"action": "approve"},
+    )
+    assert resp.status_code == 403, resp.text
+
+
+def test_action_admin_forbidden(client: TestClient) -> None:
+    """An ADMIN hitting the decide route → 403. Spec Module 11 reserves decision-
+    making to leadership; the admin may VIEW the queue but never decide."""
+    decision_id = client.post(
+        "/decisions",
+        headers=_auth("admin"),
+        json={"source": "budget", "payload": {}},
+    ).json()["id"]
+
+    resp = client.post(
+        f"/decisions/{decision_id}/action",
+        headers=_auth("admin"),
         json={"action": "approve"},
     )
     assert resp.status_code == 403, resp.text
