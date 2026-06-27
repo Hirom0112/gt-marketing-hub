@@ -15,6 +15,7 @@ from app.api.auth import router as auth_router
 from app.api.budget import router as budget_router
 from app.api.contact_outcome import router as contact_outcome_router
 from app.api.content import router as content_router
+from app.api.crm_ops import router as crm_ops_router
 from app.api.crm_status import router as crm_status_router
 from app.api.crm_sync import router as crm_sync_router
 from app.api.decisions import router as decisions_router
@@ -164,6 +165,15 @@ app.include_router(crm_status_router)
 # DB-authoritative, INV-10), advances the watermark, and LOGS each proposal+decision
 # (NFR-6). Dispatch is simulated v1 (INV-9); status is read-only.
 app.include_router(crm_sync_router)
+
+# CRM/Marketing-Operations data-quality view (C1; TODO_v2 §C1) — /crm/ops GET. A
+# read-only window COMPOSING the committed C1 cores over the active-program cohort:
+# A4 sync-parity (REUSED, not forked), the auto data-quality queue, per-entity
+# UTM-health, and the honest field-reliability flags — with the cross-module
+# data-confidence banner when parity drops below params.crm_ops.parity_floor.
+# Gated only by Depends(get_principal) (any authenticated seat, like /crm/status);
+# no state write, no live call (INV-2/INV-9).
+app.include_router(crm_ops_router)
 
 # Content engine (FR-3.1/3.4/3.5; ARCH §5.3) — /ai/content/generate (gated batch),
 # /content/{id}/decision (the sole content state write — keep promotes library +
