@@ -31,6 +31,22 @@ def test_known_low_trust_field_is_unreliable() -> None:
     assert flag.reason  # a non-empty human reason.
 
 
+def test_income_tier_is_unreliable() -> None:
+    """The self-reported income BUCKET is low-trust ⇒ ``unreliable`` (C1, INV-1).
+
+    Locks the corrected semantics: ``unreliable_fields`` names real low-trust
+    model fields (``income_tier``/``attribution_source``), NOT the forbidden raw
+    ``household_income`` PII token the PII-scan gate blocks.
+    """
+    assert "income_tier" in _PARAMS.crm_ops.unreliable_fields  # read from params
+
+    flag = field_flag("income_tier", params=_PARAMS)
+
+    assert flag.field == "income_tier"
+    assert flag.status == "unreliable"
+    assert flag.reason  # a non-empty human reason.
+
+
 def test_normal_field_is_reliable() -> None:
     """A field NOT in the low-trust list ⇒ ``reliable`` with no reason."""
     assert "display_name" not in _PARAMS.crm_ops.unreliable_fields

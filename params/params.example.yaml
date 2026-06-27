@@ -389,7 +389,7 @@ crm_ops:                    # C1 — CRM/Marketing-Ops data-quality cores; share
     allowed_mediums: [email, social, cpc, organic, referral, event]  # the closed set of acceptable utm_medium values; anything else ⇒ broken
   data_quality:                     # the auto data-quality queue's severity order over the known issue kinds
     severity_order: [conflict, utm_broken, unreliable_field]   # highest→lowest; the queue ranks each issue by its position here
-  unreliable_fields: [tefa_amount, household_income, lead_source]   # fields known to be low-trust; flagged unreliable + surfaced as an unreliable_field issue
+  unreliable_fields: [tefa_amount, attribution_source, income_tier]   # fields known to be low-trust; flagged unreliable + surfaced as an unreliable_field issue
   parity_floor: 0.95                # sync-parity fraction below which the cross-module data-confidence banner activates (reuse A4); a fraction in [0,1]
 
 stripe:                     # A3 — Stripe payments seam tunables (RESEARCH_v2 §II.2; INV-8/INV-11)
