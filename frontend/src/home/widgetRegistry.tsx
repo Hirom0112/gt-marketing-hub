@@ -4,6 +4,7 @@ import Scoreboard from '../Scoreboard';
 import SecurityTab from '../security/SecurityTab';
 import DecisionQueueWorkspace from '../workspaces/DecisionQueueWorkspace';
 import DataConfidenceBanner from '../dashboard/DataConfidenceBanner';
+import WeeklyScorecard from '../dashboard/WeeklyScorecard';
 import {
   KpiStripWidget,
   WorkQueueWidget,
@@ -55,6 +56,13 @@ function placeholder(label: string): ComponentType {
   return C;
 }
 
+// The `kpi_scorecard` Home tile renders the real weekly scorecard in its compact
+// variant (trimmed columns for the smaller grid cell). One canonical component;
+// the standalone/leadership view mounts the same <WeeklyScorecard /> full-width.
+function KpiScorecardWidget(): JSX.Element {
+  return <WeeklyScorecard compact />;
+}
+
 // The full 36-id catalog, in backend declaration order. `starter: true` on the
 // eight default widgets matches STARTER_IDS exactly (the backend owns the merge;
 // these flags only drive the picker's "in starter pack" affordance + the
@@ -86,7 +94,7 @@ export const WIDGETS: readonly WidgetDef[] = [
   { id: 'scoreboard', group: 'Leadership', label: 'Scoreboard', starter: true, Component: Scoreboard },
   { id: 'decision_queue', group: 'Leadership', label: 'Decision Queue', starter: true, Component: DecisionQueueWorkspace },
   { id: 'budget_tracker', group: 'Leadership', label: 'Budget Tracker', starter: false, Component: placeholder('Budget Tracker') },
-  { id: 'kpi_scorecard', group: 'Leadership', label: 'KPI Scorecard', starter: false, Component: placeholder('KPI Scorecard') },
+  { id: 'kpi_scorecard', group: 'Leadership', label: 'KPI Scorecard', starter: false, Component: KpiScorecardWidget },
   { id: 'eval_scoreboard', group: 'Leadership', label: 'Eval Scoreboard', starter: false, Component: placeholder('Eval Scoreboard') },
   { id: 'agent_rollup', group: 'Leadership', label: 'Agent Rollup', starter: false, Component: placeholder('Agent Rollup') },
   // ------------------------------------------------------------------- CRM (4)
