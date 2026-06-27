@@ -1274,3 +1274,172 @@ def test_rbac_tables_and_authorize_not_in_public() -> None:
         "0027 definer-rights functions must live in a non-exposed schema (e.g. private.), "
         "never in the PostgREST-reachable public schema (D-RLS-7)"
     )
+
+
+# ---------------------------------------------------------------------------
+# 0028 decisions (B2) — the cross-module human Decision Queue. Two tables:
+#   * `decision`       — one row per open/decided item (source, payload jsonb,
+#     state). SUBMIT is open to any authenticated user (any module may flag an
+#     item); VIEW + DECIDE are LEADER-gated via private.authorize() (the 0027
+#     RBAC helper) — leader/admin only, NEVER operator.
+#   * `decision_event` — the APPEND-ONLY audit of every action (approve / reject /
+#     need_info) the actor records; the 0015/0010 immutable-once-written posture.
+# BOTH tables are program-scoped (program_id + the 0024 RESTRICTIVE program-
+# isolation policy keyed on app_metadata.program_id, null-guarded). The distinctive
+# split: VIEW/DECIDE leader-gated (authorize), SUBMIT open to authenticated. Each
+# table ENABLE+FORCE RLS (D-RLS-1), every policy null-guarded (D-RLS-2), keeping the
+# global CREATE==ENABLE==FORCE + one-guard-per-policy invariants green (+2/+2/+2).
+# REUSES private.authorize (no new public definer-rights helper — D-RLS-7).
+# ---------------------------------------------------------------------------
+
+
+def _decisions_sql() -> str:
+    """The 0028 decisions migration DDL (comments stripped)."""
+    return _strip_comments((MIGRATIONS_DIR / "0028_decisions.sql").read_text(encoding="utf-8"))
+
+
+def test_decisions_leader_gated_and_append_only() -> None:
+    """B2: 0028 adds the program-scoped `decision` (submit-open, view/decide
+    leader-gated) + append-only `decision_event` (leader-gated read, authenticated
+    append) tables — each ENABLE+FORCE RLS, a RESTRICTIVE program-isolation policy
+    keyed on app_metadata.program_id with the auth.uid() null guard, leader-gating
+    via private.authorize(), a role_permissions seed binding decide+view to
+    admin/leader (NOT operator), and no SECURITY DEFINER — keeping the global RLS
+    count invariants green (+2 tables / +2 ENABLE / +2 FORCE).
+    """
+    sql = _decisions_sql()
+
+    # --- both tables created, program-scoped, ENABLE+FORCE RLS (D-RLS-1) ---
+    for table in ("decision", "decision_event"):
+        assert re.search(rf"CREATE\s+TABLE\s+{table}\b", sql, re.IGNORECASE), (
+            f"0028 must CREATE TABLE {table}"
+        )
+        assert re.search(
+            rf"ALTER\s+TABLE\s+{table}\s+ENABLE\s+ROW\s+LEVEL\s+SECURITY", sql, re.IGNORECASE
+        ), f"0028 must ENABLE RLS on {table} (D-RLS-1)"
+        assert re.search(
+            rf"ALTER\s+TABLE\s+{table}\s+FORCE\s+ROW\s+LEVEL\s+SECURITY", sql, re.IGNORECASE
+        ), f"0028 must FORCE RLS on {table} (owner-role escape hatch, D-RLS-1)"
+        assert re.search(
+            rf"CREATE\s+TABLE\s+{table}\b.*?\bprogram_id\b[^;]*NOT\s+NULL",
+            sql,
+            re.IGNORECASE | re.DOTALL,
+        ), f"{table} must carry a program_id NOT NULL column (program-scoped)"
+
+        # The RESTRICTIVE program-isolation policy keyed on app_metadata.program_id
+        # + the auth.uid() null guard (the 0024/0026 pattern).
+        prog_policy = re.search(
+            rf"CREATE\s+POLICY\s+\w+\s+ON\s+{table}\b[^;]*AS\s+RESTRICTIVE[^;]*;",
+            sql,
+            re.IGNORECASE | re.DOTALL,
+        )
+        assert prog_policy, f"0028 must add an AS RESTRICTIVE program-isolation policy on {table}"
+        body = prog_policy.group(0)
+        assert re.search(r"app_metadata", body, re.IGNORECASE) and re.search(
+            r"\bprogram_id\b", body, re.IGNORECASE
+        ), f"{table}'s RESTRICTIVE policy must key on the app_metadata program_id claim"
+        assert _NULL_GUARD.search(body), (
+            f"{table}'s RESTRICTIVE policy must carry the auth.uid() null guard (D-RLS-2)"
+        )
+
+    # --- decision SELECT is LEADER-gated via authorize('decision_queue.view') ---
+    select_policy = re.search(
+        r"CREATE\s+POLICY\s+\w+\s+ON\s+decision\b[^;]*FOR\s+SELECT[^;]*;",
+        sql,
+        re.IGNORECASE | re.DOTALL,
+    )
+    assert select_policy, "0028 must add a FOR SELECT policy on decision"
+    assert re.search(
+        r"authorize\(\s*'decision_queue\.view'\s*\)", select_policy.group(0), re.IGNORECASE
+    ), "decision SELECT must be leader-gated via authorize('decision_queue.view')"
+    assert _NULL_GUARD.search(select_policy.group(0)), (
+        "decision SELECT policy must carry the auth.uid() null guard (D-RLS-2)"
+    )
+
+    # --- decision UPDATE (decide / state change) is LEADER-gated via decide perm ---
+    update_policy = re.search(
+        r"CREATE\s+POLICY\s+\w+\s+ON\s+decision\b[^;]*FOR\s+UPDATE[^;]*;",
+        sql,
+        re.IGNORECASE | re.DOTALL,
+    )
+    assert update_policy, "0028 must add a FOR UPDATE (decide) policy on decision"
+    assert re.search(
+        r"authorize\(\s*'decision_queue\.decide'\s*\)", update_policy.group(0), re.IGNORECASE
+    ), "decision UPDATE must be leader-gated via authorize('decision_queue.decide')"
+    assert _NULL_GUARD.search(update_policy.group(0)), (
+        "decision UPDATE policy must carry the auth.uid() null guard (D-RLS-2)"
+    )
+
+    # --- decision INSERT (submit) is OPEN to any authenticated user — NO authorize gate ---
+    insert_policy = re.search(
+        r"CREATE\s+POLICY\s+\w+\s+ON\s+decision\b[^;]*FOR\s+INSERT[^;]*;",
+        sql,
+        re.IGNORECASE | re.DOTALL,
+    )
+    assert insert_policy, "0028 must add a FOR INSERT (submit) policy on decision"
+    assert re.search(r"TO\s+authenticated", insert_policy.group(0), re.IGNORECASE), (
+        "decision INSERT (submit) must be open TO authenticated"
+    )
+    assert not re.search(r"authorize\s*\(", insert_policy.group(0), re.IGNORECASE), (
+        "decision INSERT (submit) must NOT be authorize-gated — anyone authenticated may submit"
+    )
+    assert _NULL_GUARD.search(insert_policy.group(0)), (
+        "decision INSERT policy must carry the auth.uid() null guard (D-RLS-2)"
+    )
+
+    # --- decision_event SELECT is LEADER-gated; INSERT is authenticated-append ---
+    de_select = re.search(
+        r"CREATE\s+POLICY\s+\w+\s+ON\s+decision_event\b[^;]*FOR\s+SELECT[^;]*;",
+        sql,
+        re.IGNORECASE | re.DOTALL,
+    )
+    assert de_select, "0028 must add a FOR SELECT policy on decision_event"
+    assert re.search(
+        r"authorize\(\s*'decision_queue\.view'\s*\)", de_select.group(0), re.IGNORECASE
+    ), "decision_event SELECT must be leader-gated via authorize('decision_queue.view')"
+    de_insert = re.search(
+        r"CREATE\s+POLICY\s+\w+\s+ON\s+decision_event\b[^;]*FOR\s+INSERT[^;]*;",
+        sql,
+        re.IGNORECASE | re.DOTALL,
+    )
+    assert de_insert, "0028 must add a FOR INSERT policy on decision_event"
+    assert re.search(r"TO\s+authenticated", de_insert.group(0), re.IGNORECASE), (
+        "decision_event INSERT must be open TO authenticated (the actor records its action)"
+    )
+
+    # --- decision_event is APPEND-ONLY: no UPDATE/DELETE grant or policy ---
+    assert not re.search(r"GRANT[^;]*\bUPDATE\b[^;]*ON\s+decision_event\b", sql, re.IGNORECASE), (
+        "0028 must NOT grant UPDATE on decision_event (append-only audit)"
+    )
+    assert not re.search(r"GRANT[^;]*\bDELETE\b[^;]*ON\s+decision_event\b", sql, re.IGNORECASE), (
+        "0028 must NOT grant DELETE on decision_event (append-only audit)"
+    )
+    assert not re.search(
+        r"CREATE\s+POLICY\s+\w+\s+ON\s+decision_event\b[^;]*FOR\s+UPDATE", sql, re.IGNORECASE
+    ), "0028 must not add an UPDATE policy on decision_event (append-only)"
+    assert not re.search(
+        r"CREATE\s+POLICY\s+\w+\s+ON\s+decision_event\b[^;]*FOR\s+DELETE", sql, re.IGNORECASE
+    ), "0028 must not add a DELETE policy on decision_event (append-only)"
+
+    # --- role_permissions seed: decide + view bound to admin & leader, NOT operator ---
+    seed = re.search(r"INSERT\s+INTO\s+role_permissions\b.*?;", sql, re.IGNORECASE | re.DOTALL)
+    assert seed, "0028 must seed role_permissions (the in-DB leader-gate backstop)"
+    seed_body = seed.group(0)
+    for role in ("admin", "leader"):
+        assert re.search(
+            rf"\(\s*'{role}'\s*,\s*'decision_queue\.decide'\s*\)", seed_body, re.IGNORECASE
+        ), f"0028 seed must bind decision_queue.decide to {role}"
+        assert re.search(
+            rf"\(\s*'{role}'\s*,\s*'decision_queue\.view'\s*\)", seed_body, re.IGNORECASE
+        ), f"0028 seed must bind decision_queue.view to {role}"
+    assert not re.search(
+        r"\(\s*'operator'\s*,\s*'decision_queue\.(decide|view)'\s*\)", seed_body, re.IGNORECASE
+    ), "operator must get NEITHER decide nor view (the leader-gate)"
+    assert re.search(r"ON\s+CONFLICT", seed_body, re.IGNORECASE), (
+        "0028 role_permissions seed must be idempotent (ON CONFLICT DO NOTHING)"
+    )
+
+    # --- D-RLS-7: reuses private.authorize; introduces no public definer-rights helper ---
+    assert not _SECURITY_DEFINER.search(sql), (
+        "0028 must not define a SECURITY DEFINER helper (it REUSES private.authorize, D-RLS-7)"
+    )

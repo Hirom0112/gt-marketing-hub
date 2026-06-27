@@ -217,6 +217,132 @@ def test_foreign_read_returns_zero_rows() -> None:
             )
 
 
+# B2 leader-gate regression (TODO_v2 §B2) — the Decision Queue's distinctive split:
+# VIEW/DECIDE is leader-gated via private.authorize(), SUBMIT is open. An OPERATOR
+# principal (role bound to NEITHER decision_queue.view nor .decide) must read ZERO
+# `decision` rows, while a LEADER principal reads them — the live proof the
+# leader-gate holds (0028 SELECT policy: authorize('decision_queue.view')).
+_EMAIL_OPERATOR = "rls-regression-operator@example.invalid"
+_EMAIL_LEADER = "rls-regression-leader@example.invalid"
+_SEED_DECISION_ID = "00000000-0000-0000-0000-0000000000d0"
+
+
+def _ensure_user_with_role(
+    client: httpx.Client, service_key: str, email: str, role: str, program_id: str
+) -> str:
+    """Create (or find) a synthetic user whose JWT carries app_metadata.role +
+    program_id.
+
+    The 0028 leader-gate (private.authorize) reads ``auth.jwt() -> 'app_metadata'
+    ->> 'role'`` and the 0024 RESTRICTIVE policy reads the ``program_id`` claim, so
+    the principal must carry BOTH. Idempotent: a re-run forces the claims to the
+    wanted values (the role/program may have changed).
+    """
+    app_metadata = {"role": role, "program_id": program_id}
+    created = client.post(
+        "/auth/v1/admin/users",
+        headers=_admin_headers(service_key),
+        json={
+            "email": email,
+            "password": _PASSWORD,
+            "email_confirm": True,
+            "app_metadata": app_metadata,
+        },
+    )
+    if created.status_code == 200:
+        return str(created.json()["id"])
+    user_id = _ensure_user(client, service_key, email)
+    client.put(
+        f"/auth/v1/admin/users/{user_id}",
+        headers=_admin_headers(service_key),
+        json={"app_metadata": app_metadata},
+    )
+    return user_id
+
+
+def _select_decisions(client: httpx.Client, *, apikey: str, bearer: str) -> list[dict[str, Any]]:
+    """A PostgREST SELECT * on `decision` under the given key/bearer pair."""
+    response = client.get(
+        "/rest/v1/decision",
+        headers={
+            "apikey": apikey,
+            "Authorization": f"Bearer {bearer}",
+            "Accept": "application/json",
+        },
+        params={"select": "*"},
+    )
+    response.raise_for_status()
+    body: Any = response.json()
+    assert isinstance(body, list)
+    return body
+
+
+def test_operator_reads_zero_decisions_leader_can() -> None:
+    """An OPERATOR reads ZERO `decision` rows; a LEADER reads them (B2 leader-gate).
+
+    The live proof of the 0028 leader-gate (the SELECT policy
+    ``private.authorize('decision_queue.view')``): the role→permission lookup binds
+    ``decision_queue.view`` to admin+leader only, so an operator (role bound to
+    NEITHER view nor decide) sees nothing while a leader sees the seeded row. Both
+    principals share the program claim, so ONLY the role differs — isolating the
+    leader-gate as the cause. Skipped when no live Supabase is configured (A-3).
+    """
+    supabase_url = (os.environ.get("SUPABASE_URL") or "").strip()
+    if not supabase_url or supabase_url.startswith("<"):
+        pytest.skip("no SUPABASE_URL — decision-queue leader-gate regression requires Supabase")
+
+    anon_key = os.environ["SUPABASE_ANON_KEY"]
+    service_key = os.environ["SUPABASE_SERVICE_ROLE_KEY"]
+
+    with httpx.Client(base_url=supabase_url, timeout=30.0) as client:
+        # Two principals in the SAME program, differing ONLY in role.
+        _ensure_user_with_role(client, service_key, _EMAIL_OPERATOR, "operator", _PROGRAM_A)
+        _ensure_user_with_role(client, service_key, _EMAIL_LEADER, "leader", _PROGRAM_A)
+        operator_jwt = _sign_in(client, anon_key, _EMAIL_OPERATOR)
+        leader_jwt = _sign_in(client, anon_key, _EMAIL_LEADER)
+
+        # service_role seeds one open decision in program A.
+        client.request(
+            "DELETE",
+            "/rest/v1/decision",
+            headers=_admin_headers(service_key),
+            params={"id": f"eq.{_SEED_DECISION_ID}"},
+        )
+        seeded = client.post(
+            "/rest/v1/decision",
+            headers={**_admin_headers(service_key), "Prefer": "return=representation"},
+            json={
+                "id": _SEED_DECISION_ID,
+                "source": "rls-regression-seed",
+                "payload": {"note": "synthetic decision-queue probe"},
+                "state": "open",
+                "program_id": _PROGRAM_A,
+            },
+        )
+        assert seeded.status_code in (200, 201), f"seed of the decision row failed: {seeded.text}"
+
+        try:
+            # The OPERATOR (no decision_queue.view) reads ZERO decision rows.
+            as_operator = _select_decisions(client, apikey=anon_key, bearer=operator_jwt)
+            assert as_operator == [], (
+                f"LEADER-GATE LEAK (B2): an operator read {len(as_operator)} `decision` rows — "
+                f"authorize('decision_queue.view') must deny operators"
+            )
+            # The LEADER (holds decision_queue.view) reads the seeded row.
+            as_leader = _select_decisions(client, apikey=anon_key, bearer=leader_jwt)
+            assert any(r.get("id") == _SEED_DECISION_ID for r in as_leader), (
+                "a leader could not read the seeded decision row — the leader-gate is "
+                "over-blocking (authorize('decision_queue.view') must permit leaders)"
+            )
+        finally:
+            client.request(
+                "DELETE",
+                "/rest/v1/decision",
+                headers=_admin_headers(service_key),
+                params={"id": f"eq.{_SEED_DECISION_ID}"},
+            )
+
+
 def test_cross_program_read_is_isolated() -> None:
     """A program-A principal reads its program-A row but ZERO program-B rows (A1).
 
