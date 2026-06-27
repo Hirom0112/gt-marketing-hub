@@ -29,6 +29,7 @@ dev = [
     "pytest-asyncio",
     "pytest-cov",
     "types-PyYAML",     # mypy-strict stubs for pyyaml (type-only, not a runtime dep)
+    "psycopg[binary]",  # optional direct-DSN driver for the live app-role proof (tests/db/test_app_role.py); dev-only
 ]
 
 [build-system]
