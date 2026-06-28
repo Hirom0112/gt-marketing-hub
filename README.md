@@ -1,6 +1,6 @@
 # GT Marketing Hub
 
-**🔗 Live demo: https://gtpulse-marketing-hub.vercel.app** · API: `https://gtpulse-api.vercel.app`
+**🔗 Live demo: https://gtpulse-marketing-hub.vercel.app**
 _(runs standalone on seed data — no login, click through every module; use the **"VIEWING AS"** switcher to change roles)_
 
 **The marketing operations product for GT School — a 13-module web app on a sync engine that keeps a
