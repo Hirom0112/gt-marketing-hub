@@ -430,6 +430,7 @@ resilience:                 # A5 — retry/backoff tunables for retryable adapte
 budget:                     # B4 — marketing budget partition + variance-flag threshold; single home for the $365K plan (INV-11)
   total_usd: 365000                 # the whole marketing budget (USD); MUST equal the sum of workstreams (partition guard)
   variance_threshold: 0.10          # >10% actual-vs-planned OVERRUN on a workstream auto-flags it (B4 → B2 decision wiring)
+  watch_frac: 0.85                  # health band: actual >= 85% of planned (but not over) reads "watch" (Module 10 per-workstream health)
   workstreams:                      # per-workstream planned spend (USD); these partition total_usd exactly
     grassroots: 210000              # grassroots / community channels
     content: 90000                  # content engine

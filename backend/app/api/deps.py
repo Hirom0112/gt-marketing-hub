@@ -386,9 +386,11 @@ def _build_budget_store() -> BudgetStore:
       in-memory v1 fallback (A-3). Default CI is the params-seeded
       :class:`InMemoryBudgetStore`.
     """
-    repo_mode = Settings.from_env().cockpit_repo
+    settings = Settings.from_env()
+    repo_mode = settings.cockpit_repo
+    program = resolve_program(settings.gt_program_id)
     if repo_mode == "synthetic":
-        return InMemoryBudgetStore(params=_params)
+        return _seeded_in_memory_budget_store(program)
     if repo_mode == "supabase":
         supabase = build_supabase_budget_store()
         if supabase is None:
@@ -398,7 +400,21 @@ def _build_budget_store() -> BudgetStore:
                 "configured. Set them, or use COCKPIT_REPO=synthetic / auto."
             )
         return supabase
-    return build_supabase_budget_store() or InMemoryBudgetStore(params=_params)
+    return build_supabase_budget_store() or _seeded_in_memory_budget_store(program)
+
+
+def _seeded_in_memory_budget_store(program: Program) -> InMemoryBudgetStore:
+    """Build the params-seeded in-memory budget store + the demo dated burn ledger (10b).
+
+    The workstreams seed from ``params.budget`` (INV-11); on top of that the
+    deterministic dated committed+actual ledger is seeded for the active program so the
+    burn chart + spend-by-workstream are demonstrable on synthetic data alone (idempotent;
+    INV-1). Tests that need a CLEAN store construct :class:`InMemoryBudgetStore` directly
+    (no seed), so the existing variance fixtures are unaffected.
+    """
+    store = InMemoryBudgetStore(params=_params)
+    store.seed_demo_ledger(program)
+    return store
 
 
 # Singleton Budget Tracker store (B4) — the params-seeded workstreams + append-only

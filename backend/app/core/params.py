@@ -1443,6 +1443,11 @@ class Budget(_StrictModel):
     * ``variance_threshold`` — the actual-vs-planned OVERRUN fraction past which a
       workstream auto-flags (``> threshold`` flags; at/under does not). A FRACTION
       in (0, 1].
+    * ``watch_frac`` — the health-band WATCH threshold as a FRACTION of planned: a
+      workstream whose ``actual >= watch_frac * planned`` (but not yet over budget
+      / past the variance threshold) reads ``watch`` rather than ``on_track``. A
+      FRACTION in (0, 1] — the canonical home for the 10b per-workstream health
+      indicator's lower band (the upper band reuses ``variance_threshold``).
     * ``workstreams`` — per-workstream planned spend (whole USD), keyed by
       workstream token.
 
@@ -1454,6 +1459,7 @@ class Budget(_StrictModel):
 
     total_usd: int
     variance_threshold: float
+    watch_frac: float
     workstreams: dict[str, int]
 
     @model_validator(mode="after")
@@ -1464,6 +1470,8 @@ class Budget(_StrictModel):
             raise ValueError(
                 f"budget.variance_threshold must be in (0, 1], got {self.variance_threshold!r}"
             )
+        if not 0.0 < self.watch_frac <= 1.0:
+            raise ValueError(f"budget.watch_frac must be in (0, 1], got {self.watch_frac!r}")
         if not self.workstreams:
             raise ValueError("budget.workstreams must be non-empty")
         bad = {k: v for k, v in self.workstreams.items() if v < 1}

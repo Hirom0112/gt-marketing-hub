@@ -134,6 +134,51 @@ def test_post_entry_leader_ok(client: TestClient) -> None:
     assert resp.status_code == 200, resp.text
 
 
+# ----------------------------------------------------------- per-owner entry gating (M10)
+def test_operator_entry_owned_workstream_ok(client: TestClient) -> None:
+    """Operator JWT → POST /budget/entry for the OWNED workstream (grassroots) → 200."""
+    resp = client.post(
+        "/budget/entry",
+        headers=_auth("operator"),
+        json={"workstream": "grassroots", "kind": "actual", "amount_usd": 1000},
+    )
+    assert resp.status_code == 200, resp.text
+
+
+def test_operator_entry_foreign_workstream_forbidden(client: TestClient) -> None:
+    """Operator JWT → POST /budget/entry for ANOTHER workstream (content) → 403."""
+    resp = client.post(
+        "/budget/entry",
+        headers=_auth("operator"),
+        json={"workstream": "content", "kind": "actual", "amount_usd": 1000},
+    )
+    assert resp.status_code == 403, resp.text
+
+
+# --------------------------------------------------------------- planned-edit (M10, leader)
+def test_planned_edit_leader_updates_row(client: TestClient) -> None:
+    """Leader JWT → PUT /budget/planned updates the workstream's planned allocation."""
+    resp = client.put(
+        "/budget/planned",
+        headers=_auth("leader"),
+        json={"workstream": "ops", "planned_usd": 50000},
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    ops_row = next(r for r in body["workstreams"] if r["workstream"] == "ops")
+    assert ops_row["planned"] == 50000
+
+
+def test_planned_edit_operator_forbidden(client: TestClient) -> None:
+    """Operator JWT → PUT /budget/planned → 403 (leadership-only edit)."""
+    resp = client.put(
+        "/budget/planned",
+        headers=_auth("operator"),
+        json={"workstream": "ops", "planned_usd": 50000},
+    )
+    assert resp.status_code == 403, resp.text
+
+
 # ---------------------------------------------------------------------- the roll-up
 def test_get_budget_rollup(client: TestClient) -> None:
     """GET /budget returns the four workstreams summing planned to 365000, with roll-up."""
@@ -145,11 +190,45 @@ def test_get_budget_rollup(client: TestClient) -> None:
     assert len(rows) == 4
     assert {r["workstream"] for r in rows} == {"grassroots", "content", "guerrilla", "ops"}
     assert sum(r["planned"] for r in rows) == 365000
+    # Each row carries the Module-10b health band.
+    assert all(r["health"] in {"on_track", "watch", "at_risk"} for r in rows)
 
     assert body["rollup"]["total_planned"] == 365000
     assert body["rollup"]["total_usd"] == 365000
+    assert "projected_burnout" in body["rollup"]
     assert "flagged" in body
     assert "burn" in body and len(body["burn"]) == 4
+    # The weekly cumulative burn series field is present (empty on an unseeded store).
+    assert "burn_series" in body
+
+
+def test_get_budget_burn_series_on_seeded_store(
+    decisions_store: InMemoryDecisionsStore,
+) -> None:
+    """A seeded demo ledger yields a non-empty cumulative burn series + a guerrilla overrun."""
+    from app.main import app
+
+    store = InMemoryBudgetStore(params=deps._params)
+    store.seed_demo_ledger(_PROGRAM)
+    app.dependency_overrides[deps.get_budget_store] = lambda: store
+    app.dependency_overrides[deps.get_decisions_store] = lambda: decisions_store
+    try:
+        with TestClient(app) as test_client:
+            resp = test_client.get("/budget", headers=_auth("leader"))
+    finally:
+        app.dependency_overrides.pop(deps.get_budget_store, None)
+        app.dependency_overrides.pop(deps.get_decisions_store, None)
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    series = body["burn_series"]
+    assert len(series) >= 2
+    # Cumulative actual is monotonically non-decreasing across the weeks.
+    cumulative = [p["cumulative_actual"] for p in series]
+    assert cumulative == sorted(cumulative)
+    # guerrilla is seeded >10% over plan ⇒ flagged + at_risk (the demo overrun).
+    assert "guerrilla" in body["flagged"]
+    guerrilla = next(r for r in body["workstreams"] if r["workstream"] == "guerrilla")
+    assert guerrilla["health"] == "at_risk"
 
 
 # ----------------------------------------------------------------------- default-deny

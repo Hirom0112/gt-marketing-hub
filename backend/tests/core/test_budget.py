@@ -13,13 +13,23 @@ Two pure pieces, both reading every number from params (CLAUDE.md INV-11):
 
 from __future__ import annotations
 
+from datetime import date
 from decimal import Decimal
 from pathlib import Path
 
 import pytest
 from pydantic import ValidationError
 
-from app.core.budget import BudgetEntry, reconcile
+from app.core.budget import (
+    HEALTH_AT_RISK,
+    HEALTH_ON_TRACK,
+    HEALTH_WATCH,
+    BudgetEntry,
+    build_burn_series,
+    project_burnout,
+    reconcile,
+    weekly_burn_rate,
+)
 from app.core.params import Budget, load_params
 
 # The committed example file is the authoritative source for these tests.
@@ -95,3 +105,81 @@ def test_reconcile_rolls_up_totals() -> None:
     assert recon.total_actual == Decimal("295000")
     assert recon.total_remaining == Decimal("5000")
     assert recon.total_usd == 365000
+
+
+# ----------------------------------------------------------------------- health bands
+def test_health_bands() -> None:
+    """on_track / watch / at_risk follow the params bands (watch_frac + variance_threshold)."""
+    params = load_params(EXAMPLE_PARAMS)
+    assert params.budget.watch_frac == 0.85  # the test reads the param; a drift fails here
+
+    planned = 100_000
+    recon = reconcile(
+        [
+            BudgetEntry("grassroots", planned, 50_000),  # 50% → on_track
+            BudgetEntry("content", planned, 90_000),  # 90% (>= 85%, not over) → watch
+            BudgetEntry("guerrilla", planned, 105_000),  # over budget (5% over) → at_risk
+            BudgetEntry("ops", planned, 130_000),  # 30% over (> threshold) → at_risk
+        ],
+        params=params,
+    )
+    by_ws = {r.workstream: r.health for r in recon.results}
+    assert by_ws["grassroots"] == HEALTH_ON_TRACK
+    assert by_ws["content"] == HEALTH_WATCH
+    assert by_ws["guerrilla"] == HEALTH_AT_RISK
+    assert by_ws["ops"] == HEALTH_AT_RISK
+
+
+# ------------------------------------------------------------------- weekly burn series
+def test_burn_series_buckets_cumulatively() -> None:
+    """Per-ISO-week buckets carry the CUMULATIVE actual; the plan line rises to total."""
+    # Three actuals across three consecutive ISO weeks (Mondays 2026-06-01/08/15).
+    dated_actuals = [
+        (date(2026, 6, 3), Decimal("10000")),  # week of 06-01
+        (date(2026, 6, 10), Decimal("20000")),  # week of 06-08
+        (date(2026, 6, 17), Decimal("30000")),  # week of 06-15
+    ]
+    series = build_burn_series(
+        dated_actuals, total_planned=Decimal("120000"), as_of=date(2026, 6, 17)
+    )
+    assert [w.week_start for w in series.weeks] == [
+        date(2026, 6, 1),
+        date(2026, 6, 8),
+        date(2026, 6, 15),
+    ]
+    # Cumulative actual rises monotonically: 10k → 30k → 60k.
+    assert [w.cumulative_actual for w in series.weeks] == [
+        Decimal("10000"),
+        Decimal("30000"),
+        Decimal("60000"),
+    ]
+    # Straight plan line: total_planned apportioned linearly across the 3 buckets.
+    assert series.weeks[-1].cumulative_planned == Decimal("120000")
+    assert series.weeks[0].cumulative_planned == Decimal("40000")
+
+
+def test_burn_series_empty_with_no_actuals() -> None:
+    """No dated actuals ⇒ no period to bucket ⇒ an empty series (never a backwards range)."""
+    series = build_burn_series([], total_planned=Decimal("100000"), as_of=date(2026, 6, 15))
+    assert series.weeks == ()
+
+
+# ------------------------------------------------------------------ projected burn-out
+def test_projected_burnout_math_and_zero_burn() -> None:
+    """Burn-out = as_of + remaining/rate weeks; None when the rate is zero (no div-by-0)."""
+    as_of = date(2026, 6, 15)
+    # remaining 40000 at 10000/week ⇒ 4 weeks ⇒ 28 days out.
+    out = project_burnout(Decimal("40000"), Decimal("10000"), as_of=as_of)
+    assert out == date(2026, 7, 13)
+
+    # Zero burn rate ⇒ no burn-out date (idle budget; never a divide-by-zero).
+    assert project_burnout(Decimal("40000"), Decimal("0"), as_of=as_of) is None
+
+    # Already over budget (non-positive remaining) ⇒ burned out as of now.
+    assert project_burnout(Decimal("-5000"), Decimal("10000"), as_of=as_of) == as_of
+
+
+def test_weekly_burn_rate_zero_for_empty_series() -> None:
+    """An empty burn series yields a zero weekly rate (the burn-out denominator guard)."""
+    series = build_burn_series([], total_planned=Decimal("100000"), as_of=date(2026, 6, 15))
+    assert weekly_burn_rate(series) == Decimal("0")

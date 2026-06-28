@@ -9,16 +9,26 @@ and — on a >10% overrun — enqueues ONE human decision via the B2 feeder.
 
   ``GET  /budget``
     The tracker for the active program — per-workstream planned/actual/committed/
-    remaining/variance/flagged rows, the flagged-workstream list, the roll-up totals,
-    and the burn series (planned vs actual per workstream for the chart). Open to ANY
-    authenticated principal (``Depends(get_principal)``) — anyone may VIEW the tracker;
-    only leadership edits.
+    remaining/variance/flagged/**health** rows, the flagged-workstream list, the roll-up
+    totals (incl. the **projected burn-out** date), the per-workstream burn rows, AND the
+    weekly **cumulative burn series** (actual vs a straight plan line) for the 10b chart.
+    Open to ANY authenticated principal (``Depends(get_principal)``) — anyone may VIEW the
+    tracker; only leadership edits. The reference ``now`` is read HERE and threaded into
+    the pure core as ``as_of`` (the core stays clock-free).
 
   ``POST /budget/entry``
-    Append one spend/commitment ledger line item — **admin/leader-gated**
-    (``_BUDGET_GUARD``). An operator is 403. Adds the entry, RE-RECONCILES, and for any
-    workstream now flagged (>10% overrun) emits ONE open ``budget_variance`` decision
-    via :func:`app.api.decisions.flag_decision`.
+    Append one spend/commitment ledger line item — **per-workstream-owner gated**
+    (Module 10): a LEADER/ADMIN may enter for ANY workstream; an OPERATOR may enter
+    ``committed``/``actual`` ONLY for the workstream they own (:func:`_operator_workstream`)
+    — a foreign workstream / disallowed kind is 403. Adds the entry, RE-RECONCILES, and
+    for any workstream now flagged (>10% overrun) emits ONE open ``budget_variance``
+    decision via :func:`app.api.decisions.flag_decision`.
+
+  ``PUT  /budget/planned``
+    Re-plan one workstream's PLANNED allocation — **LEADERSHIP (admin/leader) only**
+    (``_BUDGET_GUARD``); an operator is 403. Planned lives on the MUTABLE
+    ``budget_workstream`` row, so editing it is allowed even though the spend ledger is
+    append-only. RE-RECONCILES after.
 
 **Idempotency (the "exactly one open decision" property).** Before emitting, the route
 checks ``decisions_store.list_open(program)`` for an existing OPEN ``budget_variance``
@@ -38,6 +48,7 @@ This module may import ``app.core`` / ``app.api`` (it is the composition root);
 
 from __future__ import annotations
 
+from datetime import UTC, date, datetime
 from decimal import Decimal
 from typing import Annotated
 
@@ -54,13 +65,31 @@ from app.api.deps import (
     get_principal,
     require_role,
 )
-from app.core.budget import BudgetEntry, BudgetReconciliation, reconcile
+from app.core.budget import (
+    BudgetEntry,
+    BudgetReconciliation,
+    BurnSeries,
+    build_burn_series,
+    project_burnout,
+    reconcile,
+    weekly_burn_rate,
+)
 from app.core.params import Params
 from app.core.program import Program
 from app.data.budget_store import ENTRY_KINDS, BudgetStore
 from app.data.decisions_store import DecisionsStore
 
 router = APIRouter(tags=["budget"])
+
+# Operator → owned workstream (Module 10). An OPERATOR may enter committed/actual ONLY
+# for the workstream they own; a LEADER/ADMIN may enter for ANY. The demo operator owns
+# ``grassroots`` — keyed by the verified operator's agent_id; an operator with no mapped/
+# resolvable agent_id falls back to the single demo-owned workstream. A named map, not a
+# tunable (INV-11 carve-out: a fixed routing token, like decisions.WORKSTREAMS).
+DEMO_OPERATOR_WORKSTREAM = "grassroots"
+OPERATOR_WORKSTREAMS: dict[str, str] = {}
+# The ledger kinds an operator may enter (spend they actually incur on their own lane).
+_OPERATOR_KINDS = ("committed", "actual")
 
 # The source tag every budget-variance Decision-Queue item carries (the idempotency key
 # the feeder de-dupes on, alongside the workstream in the payload). A named constant —
@@ -95,6 +124,8 @@ class WorkstreamRow(BaseModel):
     remaining: float
     variance: float
     flagged: bool
+    # The Module-10b per-workstream health band — on_track | watch | at_risk.
+    health: str
 
 
 class BurnRow(BaseModel):
@@ -105,6 +136,14 @@ class BurnRow(BaseModel):
     actual: float
 
 
+class BurnSeriesPoint(BaseModel):
+    """One ISO-week point of the cumulative burn time-series (the 10b chart)."""
+
+    week_start: date
+    cumulative_actual: float
+    cumulative_planned: float
+
+
 class RollUp(BaseModel):
     """The whole-budget roll-up totals (the reconcile's cohort aggregate)."""
 
@@ -112,6 +151,9 @@ class RollUp(BaseModel):
     total_actual: float
     total_remaining: float
     total_usd: int
+    # The projected burn-out date (now + remaining / recent weekly burn rate); None when
+    # the recent weekly burn rate is zero (no burn ⇒ no burn-out date — never a div-by-0).
+    projected_burnout: date | None = None
 
 
 class BudgetResponse(BaseModel):
@@ -121,6 +163,8 @@ class BudgetResponse(BaseModel):
     flagged: list[str]
     rollup: RollUp
     burn: list[BurnRow]
+    # The weekly CUMULATIVE burn time-series (actual vs straight plan line) — the 10b chart.
+    burn_series: list[BurnSeriesPoint]
 
 
 class EntryRequest(BaseModel):
@@ -130,6 +174,13 @@ class EntryRequest(BaseModel):
     kind: str = Field(min_length=1)
     amount_usd: Decimal = Field(ge=0)
     note: str | None = None
+
+
+class PlannedRequest(BaseModel):
+    """Body for ``PUT /budget/planned`` — re-plan one workstream's allocation."""
+
+    workstream: str = Field(min_length=1)
+    planned_usd: int = Field(ge=1)
 
 
 def _build_reconciliation(
@@ -168,10 +219,48 @@ def _build_reconciliation(
     return reconcile(budget_entries, params=params), committed_by_ws
 
 
-def _to_response(
-    reconciliation: BudgetReconciliation, committed_by_ws: dict[str, Decimal]
+def _build_burn(
+    store: BudgetStore, program: Program, total_planned: Decimal, *, as_of: date
+) -> BurnSeries:
+    """Bucket the program's dated ACTUAL ledger lines into the weekly burn series (10b).
+
+    Pure-core bucketing (``build_burn_series``) with the reference date INJECTED here —
+    the core reads no clock (mirrors the scorecard's as_of injection). An entry with no
+    ``created_at`` is skipped (it cannot be placed on the week axis).
+    """
+    dated_actuals = [
+        (entry.created_at.date(), entry.amount_usd)
+        for entry in store.list_entries(program)
+        if entry.kind == "actual" and entry.created_at is not None
+    ]
+    return build_burn_series(dated_actuals, total_planned=total_planned, as_of=as_of)
+
+
+def _render(
+    store: BudgetStore, program: Program, params: Params, *, now: datetime
 ) -> BudgetResponse:
-    """Project a :class:`BudgetReconciliation` onto the wire shape (money → float)."""
+    """Reconcile + build the burn series + project burn-out → the full wire response.
+
+    The ONE place the GET tracker / POST entry / PUT planned responses are built (DRY).
+    ``now`` is read at the composition layer and threaded in as ``as_of`` (the core stays
+    clock-free).
+    """
+    reconciliation, committed_by_ws = _build_reconciliation(store, program, params)
+    as_of = now.date()
+    burn_series = _build_burn(store, program, reconciliation.total_planned, as_of=as_of)
+    burnout = project_burnout(
+        reconciliation.total_remaining, weekly_burn_rate(burn_series), as_of=as_of
+    )
+    return _to_response(reconciliation, committed_by_ws, burn_series, burnout)
+
+
+def _to_response(
+    reconciliation: BudgetReconciliation,
+    committed_by_ws: dict[str, Decimal],
+    burn_series: BurnSeries,
+    projected_burnout: date | None,
+) -> BudgetResponse:
+    """Project a :class:`BudgetReconciliation` + burn series onto the wire shape."""
     rows = [
         WorkstreamRow(
             workstream=r.workstream,
@@ -181,6 +270,7 @@ def _to_response(
             remaining=float(r.remaining),
             variance=float(r.variance),
             flagged=r.flagged,
+            health=r.health,
         )
         for r in reconciliation.results
     ]
@@ -192,10 +282,19 @@ def _to_response(
             total_actual=float(reconciliation.total_actual),
             total_remaining=float(reconciliation.total_remaining),
             total_usd=reconciliation.total_usd,
+            projected_burnout=projected_burnout,
         ),
         burn=[
             BurnRow(workstream=r.workstream, planned=float(r.planned), actual=float(r.actual))
             for r in reconciliation.results
+        ],
+        burn_series=[
+            BurnSeriesPoint(
+                week_start=w.week_start,
+                cumulative_actual=float(w.cumulative_actual),
+                cumulative_planned=float(w.cumulative_planned),
+            )
+            for w in burn_series.weeks
         ],
     )
 
@@ -208,8 +307,43 @@ def get_budget(
     principal: AnyPrincipalDep,
 ) -> BudgetResponse:
     """The reconciled Budget Tracker for the active program (any authenticated VIEW)."""
-    reconciliation, committed_by_ws = _build_reconciliation(store, program, params)
-    return _to_response(reconciliation, committed_by_ws)
+    return _render(store, program, params, now=datetime.now(UTC))
+
+
+def _operator_workstream(principal: Principal) -> str:
+    """The single workstream an OPERATOR owns (Module 10 per-owner gating).
+
+    Keyed by the verified operator's ``agent_id`` (never a client claim); an operator
+    with no mapped/resolvable agent_id falls back to the demo-owned workstream
+    (:data:`DEMO_OPERATOR_WORKSTREAM`). Derived from the verified principal only (INV-1).
+    """
+    if principal.agent_id is not None:
+        return OPERATOR_WORKSTREAMS.get(str(principal.agent_id), DEMO_OPERATOR_WORKSTREAM)
+    return DEMO_OPERATOR_WORKSTREAM
+
+
+def _authorize_entry(principal: Principal, body: EntryRequest) -> None:
+    """Per-workstream-owner gate for ``POST /budget/entry`` (Module 10) — 403 on a deny.
+
+    A LEADER/ADMIN may enter for ANY workstream and any kind. An OPERATOR may enter only
+    ``committed``/``actual`` for the ONE workstream they own (:func:`_operator_workstream`):
+    a foreign workstream OR a disallowed kind is 403. The verified ROLE decides — never a
+    client claim (the IDOR/spoof posture).
+    """
+    if principal.role in ("admin", "leader"):
+        return
+    # role == "operator" (the only remaining verified role).
+    owned = _operator_workstream(principal)
+    if body.workstream != owned:
+        raise HTTPException(
+            status_code=403,
+            detail=f"operator may only enter for its own workstream {owned!r}",
+        )
+    if body.kind not in _OPERATOR_KINDS:
+        raise HTTPException(
+            status_code=403,
+            detail=f"operator may only enter {list(_OPERATOR_KINDS)} entries",
+        )
 
 
 @router.post("/budget/entry", response_model=BudgetResponse)
@@ -219,17 +353,20 @@ def add_budget_entry(
     decisions_store: DecisionsStoreDep,
     program: ProgramDep,
     params: ParamsDep,
-    principal: LeaderDep,
+    principal: AnyPrincipalDep,
 ) -> BudgetResponse:
     """Append a ledger entry, re-reconcile, and feed any >10% overrun to the Decision Queue.
 
-    Admin/leader-gated (an operator is 403). 422 on an unknown workstream or kind (the
-    0030 FK / CHECK rejects them). After the append, the route RE-RECONCILES and emits
-    ONE open ``budget_variance`` decision per newly-flagged workstream — idempotent: a
-    workstream that already has an OPEN budget_variance decision is not re-flagged.
+    Per-workstream-owner gated (Module 10): a LEADER/ADMIN may enter for ANY workstream;
+    an OPERATOR may enter ``committed``/``actual`` ONLY for the workstream they own (a
+    foreign workstream / disallowed kind is 403). 422 on an unknown workstream or kind
+    (the 0030 FK / CHECK rejects them). After the append, the route RE-RECONCILES and
+    emits ONE open ``budget_variance`` decision per newly-flagged workstream — idempotent:
+    a workstream that already has an OPEN budget_variance decision is not re-flagged.
     """
     if body.kind not in ENTRY_KINDS:
         raise HTTPException(status_code=422, detail=f"unknown kind; expected one of {ENTRY_KINDS}")
+    _authorize_entry(principal, body)
     try:
         store.add_entry(
             program,
@@ -241,7 +378,7 @@ def add_budget_entry(
     except KeyError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
-    reconciliation, committed_by_ws = _build_reconciliation(store, program, params)
+    reconciliation, _ = _build_reconciliation(store, program, params)
 
     # The variance → Decision-Queue link (INV-2): each flagged workstream becomes ONE
     # open human decision. Idempotency — skip a workstream that already has an OPEN
@@ -267,4 +404,26 @@ def add_budget_entry(
             },
         )
 
-    return _to_response(reconciliation, committed_by_ws)
+    return _render(store, program, params, now=datetime.now(UTC))
+
+
+@router.put("/budget/planned", response_model=BudgetResponse)
+def set_budget_planned(
+    body: PlannedRequest,
+    store: StoreDep,
+    program: ProgramDep,
+    params: ParamsDep,
+    principal: LeaderDep,
+) -> BudgetResponse:
+    """Re-plan one workstream's PLANNED allocation — LEADERSHIP (admin/leader) only.
+
+    An operator is 403 (the leadership edit gate). 422 on an unknown workstream (the
+    store rejects a non-seeded workstream). Planned lives on the MUTABLE
+    ``budget_workstream`` row — editing it is allowed even though the spend ledger is
+    append-only. The route RE-RECONCILES after so the response reflects the new plan.
+    """
+    try:
+        store.set_planned(program, workstream=body.workstream, planned_usd=body.planned_usd)
+    except KeyError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return _render(store, program, params, now=datetime.now(UTC))
