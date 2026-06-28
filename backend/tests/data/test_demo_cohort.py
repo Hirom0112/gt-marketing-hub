@@ -1,9 +1,11 @@
 """MD — the curated `COCKPIT_SCENARIO=demo` cohort has the on-camera demo shape.
 
 The demo cohort (``generate_demo_cohort``) is a SEPARATE deterministic fixture —
-exactly 12 synthetic households with controlled, legible state for the demo
-(MULTI_AGENT_COCKPIT §10.1), all created THIS WEEK: exactly one two-child
-household, a stage spread
+18 synthetic households (12 curated + 6 deliberate edge cases: 2 duplicate
+"applied twice" pairs for the merge queue, plus a mojibake row and a
+missing-required-field row for the data-quality queue) with controlled, legible
+state for the demo (MULTI_AGENT_COCKPIT §10.1), all created THIS WEEK: exactly one
+two-child household, a stage spread
 (≥1 mid-funnel, ≥1 enrollment-done "went all the way"), a funding/voucher spread,
 seeded SIS divergence, and an assignment split across the two demo agents with
 ≥1 left unassigned (the intake pool the admin routes live).
@@ -55,14 +57,18 @@ def test_demo_scenario_shape() -> None:
     params = load_params(EXAMPLE_PARAMS)
     ds = generate_demo_cohort(params=params)
 
-    # --- EXACTLY 12 households, the deliberate on-camera cohort (grown 6→12) ---
-    assert len(ds.families) == 12
+    # --- EXACTLY 18 households: the 12 curated + the 6 deliberate edge cases ---
+    # (2 duplicate "applied twice" PAIRS for the merge queue + a mojibake row + a
+    # missing-required-field row for the data-quality queue).
+    assert len(ds.families) == 18
     # parallel one-row-per-family source tables (the spine join holds).
     assert len(ds.leads) == len(ds.families)
     assert len(ds.app_forms) == len(ds.families)
     assert len(ds.enrollment_forms) == len(ds.families)
 
-    # the deliberate 12 surnames.
+    # the 12 curated surnames + the 4 distinct edge surnames (Castillo + Okeke each
+    # appear TWICE — the same household applied twice; the mojibake surname carries
+    # double-encoded UTF-8 on SYNTHETIC names only, INV-1).
     surnames = {lead.synthetic_last_name for lead in ds.leads}
     assert surnames == {
         "Rivera",
@@ -77,7 +83,16 @@ def test_demo_scenario_shape() -> None:
         "Brooks",
         "Tran",
         "Reyes",
+        # the deliberate edge-case households:
+        "Castillo",  # duplicate pair #1 (×2)
+        "Okeke",  # duplicate pair #2 (×2)
+        "RodrÃ­guez",  # mojibake row
+        "Castro",  # missing-field row
     }
+    # the two duplicate pairs each appear twice (the same household applying twice).
+    last_names = [lead.synthetic_last_name for lead in ds.leads]
+    assert last_names.count("Castillo") == 2
+    assert last_names.count("Okeke") == 2
 
     # --- every household was created THIS WEEK (within 7 days of the demo epoch) -
     from datetime import timedelta
@@ -282,6 +297,94 @@ def test_demo_assignment_history_is_deterministic() -> None:
     a = generate_demo_cohort(params=params).lead_assignments
     b = generate_demo_cohort(params=params).lead_assignments
     assert [x.model_dump() for x in a] == [y.model_dump() for y in b]
+
+
+def test_demo_cohort_has_duplicate_pairs_for_merge_queue() -> None:
+    """The seeded cohort carries ≥2 duplicate "applied twice" pairs that the dedup
+    core (the merge queue's ``propose_merge``) flags REVIEW_QUEUE — same email +
+    region, a typo'd phone (both present, differ) ⇒ fail-closed human review (INV-4).
+
+    Drives the SAME pure core ``app/api/merge.py`` composes (an IdentityCandidate
+    per lead → ``propose_merge`` over every pair), so the seed is proven against the
+    real merge logic.
+    """
+    from app.core.identity import IdentityCandidate, MergeVerdict, propose_merge
+
+    params = load_params(EXAMPLE_PARAMS)
+    ds = generate_demo_cohort(params=params)
+    lead_by_family = {lead.family_id: lead for lead in ds.leads}
+
+    candidates = [
+        IdentityCandidate(
+            family_id=f.family_id,
+            synthetic_email=lead_by_family[f.family_id].synthetic_email,
+            region=lead_by_family[f.family_id].region,
+            synthetic_phone=lead_by_family[f.family_id].synthetic_phone,
+        )
+        for f in ds.families
+        if f.family_id in lead_by_family
+    ]
+
+    review = []
+    for i in range(len(candidates)):
+        for k in range(i + 1, len(candidates)):
+            proposal = propose_merge([candidates[i], candidates[k]])
+            if proposal is not None and proposal.verdict is MergeVerdict.REVIEW_QUEUE:
+                review.append(proposal)
+
+    assert len(review) >= 2, "the cohort yields ≥2 REVIEW_QUEUE duplicate proposals"
+
+    # The two intended "applied twice" pairs are present (by household identity).
+    review_pairs = {frozenset({p.primary_family_id, p.duplicate_family_id}) for p in review}
+    castillo = frozenset(
+        lead.family_id for lead in ds.leads if lead.synthetic_last_name == "Castillo"
+    )
+    okeke = frozenset(lead.family_id for lead in ds.leads if lead.synthetic_last_name == "Okeke")
+    assert len(castillo) == 2 and castillo in review_pairs, "Castillo applied-twice pair flagged"
+    assert len(okeke) == 2 and okeke in review_pairs, "Okeke applied-twice pair flagged"
+    # Each intended pair agrees on email+region and conflicts only on phone.
+    for p in review:
+        if frozenset({p.primary_family_id, p.duplicate_family_id}) in {castillo, okeke}:
+            assert p.matched_on == ("email", "region")
+            assert p.conflicting_keys == ("phone",)
+
+
+def test_demo_cohort_carries_mojibake_and_missing_field_for_data_quality() -> None:
+    """The seeded cohort carries the data-quality edge cases the new detector flags:
+    a mojibake (double-encoded UTF-8) name row and a missing-required-field (empty
+    region) row — proven against ``app.core.data_quality.build_dq_queue``.
+    """
+    from app.core.data_quality import DqRow, build_dq_queue
+    from app.core.seam import MirrorState
+
+    params = load_params(EXAMPLE_PARAMS)
+    ds = generate_demo_cohort(params=params)
+    lead_by_family = {lead.family_id: lead for lead in ds.leads}
+
+    rows = [
+        DqRow(
+            entity_id=str(f.family_id),
+            record=f,
+            mirror=MirrorState(stage=f.current_stage, mirror_updated_at=f.updated_at),
+            utm=None,
+            mojibake_fields={
+                "first_name": lead_by_family[f.family_id].synthetic_first_name,
+                "last_name": lead_by_family[f.family_id].synthetic_last_name,
+            },
+            required_fields={"region": lead_by_family[f.family_id].region},
+        )
+        for f in ds.families
+        if f.family_id in lead_by_family
+    ]
+    issues = build_dq_queue(rows, params=params)
+
+    mojibake = [i for i in issues if i.kind == "mojibake"]
+    missing = [i for i in issues if i.kind == "missing_field"]
+    assert mojibake, "the mojibake edge-case household is detected"
+    assert missing, "the missing-region edge-case household is detected"
+    # Exactly ONE household each (the seeded edge rows; no false positives elsewhere).
+    assert len({i.entity_id for i in mojibake}) == 1
+    assert len({i.entity_id for i in missing}) == 1
 
 
 def test_default_cohort_carries_territory_and_income() -> None:

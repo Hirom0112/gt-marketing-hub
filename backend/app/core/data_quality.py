@@ -6,14 +6,19 @@ carry at least one issue, **severity-ordered** per
 ``params.crm_ops.data_quality.severity_order`` (``conflict`` highest). A clean
 cohort yields an empty tuple.
 
-Three issue kinds, each DETECTED by REUSING an existing pure core (never
-re-implemented):
+Five issue kinds — the first three DETECTED by REUSING an existing pure core
+(never re-implemented), the last two pure structural checks over the row's fields:
 
 * ``conflict`` — the Supabase↔HubSpot seam diverges: ``seam.derive_seam_status``
   yields :data:`SeamStatus.CONFLICT` for the row's record + mirror.
 * ``utm_broken`` — ``utm_health.check_utm`` flags the row's UTM ``broken``.
 * ``unreliable_field`` — the row carries a present field listed in
   ``params.crm_ops.unreliable_fields`` (a known low-trust value).
+* ``mojibake`` — a synthetic ASCII text field carries the double-encoded-UTF-8
+  signature (U+00C3 / U+00C2) or any non-ASCII char — a CRM-import corruption
+  (e.g. ``"JosÃ© RodrÃ­guez"`` for ``"José Rodríguez"``).
+* ``missing_field`` — a required field is empty/``None`` (a blank an import
+  silently dropped).
 
 Per the honesty mandate (mirroring INV-4) this DETECTS and FLAGS — nothing is
 auto-corrected. Pure: stdlib + ``app.core.params`` + the reused pure cores
@@ -31,7 +36,29 @@ from app.core.seam import MirrorState, derive_seam_status
 from app.core.utm_health import check_utm
 from app.data.models import FamilyRecord, SeamStatus
 
-DqKind = Literal["conflict", "utm_broken", "unreliable_field"]
+DqKind = Literal["conflict", "utm_broken", "unreliable_field", "mojibake", "missing_field"]
+
+# The double-encoded-UTF-8 mojibake signature: the high-Latin-1 lead bytes a UTF-8
+# string mis-decoded as Latin-1 produces (U+00C3 / U+00C2). Their presence — or ANY
+# non-ASCII char in a field meant to be plain synthetic ASCII — means the text was
+# corrupted on a CRM import. Pure stdlib ``str`` only; a single canonical home.
+_MOJIBAKE_SIGNATURE: tuple[str, ...] = ("Ã", "Â")
+
+
+def _has_mojibake(value: str) -> bool:
+    """True when ``value`` carries the mojibake signature or any non-ASCII char.
+
+    A field documented as plain synthetic ASCII (a household label / contact name)
+    should never hold a high-codepoint char; one present is the double-encoded
+    corruption this flags. ``value.isascii()`` is the general catch; the explicit
+    signature documents the canonical ``Ã``/``Â`` lead-byte tell.
+    """
+    return any(sig in value for sig in _MOJIBAKE_SIGNATURE) or not value.isascii()
+
+
+def _is_missing(value: str | None) -> bool:
+    """True when a required field is ``None`` or empty/whitespace-only."""
+    return value is None or not value.strip()
 
 
 @dataclass(frozen=True, slots=True)
@@ -46,6 +73,13 @@ class DqRow:
         present_fields: The field names actually present/populated on this row;
             any that are low-trust (``params.crm_ops.unreliable_fields``) raise an
             ``unreliable_field`` issue. Defaults to empty.
+        mojibake_fields: ``{field_name: value}`` of synthetic ASCII text fields
+            (e.g. a contact name / household label) to check for the
+            double-encoded-UTF-8 corruption — any flagged by :func:`_has_mojibake`
+            raise a ``mojibake`` issue. Defaults to empty (no check).
+        required_fields: ``{field_name: value}`` of fields that MUST be populated;
+            any empty/``None`` (per :func:`_is_missing`) raise a ``missing_field``
+            issue. Defaults to empty (no check).
     """
 
     entity_id: str
@@ -53,6 +87,8 @@ class DqRow:
     mirror: MirrorState
     utm: Mapping[str, str] | None = None
     present_fields: tuple[str, ...] = field(default_factory=tuple)
+    mojibake_fields: Mapping[str, str | None] = field(default_factory=dict)
+    required_fields: Mapping[str, str | None] = field(default_factory=dict)
 
 
 @dataclass(frozen=True, slots=True)
@@ -137,7 +173,33 @@ def build_dq_queue(rows: Sequence[DqRow], *, params: Params) -> tuple[DqIssue, .
                     )
                 )
 
+        for field_name, value in row.mojibake_fields.items():
+            if value is not None and _has_mojibake(value):
+                issues.append(
+                    DqIssue(
+                        entity_id=row.entity_id,
+                        kind="mojibake",
+                        severity=rank["mojibake"],
+                        detail=(
+                            f"Field {field_name!r} carries mojibake "
+                            f"(double-encoded text) — {value!r}."
+                        ),
+                    )
+                )
+
+        for field_name, value in row.required_fields.items():
+            if _is_missing(value):
+                issues.append(
+                    DqIssue(
+                        entity_id=row.entity_id,
+                        kind="missing_field",
+                        severity=rank["missing_field"],
+                        detail=f"Required field {field_name!r} is empty/missing.",
+                    )
+                )
+
     # Stable sort by severity rank: conflict (highest) first. Equal-rank issues
-    # keep their detection order (row order, then per-row kind order above).
+    # keep their detection order (row order, then per-row kind order above:
+    # conflict → utm_broken → unreliable_field → mojibake → missing_field).
     issues.sort(key=lambda issue: issue.severity)
     return tuple(issues)

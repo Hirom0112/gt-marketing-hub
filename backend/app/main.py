@@ -11,10 +11,12 @@ from fastapi.staticfiles import StaticFiles
 from mangum import Mangum
 
 from app.api.ai_actions import router as ai_actions_router
+from app.api.ambassadors import router as ambassadors_router
 from app.api.auth import router as auth_router
 from app.api.budget import router as budget_router
 from app.api.contact_outcome import router as contact_outcome_router
 from app.api.content import router as content_router
+from app.api.content_kanban import router as content_kanban_router
 from app.api.crm_ops import router as crm_ops_router
 from app.api.crm_status import router as crm_status_router
 from app.api.crm_sync import router as crm_sync_router
@@ -37,6 +39,7 @@ from app.api.scorecard import router as scorecard_router
 from app.api.seam import router as seam_router
 from app.api.security import SecurityEdgeMiddleware
 from app.api.security import router as security_router
+from app.api.summer import router as summer_router
 from app.core.settings import get_settings, posted_catalog_mount_root
 
 app = FastAPI(title="GT Pulse", version="0.1.0")
@@ -263,6 +266,24 @@ app.include_router(budget_router)
 # unchanged rec enqueues nothing (honest); the response surfaces the change + source
 # either way. Any authenticated seat; no live external write (INV-9).
 app.include_router(open_data_router)
+
+# Grassroots ambassador dual-source reconcile (HubSpot ⊕ community.gt.school) —
+# GET /ambassadors/reconcile. Pure reconciler (app.core.ambassador_reconcile) over two
+# synthetic sources, deduped to the union with conflicts surfaced for human review
+# (INV-2/4). Aggregate, adult-only (INV-6). Backs the Grassroots RECONCILED badge.
+app.include_router(ambassadors_router)
+
+# Summer Camp dual-source reconcile (summer.gt.school + standalone registration form) —
+# GET /summer/reconcile. Pure reconciler (app.core.summer_reconcile) merges the two
+# sources with NO double-count, per-campus rollup vs capacity, conflicts held out
+# fail-closed (INV-4). Tied to Phase-1 program isolation (program_id='summer_camp').
+app.include_router(summer_router)
+
+# Content production kanban synced to Google Sheets (INV-9 simulated/live) —
+# GET/POST /content/kanban. Reads/writes content rows through the SheetsAdapter seam
+# (simulate default; live flips on SHEETS_MODE + a present key, behind a per-run cap +
+# kill switch, INV-8). Backs the Content module's real two-way Sheet sync.
+app.include_router(content_kanban_router)
 
 
 # AWS Lambda + API Gateway entrypoint (ARCHITECTURE.md §12).

@@ -1451,6 +1451,44 @@ class Budget(_StrictModel):
         return self
 
 
+class SummerCamp(_StrictModel):
+    """summer_camp — Summer Camp dual-source reconcile business tunables (INV-11).
+
+    The single canonical home for the Summer Camp program's surfaced business
+    numbers that ``GET /summer/reconcile`` reads — never a code literal:
+
+    * ``campus_capacity`` — per-campus seat capacity (whole seats), keyed by campus.
+      The reconcile rollup measures registrations against THESE seats.
+    * ``price_per_seat_usd`` — the list price of one camp seat (whole USD).
+    * ``revenue_target_usd`` — the season revenue target (whole USD; a SEPARATE P&L
+      from the marketing ``budget`` block).
+
+    Every value MUST be ``>= 1``; capacities MUST be non-empty (an empty rollup is
+    meaningless — drift fails the build, CLAUDE.md §4.1).
+    """
+
+    campus_capacity: dict[str, int]
+    price_per_seat_usd: int
+    revenue_target_usd: int
+
+    @model_validator(mode="after")
+    def _guard(self) -> SummerCamp:
+        if not self.campus_capacity:
+            raise ValueError("summer_camp.campus_capacity must be non-empty")
+        bad = {k: v for k, v in self.campus_capacity.items() if v < 1}
+        if bad:
+            raise ValueError(f"summer_camp.campus_capacity seats must be >= 1, got {bad!r}")
+        if self.price_per_seat_usd < 1:
+            raise ValueError(
+                f"summer_camp.price_per_seat_usd must be >= 1, got {self.price_per_seat_usd!r}"
+            )
+        if self.revenue_target_usd < 1:
+            raise ValueError(
+                f"summer_camp.revenue_target_usd must be >= 1, got {self.revenue_target_usd!r}"
+            )
+        return self
+
+
 class CrmOpsUtm(_StrictModel):
     """crm_ops.utm — UTM-health rule set (TODO_v2 §C1; INV-11).
 
@@ -1495,7 +1533,13 @@ class CrmOpsDataQuality(_StrictModel):
     # The closed set of data-quality issue kinds. Kept here (not imported from
     # core/data_quality.py) because params is CONSUMED by that module — importing
     # back would be circular. The deriver's literals must match this set.
-    _KNOWN_ISSUE_KINDS = ("conflict", "utm_broken", "unreliable_field")
+    _KNOWN_ISSUE_KINDS = (
+        "conflict",
+        "utm_broken",
+        "unreliable_field",
+        "mojibake",
+        "missing_field",
+    )
 
     severity_order: list[str]
 
@@ -1679,6 +1723,7 @@ class Params(_StrictModel):
     resilience: Resilience
     rbac: Rbac
     budget: Budget
+    summer_camp: SummerCamp
 
 
 def _resolve_path(path: Path | None) -> Path:

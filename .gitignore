@@ -15,6 +15,12 @@ build/
 !.env.example
 params/params.yaml
 !params/params.example.yaml
+# Google service-account keys — NEVER commit (brief: never commit secrets)
+.secrets/
+*-service-account*.json
+gsheets-sa.json
+gtschool-*.json
+*.iam.gserviceaccount.com.json
 # OS
 .DS_Store
 

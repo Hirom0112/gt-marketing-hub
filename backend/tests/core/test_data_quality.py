@@ -115,3 +115,80 @@ def test_clean_cohort_is_empty() -> None:
     ]
 
     assert build_dq_queue(rows, params=_PARAMS) == ()
+
+
+# --------------------------------------------------------------------------- #
+# mojibake — double-encoded-UTF-8 corruption in a synthetic ASCII text field.
+# --------------------------------------------------------------------------- #
+def test_mojibake_clean_field_is_not_flagged() -> None:
+    """A row whose ``mojibake_fields`` are all plain ASCII ⇒ NO mojibake issue."""
+    rows = [
+        DqRow(
+            entity_id="clean-name",
+            record=_record(),
+            mirror=_synced_mirror(),
+            utm=_GOOD_UTM,
+            mojibake_fields={"first_name": "Jose", "last_name": "Rodriguez"},
+        )
+    ]
+    assert build_dq_queue(rows, params=_PARAMS) == ()
+
+
+def test_mojibake_double_encoded_field_is_flagged() -> None:
+    """A field carrying the double-encoded-UTF-8 signature ⇒ a ``mojibake`` issue.
+
+    ``"JosÃ©"`` / ``"RodrÃ­guez"`` are "José" / "Rodríguez" UTF-8 bytes mis-decoded
+    as Latin-1 — the canonical CRM-import corruption (U+00C3 lead byte).
+    """
+    rows = [
+        DqRow(
+            entity_id="garbled",
+            record=_record(),
+            mirror=_synced_mirror(),
+            utm=_GOOD_UTM,
+            mojibake_fields={"first_name": "JosÃ©", "last_name": "RodrÃ­guez"},
+        )
+    ]
+    issues = build_dq_queue(rows, params=_PARAMS)
+    kinds = [(i.entity_id, i.kind) for i in issues]
+    # Both mojibake fields are flagged, attributed to the row.
+    assert kinds == [("garbled", "mojibake"), ("garbled", "mojibake")]
+    expected_rank = _PARAMS.crm_ops.data_quality.severity_order.index("mojibake")
+    assert all(i.severity == expected_rank for i in issues)
+
+
+# --------------------------------------------------------------------------- #
+# missing_field — a required field is empty / None.
+# --------------------------------------------------------------------------- #
+def test_missing_field_present_value_is_not_flagged() -> None:
+    """A row whose required fields are all populated ⇒ NO missing_field issue."""
+    rows = [
+        DqRow(
+            entity_id="complete",
+            record=_record(),
+            mirror=_synced_mirror(),
+            utm=_GOOD_UTM,
+            required_fields={"region": "Southeast", "phone": "555-0100"},
+        )
+    ]
+    assert build_dq_queue(rows, params=_PARAMS) == ()
+
+
+def test_missing_field_empty_or_none_is_flagged() -> None:
+    """An empty/whitespace-only or ``None`` required field ⇒ a ``missing_field`` issue."""
+    rows = [
+        DqRow(
+            entity_id="blank-region",
+            record=_record(),
+            mirror=_synced_mirror(),
+            utm=_GOOD_UTM,
+            required_fields={"region": "", "phone": None},
+        )
+    ]
+    issues = build_dq_queue(rows, params=_PARAMS)
+    assert [(i.entity_id, i.kind) for i in issues] == [
+        ("blank-region", "missing_field"),
+        ("blank-region", "missing_field"),
+    ]
+    expected_rank = _PARAMS.crm_ops.data_quality.severity_order.index("missing_field")
+    assert all(i.severity == expected_rank for i in issues)

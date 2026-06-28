@@ -1281,6 +1281,221 @@ _DEMO_HOUSEHOLDS: tuple[_DemoHousehold, ...] = (
 )
 
 
+# --------------------------------------------------------------------------- #
+# The brief's remaining "deliberate edge cases" appended to the demo cohort, so
+# dedup (the merge queue) + data-quality are PROVABLE against data built to break
+# them. Two families per duplicate "applied twice" pair + a mojibake row + a
+# missing-required-field row. All synthetic (INV-1): ``@example.invalid`` emails,
+# ``555-01xx`` phones, AGGREGATE regions — ONLY the synthetic NAMES carry mojibake,
+# and the "missing field" is an empty aggregate region label (never PII).
+# --------------------------------------------------------------------------- #
+
+# Double-encoded UTF-8 ("José Rodríguez" UTF-8 bytes mis-decoded as Latin-1): a
+# realistic CRM-import mojibake signature (U+00C3 …) on SYNTHETIC names only (INV-1).
+_MOJIBAKE_GIVEN = "JosÃ©"  # "JosÃ©"  ← "José"
+_MOJIBAKE_SURNAME = "RodrÃ­guez"  # "RodrÃ­guez"  ← "Rodríguez"
+
+
+@dataclass(frozen=True)
+class _EdgeHousehold:
+    """One curated data-quality / dedup edge-case household (synthetic; INV-1).
+
+    Attributes:
+        surname/given: synthetic name labels (may carry mojibake on the mojibake row).
+        region: the aggregate region label; ``""`` is the deliberate MISSING required
+            field (never PII — an empty aggregate label, not precise geo).
+        email_local: the ``@example.invalid`` local-part; IDENTICAL within a duplicate
+            pair (the same household applying twice).
+        phone: the ``555-01xx`` synthetic phone; DIFFERS within a pair (a typo on the
+            second application) ⇒ ``propose_merge`` ⇒ REVIEW_QUEUE.
+        state/income_tier/funding_*/stage/neighborhood: legible routing + funnel state.
+        note: the demo intent (documentation only — never emitted).
+    """
+
+    surname: str
+    given: str
+    region: str
+    email_local: str
+    phone: str
+    state: str
+    income_tier: IncomeTier | None
+    funding_type: FundingType
+    funding_state: FundingState
+    stage: Stage
+    neighborhood: str
+    note: str
+
+
+# Two "applied twice" DUPLICATE PAIRS + a mojibake row + a missing-field row. The
+# pairs share email+region but DIFFER on phone (⇒ REVIEW_QUEUE, fail-closed); the
+# two pairs use DISTINCT email-locals + regions so they never cross-match. All are
+# left UNASSIGNED (intake edge cases) so they never perturb the curated owned set /
+# assignment-history seeding. None are PAID (so the SIS divergence is unchanged).
+_DEMO_EDGE_HOUSEHOLDS: tuple[_EdgeHousehold, ...] = (
+    # --- Duplicate pair #1: the Castillo household APPLIED TWICE. -------------
+    _EdgeHousehold(
+        surname="Castillo",
+        given="Alex",
+        region="Southeast",
+        email_local="castillo.household",
+        phone="555-0142",
+        state="FL",
+        income_tier=IncomeTier.MID_65K_160K,
+        funding_type=FundingType.SELF_PAY,
+        funding_state=FundingState.APPLIED,
+        stage=Stage.APPLY,
+        neighborhood=_DEMO_NB_MID,
+        note="dedup: applied twice — first application (phone 555-0142)",
+    ),
+    _EdgeHousehold(
+        surname="Castillo",
+        given="Alex",
+        region="Southeast",
+        email_local="castillo.household",  # SAME email+region as the first
+        phone="555-0143",  # DIFFERENT phone (a typo on the 2nd application)
+        state="FL",
+        income_tier=IncomeTier.MID_65K_160K,
+        funding_type=FundingType.SELF_PAY,
+        funding_state=FundingState.APPLIED,
+        stage=Stage.APPLY,
+        neighborhood=_DEMO_NB_MID,
+        note="dedup: applied twice — duplicate (phone typo 555-0143) ⇒ REVIEW_QUEUE",
+    ),
+    # --- Duplicate pair #2: the Okeke household APPLIED TWICE. ----------------
+    _EdgeHousehold(
+        surname="Okeke",
+        given="Jordan",
+        region="Midwest",
+        email_local="okeke.household",
+        phone="555-0177",
+        state="CA",
+        income_tier=IncomeTier.LT_65K,
+        funding_type=FundingType.TEFA_STANDARD,
+        funding_state=FundingState.APPLIED,
+        stage=Stage.INTEREST,
+        neighborhood=_DEMO_NB_MODEST,
+        note="dedup: applied twice — first application (phone 555-0177)",
+    ),
+    _EdgeHousehold(
+        surname="Okeke",
+        given="Jordan",
+        region="Midwest",
+        email_local="okeke.household",  # SAME email+region as the first
+        phone="555-0188",  # DIFFERENT phone (a typo on the 2nd application)
+        state="CA",
+        income_tier=IncomeTier.LT_65K,
+        funding_type=FundingType.TEFA_STANDARD,
+        funding_state=FundingState.APPLIED,
+        stage=Stage.INTEREST,
+        neighborhood=_DEMO_NB_MODEST,
+        note="dedup: applied twice — duplicate (phone typo 555-0188) ⇒ REVIEW_QUEUE",
+    ),
+    # --- Data-quality: MOJIBAKE in the synthetic name fields. -----------------
+    _EdgeHousehold(
+        surname=_MOJIBAKE_SURNAME,
+        given=_MOJIBAKE_GIVEN,
+        region="West Coast",
+        email_local="rodriguez.dq",  # email stays ASCII @example.invalid (INV-1)
+        phone="555-0150",
+        state="FL",
+        income_tier=IncomeTier.MID_65K_160K,
+        funding_type=FundingType.SELF_PAY,
+        funding_state=FundingState.APPLIED,
+        stage=Stage.APPLY,
+        neighborhood=_DEMO_NB_MID,
+        note="data-quality: mojibake (double-encoded UTF-8) in synthetic name fields",
+    ),
+    # --- Data-quality: MISSING required field (empty aggregate region). -------
+    _EdgeHousehold(
+        surname="Castro",
+        given="Sam",
+        region="",  # the deliberate MISSING required field (empty, never PII)
+        email_local="castro.dq",
+        phone="555-0151",
+        state="CA",
+        income_tier=IncomeTier.LT_65K,
+        funding_type=FundingType.TEFA_STANDARD,
+        funding_state=FundingState.APPLIED,
+        stage=Stage.INTEREST,
+        neighborhood=_DEMO_NB_MODEST,
+        note="data-quality: missing required field — empty region label",
+    ),
+)
+
+
+def _build_edge_household(
+    rng: random.Random,
+    *,
+    spec: _EdgeHousehold,
+) -> tuple[FamilyRecord, LeadsNew, AppForm, EnrollmentForms, CommunityProfile]:
+    """Build one curated edge-case household + its four joined source rows (INV-1).
+
+    Mirrors :func:`_build_demo_household`'s synthetic, deterministic shape but pins
+    the dedup/data-quality-relevant fields from ``spec`` (shared email+region within
+    a pair, a typo'd phone, mojibake names, or an empty region) rather than drawing
+    them. Created THIS WEEK, single-child, UNASSIGNED, never paid — so it never
+    perturbs the curated cohort's owned set, assignment history, or SIS divergence.
+    """
+    family_id = _uuid(rng)
+    lead_id = _uuid(rng)
+    app_form_id = _uuid(rng)
+    enrollment_form_id = _uuid(rng)
+    community_profile_id = _uuid(rng)
+
+    product = _weighted_choice(rng, _PRODUCT_WEIGHTS)
+    attribution_source = rng.choice(_ATTRIBUTION_SOURCES)
+    email = f"{spec.email_local}@example.invalid"
+    utm = _synthetic_utm(rng, attribution_source)
+    created = _timestamp_between(rng, min_days_ago=0, max_days_ago=3)
+
+    family = FamilyRecord(
+        family_id=family_id,
+        display_name=f"The {spec.surname} Family",
+        primary_contact_synthetic_email=email,
+        assigned_rep_id=None,
+        assigned_at=None,
+        lead_id=lead_id,
+        app_form_id=app_form_id,
+        enrollment_form_id=enrollment_form_id,
+        community_profile_id=community_profile_id,
+        current_stage=spec.stage,
+        stall_reason=None,
+        stalled_since=None,
+        funding_type=spec.funding_type,
+        funding_state=spec.funding_state,
+        state=spec.state,
+        income_tier=spec.income_tier,
+        attribution_source=attribution_source,
+        attribution_utm=utm,
+        crm_seam_status=_seam_status(rng),
+        work_queue_score=round(rng.uniform(0.0, 1.0), 4),
+        created_at=created,
+        updated_at=min(created + timedelta(days=rng.randint(0, 3)), _EPOCH),
+    )
+
+    lead = LeadsNew(
+        lead_id=lead_id,
+        family_id=family_id,
+        synthetic_first_name=spec.given,
+        synthetic_last_name=spec.surname,
+        synthetic_email=email,
+        synthetic_phone=spec.phone,
+        source=attribution_source,
+        utm=utm,
+        product_interest=product,
+        grade_interest=rng.choice(_GRADES),
+        region=spec.region,
+        neighborhood=spec.neighborhood,
+        num_children=1,
+        created_at=created,
+    )
+
+    app_form = _build_app_form(rng, app_form_id, family_id, spec.stage, created)
+    enrollment = _build_enrollment(rng, enrollment_form_id, family_id, spec.stage, created)
+    profile = _build_profile(rng, community_profile_id, family_id, created)
+    return family, lead, app_form, enrollment, profile
+
+
 def generate_demo_cohort(*, params: Params) -> SyntheticDataset:
     """Generate the curated ``COCKPIT_SCENARIO=demo`` cohort (MULTI_AGENT §10.1).
 
@@ -1308,6 +1523,16 @@ def generate_demo_cohort(*, params: Params) -> SyntheticDataset:
     ds = SyntheticDataset()
     for spec in _DEMO_HOUSEHOLDS:
         family, lead, app_form, enrollment, profile = _build_demo_household(rng, spec=spec)
+        ds.families.append(family)
+        ds.leads.append(lead)
+        ds.app_forms.append(app_form)
+        ds.enrollment_forms.append(enrollment)
+        ds.community_profiles.append(profile)
+    # The brief's remaining "deliberate edge cases" (dedup + data-quality), appended
+    # AFTER the curated 12 so those rows stay byte-identical (the edge families draw
+    # from the same continuing demo stream; the student pass below covers them too).
+    for edge in _DEMO_EDGE_HOUSEHOLDS:
+        family, lead, app_form, enrollment, profile = _build_edge_household(rng, spec=edge)
         ds.families.append(family)
         ds.leads.append(lead)
         ds.app_forms.append(app_form)

@@ -95,8 +95,9 @@ def test_get_unknown_family_returns_404() -> None:
 def test_pipeline_carries_per_child_grain() -> None:
     """GET /pipeline ALSO returns the per-CHILD grain (A-24): each child placed in
     its own derived stage, so a multi-child household spans every stage its children
-    occupy. Driven over the 12-household demo cohort (13 children — only the Rivera
-    household has 2, at DIFFERENT derived stages)."""
+    occupy. Driven over the 18-household demo cohort (19 children — only the Rivera
+    household has 2, at DIFFERENT derived stages; the 6 edge-case households are each
+    single-child)."""
     from app.api import deps
     from app.data.models import Stage
     from app.data.repository import InMemoryFamilyRepository, student_stage_counts
@@ -106,13 +107,13 @@ def test_pipeline_carries_per_child_grain() -> None:
     app.dependency_overrides[deps.get_repository] = lambda: repo
     try:
         body = client.get("/pipeline").json()
-        # Household grain unchanged: 12 households.
-        assert body["total"] == 12
-        # Per-child grain present and a partition of all 13 children.
+        # Household grain: 18 households (12 curated + 6 edge cases).
+        assert body["total"] == 18
+        # Per-child grain present and a partition of all 19 children.
         assert set(_STAGE_KEYS) <= set(body["student_counts"])
-        assert body["total_students"] == 13
-        assert sum(body["student_counts"][s] for s in _STAGE_KEYS) == 13
-        # A DIFFERENT grain than households (13 children ≠ 12 households).
+        assert body["total_students"] == 19
+        assert sum(body["student_counts"][s] for s in _STAGE_KEYS) == 19
+        # A DIFFERENT grain than households (19 children ≠ 18 households).
         assert body["total_students"] != body["total"]
         # Matches the deterministic per-child derivation over the same cohort.
         expected = student_stage_counts(repo.list_students(), deps._params)

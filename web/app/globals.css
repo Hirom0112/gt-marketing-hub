@@ -1,0 +1,123 @@
+/* GT Marketing Hub — GT PULSE brand tokens (blue editorial, ported from the
+   cockpit's theme.css). Blue carries the chrome; gold is reserved for
+   funding/simulated; signal red = needs-attention; flow green = healthy.
+   Token NAMES are kept stable so every component re-skins from here. */
+
+:root {
+  /* neutral editorial base (cool, blue-tinted — never pure #fff/#000) */
+  --paper: oklch(0.955 0.008 252);
+  --card: oklch(0.995 0.004 252);
+  --card-2: oklch(0.975 0.006 252);
+  --ink: oklch(0.26 0.035 256);
+  --ink-2: oklch(0.40 0.035 256);
+  --ink-3: #5f6f6c;
+  --line: oklch(0.88 0.013 252);
+  --line-2: #eaeff2;
+  --hatch: #c2cac4;
+
+  /* BRAND BLUE — the carrying color (was the design's gold; now blue everywhere) */
+  --gold: oklch(0.44 0.12 256);
+  --gold-soft: oklch(0.93 0.03 256);
+  --brand: oklch(0.44 0.12 256);
+
+  /* signal · needs-attention / blocked */
+  --signal: #b5331c;
+  --signal-soft: #fbeae2;
+  --bad: #b5331c;
+
+  /* flow · healthy / synced / on-track */
+  --ok: oklch(0.5 0.1 150);
+  --ok-soft: oklch(0.95 0.025 150);
+
+  /* gate · funding / simulated (amber — the ONLY gold left) */
+  --warn: #a35b07;
+  --warn-soft: #fbf0e0;
+
+  --broken: #98a2a0;
+  --accent-soft: oklch(0.93 0.02 252);
+
+  /* deep-blue chrome — the GT Pulse nav rail */
+  --chrome: oklch(0.30 0.07 256);
+  --chrome-edge: oklch(0.37 0.08 256);
+  --chrome-fg: oklch(0.74 0.04 256);
+  --chrome-fg-active: oklch(0.985 0.01 256);
+  --chrome-hover: oklch(0.36 0.08 256);
+  --chrome-active: oklch(0.44 0.12 256);
+  --chrome-accent: oklch(0.80 0.14 236);
+
+  /* text on a saturated fill (replaces every #fff — tinted, never pure white) */
+  --on-brand: oklch(0.985 0.01 256);
+  --on-signal: oklch(0.98 0.012 32);
+
+  /* motion — ease-out-quint, the single easing home */
+  --ease: cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+[data-theme="dark"] {
+  --on-brand: oklch(0.18 0.03 256);
+  --on-signal: oklch(0.98 0.012 32);
+  --paper: oklch(0.20 0.03 256);
+  --card: oklch(0.25 0.035 256);
+  --card-2: oklch(0.29 0.04 256);
+  --ink: oklch(0.95 0.01 252);
+  --ink-2: oklch(0.78 0.03 252);
+  --ink-3: oklch(0.62 0.03 252);
+  --line: oklch(0.36 0.04 256);
+  --line-2: oklch(0.33 0.04 256);
+  --hatch: oklch(0.40 0.05 256);
+  --gold: oklch(0.70 0.13 248);
+  --gold-soft: oklch(0.32 0.06 256);
+  --brand: oklch(0.70 0.13 248);
+  --signal: #e8694a; --signal-soft: oklch(0.30 0.06 32);
+  --bad: #e8694a;
+  --ok: oklch(0.72 0.12 150); --ok-soft: oklch(0.30 0.05 150);
+  --warn: oklch(0.74 0.11 70); --warn-soft: oklch(0.31 0.05 70);
+  --broken: oklch(0.5 0.03 256);
+  --accent-soft: oklch(0.30 0.04 256);
+  --chrome: oklch(0.24 0.045 256);
+  --chrome-edge: oklch(0.33 0.05 256);
+  --chrome-fg: oklch(0.72 0.04 256);
+  --chrome-fg-active: oklch(0.985 0.01 256);
+  --chrome-hover: oklch(0.30 0.05 256);
+  --chrome-active: oklch(0.50 0.12 256);
+  --chrome-accent: oklch(0.82 0.13 236);
+}
+
+* { box-sizing: border-box; }
+html, body { margin: 0; padding: 0; }
+body {
+  font-family: 'Geist', system-ui, sans-serif;
+  background: var(--paper);
+  color: var(--ink);
+  font-size: 13px;
+  line-height: 1.4;
+  /* tabular figures app-wide — a data console aligns its numerals */
+  font-variant-numeric: tabular-nums;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
+}
+
+::selection { background: var(--gold-soft); color: var(--ink); }
+
+::-webkit-scrollbar { width: 9px; height: 9px; }
+::-webkit-scrollbar-thumb { background: var(--line); border-radius: 6px; }
+::-webkit-scrollbar-thumb:hover { background: var(--hatch); }
+::-webkit-scrollbar-track { background: transparent; }
+
+@keyframes blink { 0%, 55% { opacity: 1; } 56%, 100% { opacity: .18; } }
+@keyframes slidein { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+.scr { animation: slidein .24s var(--ease); }
+.navbtn { transition: background .15s var(--ease), color .15s var(--ease); }
+.navbtn:hover { background: var(--chrome-hover) !important; }
+
+a { color: inherit; text-decoration: none; }
+button { font-family: inherit; transition: background .15s var(--ease), border-color .15s var(--ease), color .15s var(--ease); }
+
+/* keyboard focus — a visible ring on the brand, never removed */
+:focus-visible { outline: 2px solid var(--brand); outline-offset: 2px; border-radius: 2px; }
+:focus:not(:focus-visible) { outline: none; }
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: .01ms !important; transition-duration: .01ms !important; }
+}

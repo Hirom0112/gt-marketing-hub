@@ -28,6 +28,7 @@ from app.adapters.media.base import MediaGenAdapter
 from app.adapters.open_data.base import OpenDataAdapter
 from app.adapters.payments.base import PaymentsAdapter
 from app.adapters.sentiment.base import SentimentAdapter
+from app.adapters.sheets.base import SheetsAdapter
 from app.adapters.social.base import SocialAdapter
 from app.ai.client import AnthropicLLMClient, LLMClient
 from app.ai.schemas.brand import BrandRule
@@ -716,6 +717,17 @@ def get_payments_adapter_dep() -> PaymentsAdapter:
     a `SimulatedPaymentsAdapter` constructed with a known webhook secret.
     """
     return registry.get_payments_adapter()
+
+
+def get_sheets_adapter_dep() -> SheetsAdapter:
+    """FastAPI dependency yielding the Google-Sheets content adapter (S-Sheets; INV-8/9).
+
+    Delegates to the §7 registry (v1 ⇒ a seeded in-memory adapter; live ⇒ the Sheets
+    v4 adapter behind the per-run call cap + kill switch, or its fail-loud misconfig).
+    Mirrors :func:`get_payments_adapter_dep`. Tests override this with a
+    `SimulatedSheetsAdapter` so no live Google call ever runs under test.
+    """
+    return registry.get_sheets_adapter()
 
 
 def get_open_data_adapter_dep() -> OpenDataAdapter:

@@ -39,11 +39,21 @@ from app.adapters.payments.live import LivePaymentsAdapter
 from app.adapters.payments.simulated import SimulatedPaymentsAdapter
 from app.adapters.sentiment.base import SentimentAdapter
 from app.adapters.sentiment.placeholder import PlaceholderSentimentAdapter
+from app.adapters.sheets.base import SheetsAdapter
+from app.adapters.sheets.live import LiveSheetsAdapter
+from app.adapters.sheets.simulated import SimulatedSheetsAdapter
 from app.adapters.sis.base import EnrollmentSystemAdapter
 from app.adapters.social.base import SocialAdapter
 from app.adapters.social.simulated import SimulatedSocialAdapter
 from app.core.params import AwardAmounts, Crm, Params, load_params
-from app.core.settings import CrmMode, OpenDataMode, Settings, StripeMode, get_settings
+from app.core.settings import (
+    CrmMode,
+    OpenDataMode,
+    Settings,
+    SheetsMode,
+    StripeMode,
+    get_settings,
+)
 
 # Default on-disk home for the persistent brand-memory store when no override is
 # supplied (ASSUMPTIONS A-11). The path is a config seam (env > default), not a
@@ -361,6 +371,114 @@ def get_open_data_adapter() -> OpenDataAdapter:
         api_key=api_key,
         datasets=open_data_params.datasets,
         per_run_query_cap=cap,
+    )
+
+
+# Repo root, used to resolve a relative GSHEETS_SA_KEY_PATH (e.g. the default
+# "backend/.secrets/gsheets-sa.json") regardless of the process cwd. Same anchor as
+# _EXAMPLE_PARAMS: registry.py → parents[3] is the repo root.
+_REPO_ROOT = Path(__file__).resolve().parents[3]
+
+
+def _resolve_sheets_key_path(raw: str) -> Path:
+    """Resolve the service-account key path (relative ⇒ repo-root-anchored)."""
+    path = Path(raw).expanduser()
+    if not path.is_absolute():
+        path = _REPO_ROOT / path
+    return path
+
+
+def effective_sheets_mode(settings: Settings) -> SheetsMode:
+    """The Sheets mode the registry would ACTUALLY select for ``settings`` (pure).
+
+    The canonical home for the S-Sheets/INV-8 precedence, mirroring
+    :func:`effective_payments_mode` so a read-only status surface (the Content
+    module's sync pill) can REPORT the effective seam state without building a live
+    Sheets service or touching the network. :func:`get_sheets_adapter` consumes
+    this; nothing here does I/O.
+
+    - ``SHEETS_MODE=simulate`` ⇒ ``"simulate"`` (the v1 default in-memory rows; INV-9).
+    - ``SHEETS_MODE=live`` + sheet id + **kill switch on** ⇒ ``"simulate"`` — INV-8
+      degrades to the in-memory adapter; never a live call when the kill switch is on.
+    - ``SHEETS_MODE=live`` + sheet id + no kill switch ⇒ ``"live"``.
+    - ``SHEETS_MODE=live`` + **no sheet id** ⇒ ``"live"`` — a live INTENT that is
+      misconfigured; :func:`get_sheets_adapter` fails loud (``RuntimeError``) rather
+      than silently degrade (INV-9). Reported as ``"live"`` so the misconfig stays
+      visible, not hidden behind a false ``"simulate"``.
+    """
+    if settings.sheets_mode == "simulate":
+        return "simulate"
+    # SHEETS_MODE == "live": the kill switch forces simulate even with a sheet id
+    # (INV-8). A missing sheet id / unreadable key file is a live INTENT that fails
+    # loud at construction (get_sheets_adapter) — reported here as the "live" intent.
+    if settings.gsheets_sheet_id is not None and settings.sheets_kill_switch:
+        return "simulate"
+    return "live"
+
+
+def get_sheets_adapter() -> SheetsAdapter:
+    """Return the Sheets adapter impl for the current ``SHEETS_MODE`` (S-Sheets; INV-8/9).
+
+    The Content-tracker boundary keys on its own ``SHEETS_MODE`` seam, independent of
+    the v1 ``SEND_MODE`` lock (mirroring ``CRM_MODE`` / ``STRIPE_MODE`` /
+    ``OPEN_DATA_MODE``):
+
+    - ``simulate`` (default) ⇒ a seeded :class:`SimulatedSheetsAdapter` (in-memory
+      deterministic rows, no network; INV-9).
+    - ``live`` + sheet id + readable key file + **kill switch set** ⇒ degrade to the
+      seeded :class:`SimulatedSheetsAdapter` (INV-8) — never a live call when the
+      kill switch is on.
+    - ``live`` + sheet id + readable key file + no kill switch ⇒ a
+      :class:`LiveSheetsAdapter` over a Google Sheets v4 service built from the
+      service-account key, behind the per-run call cap.
+    - ``live`` + **no sheet id OR no readable key file** ⇒ ``RuntimeError`` — fail
+      loud on misconfig rather than silently degrading (the CRM/Stripe precedent).
+
+    The Google client libs are imported LAZILY here (only on the live path) so
+    importing the registry never requires ``google-*`` to be installed, and the live
+    adapter stays unit-testable with an injected fake service (INV-9).
+
+    Raises:
+        RuntimeError: when ``SHEETS_MODE=live`` but the sheet id is unset or the
+            service-account key file is missing/unreadable.
+    """
+    settings = get_settings()
+
+    # SHEETS_MODE == "live" + misconfig ⇒ fail loud (INV-9). effective_sheets_mode
+    # reports the live INTENT; the construction-time RuntimeError lives here.
+    if settings.sheets_mode == "live":
+        key_path = _resolve_sheets_key_path(settings.gsheets_sa_key_path)
+        if settings.gsheets_sheet_id is None or not key_path.is_file():
+            raise RuntimeError(
+                "SHEETS_MODE='live' requires GSHEETS_SHEET_ID and a readable "
+                "GSHEETS_SA_KEY_PATH (the service-account JSON). One is missing — "
+                "fail loud on misconfig rather than silently degrade to simulated "
+                "(INV-9). Set both, or use SHEETS_MODE='simulate'."
+            )
+
+    # Single canonical precedence: simulate (default), or live degraded to simulate
+    # by the kill switch (INV-8).
+    if effective_sheets_mode(settings) == "simulate":
+        return SimulatedSheetsAdapter.seeded()
+
+    # A live result implies a sheet id + readable key (the misconfig case raised
+    # above). Build the Sheets v4 service from the service-account key (lazy import).
+    sheet_id = settings.gsheets_sheet_id
+    if sheet_id is None:  # pragma: no cover — unreachable past the fail-loud guard
+        raise RuntimeError("SHEETS_MODE='live' requires GSHEETS_SHEET_ID — none is configured.")
+    from google.oauth2 import service_account  # noqa: PLC0415 — lazy: live path only
+    from googleapiclient.discovery import build  # type: ignore[import-untyped]  # noqa: PLC0415
+
+    key_path = _resolve_sheets_key_path(settings.gsheets_sa_key_path)
+    creds = service_account.Credentials.from_service_account_file(  # type: ignore[no-untyped-call]
+        str(key_path), scopes=["https://www.googleapis.com/auth/spreadsheets"]
+    )
+    service = build("sheets", "v4", credentials=creds, cache_discovery=False)
+    return LiveSheetsAdapter(
+        service=service,
+        spreadsheet_id=sheet_id,
+        tab=settings.gsheets_tab,
+        calls_per_run_cap=settings.gsheets_calls_per_run_cap,
     )
 
 

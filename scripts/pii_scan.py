@@ -61,6 +61,11 @@ SKIP_DIRS = {
     # generated config + local seed, gitignored, never product source. Holds the
     # CLI's own placeholder defaults (e.g. a commented `admin@email.com`), not PII.
     "supabase",
+    # Gitignored credential home (`.gitignore`: `.secrets/`) — the LEGITIMATE place
+    # for machine-local secrets like the Google service-account key (which carries a
+    # service-account email). Same exemption as the gitignored `.env*` secret files
+    # below: these can never be committed, so scanning them only false-positives.
+    ".secrets",
 }
 
 # Lockfiles and obviously-binary extensions are never PII fixtures.

@@ -155,3 +155,76 @@ def test_webhook_forged_signature_returns_400(fx: _Fixtures) -> None:
     # Nothing was recorded — a forged event never reaches the ledgers.
     assert fx.store.list_payments(_PROGRAM) == []
     assert fx.store.is_event_seen(_PROGRAM, "evt_forged") is False
+
+
+def _failed_event(family_id: str, *, event_id: str = "evt_failed") -> bytes:
+    """A ``payment_intent.payment_failed`` event — NOT a configured fulfill type."""
+    event: dict[str, Any] = {
+        "id": event_id,
+        "type": "payment_intent.payment_failed",
+        "created": int(time.time()),
+        "livemode": False,
+        "data": {
+            "object": {
+                "id": "pi_failed_123",
+                "amount": 261850,
+                "currency": "usd",
+                "status": "requires_payment_method",
+                "metadata": {"gt_family_id": family_id},
+            }
+        },
+    }
+    return json.dumps(event).encode("utf-8")
+
+
+def test_webhook_failed_payment_is_acked_not_fulfilled(fx: _Fixtures) -> None:
+    """A non-fulfill event type (``payment_intent.payment_failed``) ⇒ ACK, not fulfill.
+
+    The brief's "failed payment" edge case: the event is verified and recorded for the
+    dedupe ledger + audit, but NO payment row is written and funding never advances.
+    """
+    raw = _failed_event(str(fx.family.family_id))
+    resp = client.post(
+        "/payments/webhook",
+        content=raw,
+        headers={"stripe-signature": _sign(raw), "content-type": "application/json"},
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["kind"] == "ack"
+    # No fulfillment: the money ledger stays empty, but the event id is recorded so a
+    # redelivery dedupes.
+    assert fx.store.list_payments(_PROGRAM) == []
+    assert fx.store.is_event_seen(_PROGRAM, "evt_failed") is True
+
+
+def test_webhook_illegal_funding_advance_fails_closed(fx: _Fixtures) -> None:
+    """A fulfill for a family NOT at the legal predecessor: payment stands, no advance.
+
+    The brief's "late/illegal" edge case. The family sits at ``APPLIED`` — not the one
+    legal predecessor of ``FIRST_INSTALLMENT_RECEIVED`` — so the §5.4 gate refuses the
+    advance. Fail closed: the payment AMOUNT is still recorded (a fact), the webhook
+    returns 200 (never 500), and the audit carries a ``funding_anomaly`` note (INV-10).
+    """
+    early = _family_in_state(FundingState.APPLIED, FundingType.TEFA_STANDARD)
+    early_repo = InMemoryFamilyRepository(SyntheticDataset(families=[early]))
+    app.dependency_overrides[deps.get_repository] = lambda: early_repo
+
+    raw = _checkout_event(str(early.family_id), event_id="evt_illegal")
+    resp = client.post(
+        "/payments/webhook",
+        content=raw,
+        headers={"stripe-signature": _sign(raw), "content-type": "application/json"},
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["kind"] == "fulfill"
+    # The payment amount is recorded as a fact even though the state machine declined.
+    assert len(fx.store.list_payments(_PROGRAM)) == 1
+    # The funding state never advanced past APPLIED (no illegal write).
+    assert early_repo.get_family(early.family_id).family.funding_state is FundingState.APPLIED
+    # The audit carries the anomaly (fail-closed, surfaced — not swallowed).
+    anomalies = [
+        p.payload.get("funding_anomaly")
+        for p in fx.log.list_proposals()
+        if p.payload.get("funding_anomaly")
+    ]
+    assert anomalies and "rejected" in anomalies[0]

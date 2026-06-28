@@ -53,6 +53,15 @@ StripeMode = Literal["simulate", "live"]
 # CRM_MODE/STRIPE_MODE. `live` + kill switch (or cap-exhausted) degrades to seeded
 # (INV-8); `live` + NO key fails loud at the registry (INV-9 misconfig).
 OpenDataMode = Literal["simulate", "live"]
+# SHEETS_MODE is the Google-Sheets content-tracker seam (S-Sheets, INV-9): it selects
+# the SheetsAdapter impl the Content module reads/writes. v1 default `simulate` ⇒ the
+# SimulatedSheetsAdapter (in-memory deterministic rows, no network, no key); `live` ⇒
+# the LiveSheetsAdapter (real Sheets v4 over google-api-python-client behind the INV-8
+# call cap + kill switch). Separate from the `send_mode` lock — keys on its own var,
+# mirroring CRM_MODE/STRIPE_MODE/OPEN_DATA_MODE. `live` + kill switch degrades to
+# simulate (INV-8); `live` + NO sheet id / NO readable key file fails loud at the
+# registry (INV-9 misconfig).
+SheetsMode = Literal["simulate", "live"]
 # AUTH_MODE is the demo-auth bridge seam (B1 task 5a, INV-9-style): it selects how
 # the cockpit obtains a verified principal. v1 default `demo` — there is no real
 # Supabase login in v1, so the `POST /auth/demo-token` endpoint mints a SIGNED seat
@@ -212,6 +221,22 @@ class Settings(BaseModel):
     open_data_kill_switch: bool = False
     open_data_per_run_query_cap: int | None = None
 
+    # Google-Sheets content-tracker seam (§5.4; S-Sheets, INV-8/INV-9). `sheets_mode`
+    # flips to `live` independently of the send-mode lock (mirrors CRM_MODE/STRIPE_MODE)
+    # so the Content module can read/write the Content Owner's real spreadsheet behind
+    # the per-run call cap + kill switch. `gsheets_sheet_id` defaults to ``None`` —
+    # absence is first-class: with no sheet id the Sheets edge can only run `simulate`
+    # (the registry fails loud on `live` w/o a sheet id OR a readable key file, INV-9).
+    # `gsheets_sa_key_path` is the service-account JSON path (a machine-local secret,
+    # git-ignored, NEVER committed); `gsheets_tab` is the worksheet name.
+    # `sheets_kill_switch` disables all live Sheets calls and degrades to simulate (INV-8).
+    sheets_mode: SheetsMode = "simulate"
+    gsheets_sa_key_path: str = "backend/.secrets/gsheets-sa.json"
+    gsheets_sheet_id: str | None = None
+    gsheets_tab: str = "Sheet1"
+    gsheets_calls_per_run_cap: int = 50
+    sheets_kill_switch: bool = False
+
     # Browser origins allowed to call the API (CORS; §5.1). The React app runs on
     # a separate origin (Vite dev server / built host) so it must be allow-listed
     # explicitly — never `*`, which would let any site call the API. Defaults to
@@ -254,6 +279,7 @@ class Settings(BaseModel):
         sis_mode = os.environ.get("SIS_MODE", "simulate").strip() or "simulate"
         stripe_mode = os.environ.get("STRIPE_MODE", "simulate").strip() or "simulate"
         open_data_mode = os.environ.get("OPEN_DATA_MODE", "simulate").strip() or "simulate"
+        sheets_mode = os.environ.get("SHEETS_MODE", "simulate").strip() or "simulate"
         auth_mode = os.environ.get("AUTH_MODE", "demo").strip() or "demo"
 
         # COCKPIT_REPO: lower-cased; empty / unset / a `<…>` sentinel ⇒ `auto` (the
@@ -329,6 +355,23 @@ class Settings(BaseModel):
             else None
         )
 
+        # GSHEETS_SHEET_ID: the target spreadsheet id; a placeholder/sentinel (the
+        # .env.example angle-bracket form or an empty string) counts as "unset" ⇒ None
+        # ⇒ the Sheets edge can only run `simulate` (same first-class-absence posture
+        # as the HubSpot token / Stripe secret). The SA key path + tab fall back to
+        # their §5 defaults when unset/blank (a path is never a secret value itself).
+        gsheets_sheet_id = os.environ.get("GSHEETS_SHEET_ID")
+        if gsheets_sheet_id is not None and (
+            gsheets_sheet_id.strip() == "" or gsheets_sheet_id.strip().startswith("<")
+        ):
+            gsheets_sheet_id = None
+        gsheets_sa_key_path = (os.environ.get("GSHEETS_SA_KEY_PATH", "") or "").strip()
+        if not gsheets_sa_key_path or gsheets_sa_key_path.startswith("<"):
+            gsheets_sa_key_path = "backend/.secrets/gsheets-sa.json"
+        gsheets_tab = (os.environ.get("GSHEETS_TAB", "") or "").strip()
+        if not gsheets_tab or gsheets_tab.startswith("<"):
+            gsheets_tab = "Sheet1"
+
         # The posted-catalog root: empty / unset / a `<…>` sentinel ⇒ None (fall back to
         # the library gallery + skip the static media mount). Same posture as the secrets.
         catalog_raw = os.environ.get("GT_POSTED_CATALOG_ROOT")
@@ -366,6 +409,12 @@ class Settings(BaseModel):
             open_data_api_key=open_data_key,
             open_data_kill_switch=_env_bool("OPEN_DATA_KILL_SWITCH", False),
             open_data_per_run_query_cap=open_data_per_run_query_cap,
+            sheets_mode=sheets_mode,  # type: ignore[arg-type]
+            gsheets_sa_key_path=gsheets_sa_key_path,
+            gsheets_sheet_id=gsheets_sheet_id,
+            gsheets_tab=gsheets_tab,
+            gsheets_calls_per_run_cap=_env_int("GSHEETS_CALLS_PER_RUN_CAP", 50),
+            sheets_kill_switch=_env_bool("SHEETS_KILL_SWITCH", False),
             cockpit_repo=cockpit_repo,  # type: ignore[arg-type]
             gt_program_id=gt_program_id,
             supabase_jwt_secret=jwt_secret,

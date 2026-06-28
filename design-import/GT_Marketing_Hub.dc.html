@@ -1,0 +1,889 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Archivo:wght@500;600;700;800&family=Public+Sans:ital,wght@0,400;0,500;0,600;0,700;1,400&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  *{box-sizing:border-box;}
+  html,body{margin:0;padding:0;}
+  body{font-family:'Public Sans',system-ui,sans-serif;}
+  ::-webkit-scrollbar{width:9px;height:9px;}
+  ::-webkit-scrollbar-thumb{background:var(--line-2);}
+  ::-webkit-scrollbar-track{background:transparent;}
+  :root{
+    --paper:#efe9dc; --card:#f7f3ea; --card-2:#ece5d5; --ink:#1b1916; --ink-2:#534d44;
+    --ink-3:#8a8273; --line:#ddd5c4; --line-2:#cabfa8; --signal:#cf3f22; --signal-soft:#f6e3dc;
+    --gold:#b8842a; --gold-soft:#f1e6cf; --ok:#3f7d52; --ok-soft:#e0ecdf; --warn:#b5821f;
+    --warn-soft:#f2e8cf; --bad:#cf3f22; --broken:#a99f8b; --accent-soft:#eae2cf; --hatch:#bcb39d;
+  }
+  [data-theme="dark"]{
+    --paper:#0e191e; --card:#152329; --card-2:#1b2b32; --ink:#eef0ea; --ink-2:#a7b2ad; --ink-3:#6f7d79;
+    --line:#243740; --line-2:#314751; --signal:#e8694a; --signal-soft:#33201c; --gold:#e0a24a;
+    --gold-soft:#33290f; --ok:#5fb389; --ok-soft:#13251f; --warn:#d6a23f; --warn-soft:#312712;
+    --bad:#e8694a; --broken:#4a5a5f; --accent-soft:#1b2a30; --hatch:#2c3d44;
+  }
+  @keyframes blink{0%,55%{opacity:1}56%,100%{opacity:.18}}
+  @keyframes slidein{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
+  .scr{animation:slidein .22s ease;}
+  .navbtn:hover{background:var(--accent-soft)!important;}
+</style>
+</helmet>
+<div data-theme="{{ theme }}" style="display:flex;height:100vh;width:100%;overflow:hidden;background:var(--paper);color:var(--ink);font-size:13px;line-height:1.4;">
+
+  <!-- ============ SIDEBAR / MASTHEAD ============ -->
+  <aside style="width:236px;min-width:236px;height:100%;display:flex;flex-direction:column;background:var(--card);border-right:1px solid var(--line-2);">
+    <div style="padding:16px 16px 13px;border-bottom:2px solid var(--ink);">
+      <div style="display:flex;align-items:baseline;gap:7px;">
+        <span style="font-family:'Archivo';font-weight:800;font-size:21px;letter-spacing:-.5px;color:var(--ink);">GT</span>
+        <span style="width:6px;height:6px;background:var(--signal);display:inline-block;margin-bottom:2px;"></span>
+        <span style="font-family:'Archivo';font-weight:600;font-size:12.5px;letter-spacing:.5px;color:var(--ink-2);">MARKETING HUB</span>
+      </div>
+      <div style="font-family:'IBM Plex Mono';font-size:9px;letter-spacing:.7px;color:var(--ink-3);margin-top:5px;text-transform:uppercase;">GT Anywhere · Operations Almanac</div>
+    </div>
+
+    <nav style="flex:1;overflow-y:auto;padding:8px 0;">
+      <sc-for list="{{ navGroups }}" as="g" hint-placeholder-count="4">
+        <div style="font-family:'IBM Plex Mono';font-size:9px;letter-spacing:1.2px;color:var(--ink-3);padding:11px 16px 5px;font-weight:600;">{{ g.group }}</div>
+        <sc-for list="{{ g.items }}" as="it" hint-placeholder-count="4">
+          <button class="navbtn" onClick="{{ it.go }}" style="width:100%;display:flex;align-items:center;gap:10px;border:none;cursor:pointer;text-align:left;padding:6px 14px;font-family:'Public Sans';font-size:12.5px;color:{{ it.color }};background:{{ it.bg }};border-left:2px solid {{ it.bar }};font-weight:{{ it.weight }};">
+            <span style="font-family:'IBM Plex Mono';font-size:10px;color:{{ it.idxColor }};min-width:16px;">{{ it.idx }}</span>
+            <span style="flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">{{ it.label }}</span>
+            <sc-if value="{{ it.tag }}" hint-placeholder-val="{{ false }}"><span style="font-family:'IBM Plex Mono';font-size:8px;letter-spacing:.5px;padding:1px 4px;border-radius:2px;background:{{ it.tagBg }};color:{{ it.tagColor }};font-weight:600;">{{ it.tag }}</span></sc-if>
+          </button>
+        </sc-for>
+      </sc-for>
+    </nav>
+
+    <div style="border-top:1px solid var(--line);padding:11px 14px;">
+      <div style="font-family:'IBM Plex Mono';font-size:8.5px;letter-spacing:.8px;color:var(--ink-3);margin-bottom:6px;">VIEWING AS</div>
+      <div style="display:flex;gap:3px;margin-bottom:10px;">
+        <sc-for list="{{ roleBtns }}" as="r" hint-placeholder-count="3">
+          <button onClick="{{ r.go }}" style="flex:1;cursor:pointer;padding:5px 2px;border:1px solid {{ r.border }};background:{{ r.bg }};color:{{ r.color }};font-family:'IBM Plex Mono';font-size:9px;font-weight:600;letter-spacing:.2px;">{{ r.label }}</button>
+        </sc-for>
+      </div>
+      <button onClick="{{ toggleTheme }}" style="width:100%;cursor:pointer;display:flex;align-items:center;justify-content:space-between;padding:6px 9px;border:1px solid var(--line-2);background:var(--card-2);color:var(--ink-2);font-family:'IBM Plex Mono';font-size:10px;">
+        <span>{{ themeLabel }}</span><span style="color:var(--ink-3);">⌥T</span>
+      </button>
+    </div>
+  </aside>
+
+  <!-- ============ MAIN ============ -->
+  <main style="flex:1;height:100%;display:flex;flex-direction:column;overflow:hidden;">
+
+    <!-- TOPBAR -->
+    <header style="display:flex;align-items:stretch;border-bottom:1px solid var(--line-2);background:var(--card);min-height:58px;">
+      <div style="flex:1;padding:9px 22px;display:flex;flex-direction:column;justify-content:center;border-right:1px solid var(--line);">
+        <div style="display:flex;align-items:center;gap:10px;">
+          <h1 style="margin:0;font-family:'Archivo';font-weight:700;font-size:17px;letter-spacing:-.2px;color:var(--ink);">{{ headerTitle }}</h1>
+          <sc-if value="{{ readonlyChip }}" hint-placeholder-val="{{ false }}"><span style="font-family:'IBM Plex Mono';font-size:8.5px;letter-spacing:.5px;padding:2px 6px;border:1px solid var(--line-2);color:var(--ink-3);">{{ readonlyChip }}</span></sc-if>
+        </div>
+        <div style="font-family:'IBM Plex Mono';font-size:9.5px;letter-spacing:.3px;color:var(--ink-3);margin-top:3px;">⌖ {{ headerSource }}</div>
+      </div>
+
+      <div style="padding:8px 20px;display:flex;flex-direction:column;justify-content:center;align-items:flex-end;border-right:1px solid var(--line);min-width:236px;">
+        <div style="font-family:'IBM Plex Mono';font-size:8.5px;letter-spacing:.7px;color:var(--signal);font-weight:600;display:flex;align-items:center;gap:5px;"><span style="width:6px;height:6px;border-radius:50%;background:var(--signal);animation:blink 1.6s infinite;"></span>FALL ENROLLMENT CUTOFF · AUG 17</div>
+        <div style="font-family:'IBM Plex Mono';font-weight:600;font-size:19px;color:var(--ink);letter-spacing:.5px;margin-top:2px;">
+          {{ dd }}<span style="font-size:10px;color:var(--ink-3);">d</span> {{ hh }}<span style="font-size:10px;color:var(--ink-3);">h</span> {{ mm }}<span style="font-size:10px;color:var(--ink-3);">m</span> {{ ss }}<span style="font-size:10px;color:var(--ink-3);">s</span>
+        </div>
+      </div>
+
+      <div style="padding:8px 18px;display:flex;flex-direction:column;justify-content:center;min-width:172px;">
+        <div style="font-family:'IBM Plex Mono';font-size:8.5px;letter-spacing:.5px;color:var(--ink-3);">WEEK OF JUN 22 · SPRINT P2/5</div>
+        <div style="display:flex;align-items:center;gap:7px;margin-top:3px;">
+          <span style="width:24px;height:24px;border-radius:50%;background:var(--gold);color:#fff;font-family:'Archivo';font-weight:700;font-size:10px;display:flex;align-items:center;justify-content:center;">{{ userInitials }}</span>
+          <div style="line-height:1.15;"><div style="font-size:11.5px;font-weight:600;color:var(--ink);">{{ userName }}</div><div style="font-family:'IBM Plex Mono';font-size:8px;color:var(--ink-3);">{{ userRole }}</div></div>
+        </div>
+      </div>
+    </header>
+
+    <!-- CONFIDENCE BANNER -->
+    <sc-if value="{{ confidence }}" hint-placeholder-val="{{ true }}">
+      <div onClick="{{ goCrm }}" style="cursor:pointer;display:flex;align-items:center;gap:12px;padding:7px 22px;background:var(--signal-soft);border-bottom:1px solid var(--signal);">
+        <span style="font-family:'IBM Plex Mono';font-size:9px;font-weight:600;letter-spacing:.5px;padding:2px 7px;background:var(--signal);color:#fff;white-space:nowrap;">⚠ DATA CONFIDENCE</span>
+        <span style="font-size:12px;color:var(--ink);flex:1;">Supabase ⇄ HubSpot sync parity <b style="font-family:'IBM Plex Mono';">96.2%</b> — <b>income</b>, <b>source</b> &amp; <b>TEFA</b> fields below threshold. Funnel &amp; income read from <b>Supabase app_form</b> (source of truth). UTM attribution remains broken.</span>
+        <span style="font-family:'IBM Plex Mono';font-size:10px;color:var(--signal);font-weight:600;white-space:nowrap;">Inspect in CRM Ops →</span>
+      </div>
+    </sc-if>
+
+    <!-- SCROLL AREA -->
+    <div style="flex:1;overflow-y:auto;">
+
+      <!-- ============ HOME / EXECUTIVE COMMAND ============ -->
+      <sc-if value="{{ isHome }}" hint-placeholder-val="{{ true }}">
+      <section class="scr" data-screen-label="Home" style="padding:20px 22px 40px;">
+        <div style="display:flex;align-items:flex-end;justify-content:space-between;margin-bottom:14px;border-bottom:1px solid var(--line);padding-bottom:10px;">
+          <div>
+            <div style="font-family:'Archivo';font-weight:700;font-size:15px;color:var(--ink);">{{ homeGreeting }}</div>
+            <div style="font-family:'IBM Plex Mono';font-size:10px;color:var(--ink-3);margin-top:2px;">Personal dashboard · <b style="color:var(--ink-2);">12 of 32</b> widgets placed · default starter pack · aggregates live from all 12 modules</div>
+          </div>
+          <div style="display:flex;gap:7px;">
+            <span style="font-family:'IBM Plex Mono';font-size:9px;padding:4px 9px;border:1px solid var(--line-2);color:var(--ink-3);">⊞ STARTER PACK</span>
+            <span style="font-family:'IBM Plex Mono';font-size:9px;padding:4px 9px;border:1px solid var(--ink);background:var(--ink);color:var(--paper);cursor:pointer;">+ ADD WIDGET ▾</span>
+          </div>
+        </div>
+
+        <div style="display:grid;grid-template-columns:repeat(12,1fr);gap:12px;">
+
+          <!-- countdown -->
+          <div style="grid-column:span 4;border:1px solid var(--line-2);background:linear-gradient(180deg,var(--signal-soft),var(--card));padding:14px;">
+            <div style="display:flex;justify-content:space-between;align-items:center;"><span style="font-family:'IBM Plex Mono';font-size:9px;letter-spacing:.5px;color:var(--signal);font-weight:600;">⏱ DAYS TO AUG 17 CUTOFF</span><span style="font-family:'IBM Plex Mono';font-size:8px;color:var(--ink-3);">src · Config</span></div>
+            <div style="font-family:'IBM Plex Mono';font-weight:600;font-size:30px;color:var(--ink);margin-top:8px;letter-spacing:.5px;">{{ dd }}<span style="font-size:13px;color:var(--ink-3);">d</span> {{ hh }}<span style="font-size:13px;color:var(--ink-3);">h</span></div>
+            <div style="font-size:11px;color:var(--ink-2);margin-top:4px;">Sprint phase <b>2 of 5</b> · Launch Grassroots</div>
+            <div style="display:flex;gap:3px;margin-top:8px;"><span style="flex:1;height:5px;background:var(--signal);"></span><span style="flex:1;height:5px;background:var(--signal);"></span><span style="flex:1;height:5px;background:var(--card-2);border:1px solid var(--line);"></span><span style="flex:1;height:5px;background:var(--card-2);border:1px solid var(--line);"></span><span style="flex:1;height:5px;background:var(--card-2);border:1px solid var(--line);"></span></div>
+          </div>
+
+          <!-- applicants -->
+          <div onClick="{{ goDash }}" style="cursor:pointer;grid-column:span 4;border:1px solid var(--line-2);background:var(--card);padding:14px;">
+            <div style="display:flex;justify-content:space-between;"><span style="font-family:'IBM Plex Mono';font-size:9px;letter-spacing:.5px;color:var(--ink-3);font-weight:600;">APPLICANTS · TOTAL</span><span style="font-family:'IBM Plex Mono';font-size:8px;padding:1px 5px;background:var(--gold-soft);color:var(--gold);">★ STARTER</span></div>
+            <div style="font-family:'IBM Plex Mono';font-weight:600;font-size:30px;color:var(--ink);margin-top:6px;">1,284<span style="font-size:12px;color:var(--ok);margin-left:6px;">▲63 w/w</span></div>
+            <div style="font-size:10.5px;color:var(--ink-2);margin-top:3px;">Grade K–2 sweet spot: <b>609</b> apps <sup style="font-family:'IBM Plex Mono';font-size:8px;color:var(--ink-3);">SUPA</sup></div>
+          </div>
+
+          <!-- deposits vs goal -->
+          <div style="grid-column:span 4;border:1px solid var(--line-2);background:var(--card);padding:14px;">
+            <div style="display:flex;justify-content:space-between;"><span style="font-family:'IBM Plex Mono';font-size:9px;letter-spacing:.5px;color:var(--ink-3);font-weight:600;">DEPOSITS vs FALL GOAL</span><span style="font-family:'IBM Plex Mono';font-size:8px;padding:1px 5px;background:var(--gold-soft);color:var(--gold);">★ STARTER</span></div>
+            <div style="font-family:'IBM Plex Mono';font-weight:600;font-size:30px;color:var(--ink);margin-top:6px;">112<span style="font-size:14px;color:var(--ink-3);"> / 180</span></div>
+            <div style="height:6px;background:var(--card-2);margin-top:7px;border:1px solid var(--line);"><div style="width:62%;height:100%;background:var(--gold);"></div></div>
+            <div style="font-size:10px;color:var(--ink-2);margin-top:5px;">62% of goal · pace lands ~168 by Aug 17 <sup style="font-family:'IBM Plex Mono';font-size:8px;color:var(--ink-3);">SUPA</sup></div>
+          </div>
+
+          <!-- conversion by channel -->
+          <div style="grid-column:span 4;border:1px solid var(--line-2);background:var(--card);padding:14px;">
+            <div style="display:flex;justify-content:space-between;margin-bottom:9px;"><span style="font-family:'IBM Plex Mono';font-size:9px;letter-spacing:.5px;color:var(--ink-3);font-weight:600;">CONVERSION BY CHANNEL</span><span style="font-family:'IBM Plex Mono';font-size:8px;padding:1px 5px;background:var(--gold-soft);color:var(--gold);">★</span></div>
+            <div style="display:flex;flex-direction:column;gap:6px;">
+              <div style="display:flex;align-items:center;gap:8px;"><span style="font-size:10.5px;color:var(--ink);width:74px;">X / Twitter</span><div style="flex:1;height:11px;background:var(--card-2);"><div style="width:100%;height:100%;background:var(--gold);"></div></div><span style="font-family:'IBM Plex Mono';font-size:10px;font-weight:600;color:var(--ink);width:30px;text-align:right;">42%</span></div>
+              <div style="display:flex;align-items:center;gap:8px;"><span style="font-size:10.5px;color:var(--ink);width:74px;">Ambassador</span><div style="flex:1;height:11px;background:var(--card-2);"><div style="width:69%;height:100%;background:var(--gold);opacity:.8;"></div></div><span style="font-family:'IBM Plex Mono';font-size:10px;font-weight:600;color:var(--ink);width:30px;text-align:right;">29%</span></div>
+              <div style="display:flex;align-items:center;gap:8px;"><span style="font-size:10.5px;color:var(--ink);width:74px;">Organic</span><div style="flex:1;height:11px;background:var(--card-2);"><div style="width:50%;height:100%;background:var(--gold);opacity:.65;"></div></div><span style="font-family:'IBM Plex Mono';font-size:10px;font-weight:600;color:var(--ink);width:30px;text-align:right;">21%</span></div>
+              <div style="display:flex;align-items:center;gap:8px;"><span style="font-size:10.5px;color:var(--ink-2);width:74px;">Facebook</span><div style="flex:1;height:11px;background:var(--card-2);"><div style="width:21%;height:100%;background:var(--ink-3);"></div></div><span style="font-family:'IBM Plex Mono';font-size:10px;color:var(--ink-2);width:30px;text-align:right;">9%</span></div>
+            </div>
+            <div style="font-family:'IBM Plex Mono';font-size:8px;color:var(--ink-3);margin-top:7px;">Facebook = volume trap · X = pre-sold engine <sup>SUPA</sup></div>
+          </div>
+
+          <!-- engagement tier mix -->
+          <div onClick="{{ goNurture }}" style="cursor:pointer;grid-column:span 4;border:1px solid var(--line-2);background:var(--card);padding:14px;">
+            <div style="display:flex;justify-content:space-between;margin-bottom:9px;"><span style="font-family:'IBM Plex Mono';font-size:9px;letter-spacing:.5px;color:var(--ink-3);font-weight:600;">ENGAGEMENT TIER MIX</span><span style="font-family:'IBM Plex Mono';font-size:8px;padding:1px 5px;background:var(--gold-soft);color:var(--gold);">★</span></div>
+            <div style="display:flex;height:24px;border:1px solid var(--line);">
+              <div style="width:31%;background:var(--gold);display:flex;align-items:center;justify-content:center;font-family:'IBM Plex Mono';font-size:9px;color:#fff;font-weight:600;">31%</div>
+              <div style="width:44%;background:var(--gold);opacity:.55;display:flex;align-items:center;justify-content:center;font-family:'IBM Plex Mono';font-size:9px;color:var(--ink);font-weight:600;">44%</div>
+              <div style="width:25%;background:var(--broken);display:flex;align-items:center;justify-content:center;font-family:'IBM Plex Mono';font-size:9px;color:#fff;font-weight:600;">25%</div>
+            </div>
+            <div style="display:flex;justify-content:space-between;font-family:'IBM Plex Mono';font-size:8.5px;color:var(--ink-3);margin-top:5px;"><span>Clicked</span><span>Opened</span><span>Cold</span></div>
+            <div style="font-size:10px;color:var(--signal);margin-top:6px;font-weight:600;">Clicked → 52% commit vs cold 16% — top predictor <sup style="color:var(--ink-3);">HUBS</sup></div>
+          </div>
+
+          <!-- T1/T2/T3 -->
+          <div onClick="{{ goNurture }}" style="cursor:pointer;grid-column:span 4;border:1px solid var(--line-2);background:var(--card);padding:14px;">
+            <div style="display:flex;justify-content:space-between;"><span style="font-family:'IBM Plex Mono';font-size:9px;letter-spacing:.5px;color:var(--ink-3);font-weight:600;">T1 / T2 / T3 ACTIVE</span><span style="font-family:'IBM Plex Mono';font-size:8px;padding:1px 5px;background:var(--gold-soft);color:var(--gold);">★</span></div>
+            <div style="display:flex;gap:14px;margin-top:10px;">
+              <div><div style="font-family:'IBM Plex Mono';font-size:20px;font-weight:600;color:var(--ink);">40</div><div style="font-size:9.5px;color:var(--ink-2);">T1 messaging</div></div>
+              <div><div style="font-family:'IBM Plex Mono';font-size:20px;font-weight:600;color:var(--ink);">3,142</div><div style="font-size:9.5px;color:var(--ink-2);">T2 ~323/rep</div></div>
+              <div><div style="font-family:'IBM Plex Mono';font-size:20px;font-weight:600;color:var(--ink);">1,124</div><div style="font-size:9.5px;color:var(--ink-2);">T3 waitlist</div></div>
+            </div>
+            <div style="font-family:'IBM Plex Mono';font-size:8px;color:var(--ink-3);margin-top:8px;">T3 sub-buckets: ESA-planned · ESA-ineligible · no-indicator <sup>SUPA+HUBS</sup></div>
+          </div>
+
+          <!-- 24h SLA -->
+          <div style="grid-column:span 4;border:1px solid var(--line-2);background:var(--card);padding:14px;">
+            <div style="display:flex;justify-content:space-between;"><span style="font-family:'IBM Plex Mono';font-size:9px;letter-spacing:.5px;color:var(--ink-3);font-weight:600;">24-HR FOLLOW-UP SLA</span><span style="font-family:'IBM Plex Mono';font-size:8px;padding:1px 5px;background:var(--gold-soft);color:var(--gold);">★</span></div>
+            <div style="display:flex;align-items:baseline;gap:8px;margin-top:6px;"><div style="font-family:'IBM Plex Mono';font-weight:600;font-size:27px;color:var(--warn);">78%</div><div style="font-size:10.5px;color:var(--ink-2);">target 90% · <b style="color:var(--signal);">9 late</b></div></div>
+            <div style="height:5px;background:var(--card-2);margin-top:8px;border:1px solid var(--line);"><div style="width:78%;height:100%;background:var(--warn);"></div></div>
+            <div style="font-family:'IBM Plex Mono';font-size:8px;color:var(--ink-3);margin-top:6px;">owner-attributable · red-list in Nurture <sup>HUBS</sup></div>
+          </div>
+
+          <!-- budget burn -->
+          <div onClick="{{ goBudget }}" style="cursor:pointer;grid-column:span 4;border:1px solid var(--line-2);background:var(--card);padding:14px;">
+            <div style="font-family:'IBM Plex Mono';font-size:9px;letter-spacing:.5px;color:var(--ink-3);font-weight:600;">BUDGET BURN vs PLAN</div>
+            <div style="font-family:'IBM Plex Mono';font-weight:600;font-size:25px;color:var(--ink);margin-top:6px;">$233.0K</div>
+            <div style="font-size:10.5px;color:var(--ink-2);">of <b>$365K</b> · 63.8% spent · 91.5% committed</div>
+            <div style="height:5px;background:var(--card-2);margin-top:8px;border:1px solid var(--line);"><div style="width:64%;height:100%;background:var(--gold);"></div></div>
+            <div style="font-family:'IBM Plex Mono';font-size:8.5px;color:var(--signal);margin-top:7px;">⚑ Guerrilla bet +17.5% → Decision Queue</div>
+          </div>
+
+          <!-- website sessions (broken UTM) -->
+          <div onClick="{{ goWebsite }}" style="cursor:pointer;grid-column:span 4;border:1px solid var(--line-2);background:var(--card);padding:14px;">
+            <div style="font-family:'IBM Plex Mono';font-size:9px;letter-spacing:.5px;color:var(--ink-3);font-weight:600;">WEBSITE SESSIONS · 7D</div>
+            <div style="font-family:'IBM Plex Mono';font-weight:600;font-size:25px;color:var(--ink);margin-top:6px;">18.4K</div>
+            <div style="font-size:10px;color:var(--ink-2);">gt.school + anywhere.gt.school <sup style="font-family:'IBM Plex Mono';font-size:8px;color:var(--ink-3);">GA4</sup></div>
+            <div style="margin-top:8px;padding:6px 8px;background:repeating-linear-gradient(45deg,var(--hatch) 0 1px,transparent 1px 7px);border:1px dashed var(--broken);font-family:'IBM Plex Mono';font-size:8px;color:var(--ink-2);">⃠ UTM attribution broken — channel ROI not trustworthy</div>
+          </div>
+
+          <!-- executive narrative -->
+          <div style="grid-column:span 6;border:1px solid var(--line-2);background:var(--card);padding:14px;">
+            <div style="display:flex;justify-content:space-between;margin-bottom:9px;"><span style="font-family:'IBM Plex Mono';font-size:9px;letter-spacing:.5px;color:var(--ink-3);font-weight:600;">✎ EXECUTIVE NARRATIVE · WEEK OF JUN 22</span><span style="font-family:'IBM Plex Mono';font-size:8px;padding:1px 5px;background:var(--gold-soft);color:var(--gold);">★ STARTER</span></div>
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:9px;">
+              <div style="border-left:2px solid var(--ok);padding-left:9px;"><div style="font-family:'IBM Plex Mono';font-size:8.5px;color:var(--ok);font-weight:600;">TOPLINE</div><div style="font-size:11px;color:var(--ink-2);line-height:1.45;margin-top:2px;">Deposits 112/180 (62%), 51 days to cutoff. X/Twitter still the conversion engine at 42%.</div></div>
+              <div style="border-left:2px solid var(--gold);padding-left:9px;"><div style="font-family:'IBM Plex Mono';font-size:8.5px;color:var(--gold);font-weight:600;">WORKING</div><div style="font-size:11px;color:var(--ink-2);line-height:1.45;margin-top:2px;">Ambassador-influenced enrollments up to 18; engagement-tier targeting lifting clicked cohort.</div></div>
+              <div style="border-left:2px solid var(--signal);padding-left:9px;"><div style="font-family:'IBM Plex Mono';font-size:8.5px;color:var(--signal);font-weight:600;">STUCK</div><div style="font-size:11px;color:var(--ink-2);line-height:1.45;margin-top:2px;">24-hr SLA at 78% (target 90%). UTM attribution broken — channel ROI unreliable.</div></div>
+              <div style="border-left:2px solid var(--ink-3);padding-left:9px;"><div style="font-family:'IBM Plex Mono';font-size:8.5px;color:var(--ink-3);font-weight:600;">DECISIONS</div><div style="font-size:11px;color:var(--ink-2);line-height:1.45;margin-top:2px;">Guerrilla/earned bet +17.5% over plan — awaiting leadership in the Decision Queue.</div></div>
+            </div>
+            <div style="font-family:'IBM Plex Mono';font-size:8px;color:var(--ink-3);margin-top:8px;">Editable weekly by the Marketing Lead · src · Manual</div>
+          </div>
+
+          <!-- decision queue preview (role-aware) -->
+          <sc-if value="{{ canSeeQueue }}" hint-placeholder-val="{{ true }}">
+          <div onClick="{{ goDecision }}" style="cursor:pointer;grid-column:span 6;border:1px solid var(--line-2);background:var(--card);padding:14px;">
+            <div style="display:flex;justify-content:space-between;"><span style="font-family:'IBM Plex Mono';font-size:9px;letter-spacing:.5px;color:var(--ink-3);font-weight:600;">⚖ DECISION QUEUE PREVIEW</span><span style="font-family:'IBM Plex Mono';font-size:8px;padding:1px 5px;background:var(--gold-soft);color:var(--gold);">LEADERSHIP ONLY</span></div>
+            <div style="display:flex;gap:18px;margin-top:10px;margin-bottom:10px;">
+              <div><div style="font-family:'IBM Plex Mono';font-size:22px;font-weight:600;color:var(--signal);">{{ dqCounts.pending }}</div><div style="font-size:9.5px;color:var(--ink-2);">pending</div></div>
+              <div><div style="font-family:'IBM Plex Mono';font-size:22px;font-weight:600;color:var(--warn);">{{ dqCounts.escalated }}</div><div style="font-size:9.5px;color:var(--ink-2);">auto-escalated</div></div>
+              <div><div style="font-family:'IBM Plex Mono';font-size:22px;font-weight:600;color:var(--ink-3);">{{ dqCounts.needinfo }}</div><div style="font-size:9.5px;color:var(--ink-2);">need-info</div></div>
+            </div>
+            <div style="border-top:1px solid var(--line);padding-top:7px;font-size:10.5px;color:var(--ink-2);">Top: <b>Guerrilla bet +17.5% over</b> · auto-flag from Budget · 2h</div>
+          </div>
+          </sc-if>
+          <sc-if value="{{ isOperator }}" hint-placeholder-val="{{ false }}">
+          <div style="grid-column:span 6;border:1px solid var(--line-2);background:var(--card);padding:14px;">
+            <div style="display:flex;justify-content:space-between;"><span style="font-family:'IBM Plex Mono';font-size:9px;letter-spacing:.5px;color:var(--ink-3);font-weight:600;">⚖ YOUR SUBMISSIONS</span><span style="font-family:'IBM Plex Mono';font-size:8px;padding:1px 5px;border:1px solid var(--line-2);color:var(--ink-3);">🔒 QUEUE HIDDEN</span></div>
+            <div style="font-size:11px;color:var(--ink-2);margin-top:10px;line-height:1.5;">You have <b style="color:var(--ink);">1 pending</b> proposal awaiting leadership. The full Decision Queue is leadership-only — you can submit but not view it.</div>
+            <div onClick="{{ goDecision }}" style="cursor:pointer;font-family:'IBM Plex Mono';font-size:8.5px;color:var(--gold);margin-top:10px;">↳ Submit / track yours</div>
+          </div>
+          </sc-if>
+
+          <!-- workstream health grid -->
+          <div style="grid-column:span 12;border:1px solid var(--line-2);background:var(--card);">
+            <div style="display:flex;justify-content:space-between;align-items:center;padding:10px 14px;border-bottom:1px solid var(--line-2);"><span style="font-family:'IBM Plex Mono';font-size:9px;letter-spacing:.5px;color:var(--ink-3);font-weight:600;">▦ WORKSTREAM HEALTH GRID</span><span style="font-family:'IBM Plex Mono';font-size:8px;padding:1px 5px;background:var(--gold-soft);color:var(--gold);">★ STARTER · leaders may comment per row</span></div>
+            <div style="display:grid;grid-template-columns:24px 1.4fr 1.2fr 1.3fr 1.4fr;font-family:'IBM Plex Mono';font-size:8.5px;letter-spacing:.4px;color:var(--ink-3);padding:7px 14px;border-bottom:1px solid var(--line);font-weight:600;"><div></div><div>WORKSTREAM</div><div>OWNER</div><div>THIS WEEK</div><div>KEY METRIC / ASK</div></div>
+            <sc-for list="{{ workstreamHealth }}" as="w" hint-placeholder-count="8">
+              <div style="display:grid;grid-template-columns:24px 1.4fr 1.2fr 1.3fr 1.4fr;align-items:center;padding:8px 14px;border-bottom:1px solid var(--line);">
+                <div style="display:flex;"><span style="width:10px;height:10px;border-radius:50%;background:{{ w.color }};"></span></div>
+                <div style="font-size:11.5px;color:var(--ink);font-weight:500;">{{ w.name }}</div>
+                <div style="font-family:'IBM Plex Mono';font-size:9.5px;color:var(--ink-2);">{{ w.owner }}</div>
+                <div style="font-size:11px;color:var(--ink-2);">{{ w.week }}</div>
+                <div style="font-size:11px;color:{{ w.metricColor }};">{{ w.metric }}</div>
+              </div>
+            </sc-for>
+          </div>
+
+        </div>
+      </section>
+      </sc-if>
+
+      <!-- ============ KPI SCORECARD ============ -->
+      <sc-if value="{{ isDashboard }}" hint-placeholder-val="{{ false }}">
+      <section class="scr" data-screen-label="KPI Scorecard" style="padding:20px 22px 40px;">
+        <div style="border:1px solid var(--ink);background:var(--card);margin-bottom:16px;">
+          <div style="display:flex;justify-content:space-between;align-items:center;padding:11px 16px;border-bottom:2px solid var(--ink);background:var(--ink);color:var(--paper);">
+            <div style="font-family:'Archivo';font-weight:700;font-size:15px;letter-spacing:.3px;">CANONICAL WEEKLY SCORECARD</div>
+            <div style="font-family:'IBM Plex Mono';font-size:9.5px;letter-spacing:.4px;opacity:.85;">WEEK OF JUN 22 · IDENTICAL FOR ALL USERS · READS ALL · OWNS NOTHING</div>
+          </div>
+          <div style="display:grid;grid-template-columns:2.2fr .9fr .9fr .9fr .7fr .9fr 1.4fr;font-family:'IBM Plex Mono';font-size:9px;letter-spacing:.4px;color:var(--ink-3);padding:8px 16px;border-bottom:1px solid var(--line-2);font-weight:600;">
+            <div>METRIC</div><div>SOURCE</div><div style="text-align:right;">THIS WK</div><div style="text-align:right;">LAST WK</div><div style="text-align:right;">Δ</div><div style="text-align:right;">TARGET</div><div style="text-align:center;">STATUS</div>
+          </div>
+          <sc-for list="{{ kpiRows }}" as="k" hint-placeholder-count="9">
+            <div style="display:grid;grid-template-columns:2.2fr .9fr .9fr .9fr .7fr .9fr 1.4fr;align-items:center;padding:9px 16px;border-bottom:1px solid var(--line);background:{{ k.rowBg }};">
+              <div style="display:flex;flex-direction:column;"><span style="font-size:12.5px;color:var(--ink);font-weight:500;">{{ k.name }}</span><span style="font-family:'IBM Plex Mono';font-size:8.5px;color:var(--ink-3);">{{ k.note }}</span></div>
+              <div style="font-family:'IBM Plex Mono';font-size:9px;color:var(--ink-2);"><span style="border-bottom:1px dotted var(--ink-3);">{{ k.source }}</span></div>
+              <div style="text-align:right;font-family:'IBM Plex Mono';font-size:14px;font-weight:600;color:var(--ink);">{{ k.now }}</div>
+              <div style="text-align:right;font-family:'IBM Plex Mono';font-size:12px;color:var(--ink-3);">{{ k.last }}</div>
+              <div style="text-align:right;font-family:'IBM Plex Mono';font-size:11px;font-weight:600;color:{{ k.deltaColor }};">{{ k.delta }}</div>
+              <div style="text-align:right;font-family:'IBM Plex Mono';font-size:11px;color:var(--ink-2);">{{ k.target }}</div>
+              <div style="display:flex;justify-content:center;"><span style="font-family:'IBM Plex Mono';font-size:9px;font-weight:600;letter-spacing:.3px;padding:2px 8px;background:{{ k.statusBg }};color:{{ k.statusColor }};white-space:nowrap;">{{ k.status }}</span></div>
+            </div>
+          </sc-for>
+        </div>
+        <div style="display:flex;gap:14px;font-family:'IBM Plex Mono';font-size:9.5px;color:var(--ink-3);flex-wrap:wrap;">
+          <span>◆ Every figure cites exactly one source of record.</span>
+          <span style="color:var(--signal);">⃠ Hatched = uninstrumented / broken — never shown as on-track.</span>
+          <span>Referenced live in the Monday meeting (agenda item 2 · the Marketing Lead).</span>
+        </div>
+      </section>
+      </sc-if>
+
+      <!-- ============ BUDGET TRACKER ============ -->
+      <sc-if value="{{ isBudget }}" hint-placeholder-val="{{ false }}">
+      <section class="scr" data-screen-label="Budget Tracker" style="padding:20px 22px 40px;">
+        <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:16px;">
+          <div style="border:1px solid var(--ink);background:var(--ink);color:var(--paper);padding:14px;"><div style="font-family:'IBM Plex Mono';font-size:9px;letter-spacing:.5px;opacity:.8;">TOTAL PLAN · FY26</div><div style="font-family:'IBM Plex Mono';font-weight:600;font-size:27px;margin-top:6px;">$365,000</div><div style="font-size:10px;opacity:.8;margin-top:3px;">The same number, everywhere.</div></div>
+          <div style="border:1px solid var(--line-2);background:var(--card);padding:14px;"><div style="font-family:'IBM Plex Mono';font-size:9px;letter-spacing:.5px;color:var(--ink-3);">COMMITTED</div><div style="font-family:'IBM Plex Mono';font-weight:600;font-size:27px;margin-top:6px;color:var(--ink);">$334.0K</div><div style="font-size:10px;color:var(--ink-2);margin-top:3px;">91.5% of plan</div></div>
+          <div style="border:1px solid var(--line-2);background:var(--card);padding:14px;"><div style="font-family:'IBM Plex Mono';font-size:9px;letter-spacing:.5px;color:var(--ink-3);">ACTUAL SPEND</div><div style="font-family:'IBM Plex Mono';font-weight:600;font-size:27px;margin-top:6px;color:var(--ink);">$233.0K</div><div style="font-size:10px;color:var(--ink-2);margin-top:3px;">63.8% burned · lands ~$372K</div></div>
+          <div style="border:1px solid var(--signal);background:var(--signal-soft);padding:14px;"><div style="font-family:'IBM Plex Mono';font-size:9px;letter-spacing:.5px;color:var(--signal);font-weight:600;">⚑ VARIANCE ALERTS</div><div style="font-family:'IBM Plex Mono';font-weight:600;font-size:27px;margin-top:6px;color:var(--signal);">1</div><div style="font-size:10px;color:var(--ink-2);margin-top:3px;">&gt;10% over → auto-flag</div></div>
+        </div>
+
+        <div onClick="{{ goDecision }}" style="cursor:pointer;display:flex;align-items:center;gap:11px;padding:9px 14px;background:var(--signal-soft);border:1px solid var(--signal);margin-bottom:14px;">
+          <span style="font-family:'IBM Plex Mono';font-size:9px;font-weight:600;padding:2px 7px;background:var(--signal);color:#fff;white-space:nowrap;">AUTO-FLAGGED</span>
+          <span style="font-size:12px;color:var(--ink);flex:1;"><b>Guerrilla / earned media bets</b> is <b style="color:var(--signal);">+17.5%</b> over plan ($47K committed vs $40K). The &gt;10% threshold breached, so it routed to the Decision Queue automatically.</span>
+          <span style="font-family:'IBM Plex Mono';font-size:10px;color:var(--signal);font-weight:600;white-space:nowrap;">→ Decision Queue</span>
+        </div>
+
+        <div style="border:1px solid var(--line-2);background:var(--card);">
+          <div style="display:grid;grid-template-columns:2fr 1.2fr .85fr .85fr .85fr .75fr 1.1fr;font-family:'IBM Plex Mono';font-size:9px;letter-spacing:.4px;color:var(--ink-3);padding:9px 16px;border-bottom:2px solid var(--ink);font-weight:600;">
+            <div>WORKSTREAM</div><div>OWNER</div><div style="text-align:right;">PLANNED</div><div style="text-align:right;">COMMITTED</div><div style="text-align:right;">ACTUAL</div><div style="text-align:right;">% PLAN</div><div style="text-align:center;">STATUS</div>
+          </div>
+          <sc-for list="{{ budgetRows }}" as="b" hint-placeholder-count="4">
+            <div style="display:grid;grid-template-columns:2fr 1.2fr .85fr .85fr .85fr .75fr 1.1fr;align-items:center;padding:10px 16px;border-bottom:1px solid var(--line);">
+              <div style="font-size:12.5px;color:var(--ink);font-weight:500;">{{ b.name }}</div>
+              <div style="font-family:'IBM Plex Mono';font-size:9.5px;color:var(--ink-2);">{{ b.owner }}</div>
+              <div style="text-align:right;font-family:'IBM Plex Mono';font-size:11.5px;color:var(--ink-2);">{{ b.planned }}</div>
+              <div style="text-align:right;font-family:'IBM Plex Mono';font-size:11.5px;font-weight:600;color:var(--ink);">{{ b.committed }}</div>
+              <div style="text-align:right;font-family:'IBM Plex Mono';font-size:11.5px;color:var(--ink-2);">{{ b.actual }}</div>
+              <div style="text-align:right;font-family:'IBM Plex Mono';font-size:11px;font-weight:600;color:{{ b.pctColor }};">{{ b.pct }}</div>
+              <div style="display:flex;justify-content:center;"><span style="font-family:'IBM Plex Mono';font-size:9px;font-weight:600;padding:2px 8px;background:{{ b.statusBg }};color:{{ b.statusColor }};white-space:nowrap;">{{ b.status }}</span></div>
+            </div>
+          </sc-for>
+          <div style="display:grid;grid-template-columns:2fr 1.2fr .85fr .85fr .85fr .75fr 1.1fr;align-items:center;padding:10px 16px;border-top:2px solid var(--ink);background:var(--card-2);">
+            <div style="font-family:'Archivo';font-weight:700;font-size:13px;color:var(--ink);">TOTAL</div><div></div>
+            <div style="text-align:right;font-family:'IBM Plex Mono';font-size:12px;font-weight:600;color:var(--ink);">$365.0K</div>
+            <div style="text-align:right;font-family:'IBM Plex Mono';font-size:12px;font-weight:600;color:var(--ink);">$334.0K</div>
+            <div style="text-align:right;font-family:'IBM Plex Mono';font-size:12px;font-weight:600;color:var(--ink);">$233.0K</div>
+            <div style="text-align:right;font-family:'IBM Plex Mono';font-size:11px;font-weight:600;color:var(--ink);">91.5%</div><div></div>
+          </div>
+        </div>
+        <div style="font-family:'IBM Plex Mono';font-size:9.5px;color:var(--ink-3);margin-top:12px;line-height:1.6;">⌖ System of record: the Hub (no Google Sheet). Each function owner enters their own committed + actual spend; the four workstreams reconcile to $365K. Summer Camp is a separate P&amp;L and does <b>not</b> roll into this total. The same line item means the same thing in Home, the Scorecard, and the Decision Queue.</div>
+      </section>
+      </sc-if>
+
+      <!-- ============ DECISION QUEUE ============ -->
+      <sc-if value="{{ isDecision }}" hint-placeholder-val="{{ false }}">
+      <section class="scr" data-screen-label="Decision Queue" style="padding:20px 22px 40px;">
+        <sc-if value="{{ isOperator }}" hint-placeholder-val="{{ false }}">
+        <div style="border:1px solid var(--line-2);background:var(--card);margin-bottom:16px;overflow:hidden;">
+          <div style="padding:26px 22px;background:repeating-linear-gradient(45deg,var(--hatch) 0 1px,transparent 1px 9px);border-bottom:1px solid var(--line-2);">
+            <div style="display:flex;align-items:center;gap:11px;">
+              <span style="font-size:20px;">🔒</span>
+              <div>
+                <div style="font-family:'Archivo';font-weight:700;font-size:18px;color:var(--ink);">The Decision Queue is leadership-only</div>
+                <div style="font-size:12.5px;color:var(--ink-2);margin-top:3px;max-width:580px;line-height:1.5;">As the <b>Grassroots Owner</b> you can <b>submit</b> proposals into the queue from your module, but you cannot view or act on the full queue. Viewing and deciding are reserved for leadership (Growth Marketing Officer, the Budget Owner, and the Co-founder).</div>
+              </div>
+            </div>
+          </div>
+          <div style="padding:13px 22px;display:flex;align-items:center;gap:14px;flex-wrap:wrap;">
+            <span style="font-family:'IBM Plex Mono';font-size:9px;letter-spacing:.5px;color:var(--ink-3);">YOUR ACCESS</span>
+            <span style="font-family:'IBM Plex Mono';font-size:9.5px;padding:3px 9px;background:var(--ok-soft);color:var(--ok);">✓ SUBMIT FROM MY MODULE</span>
+            <span style="font-family:'IBM Plex Mono';font-size:9.5px;padding:3px 9px;background:var(--accent-soft);color:var(--ink-3);">✕ VIEW QUEUE</span>
+            <span style="font-family:'IBM Plex Mono';font-size:9.5px;padding:3px 9px;background:var(--accent-soft);color:var(--ink-3);">✕ APPROVE / REJECT</span>
+          </div>
+        </div>
+        <div style="display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid var(--line);padding-bottom:9px;margin-bottom:12px;">
+          <div style="font-family:'Archivo';font-weight:700;font-size:14px;color:var(--ink);">Your submissions</div>
+          <span style="font-family:'IBM Plex Mono';font-size:9.5px;padding:5px 12px;background:var(--ink);color:var(--paper);cursor:pointer;">+ RAISE A DECISION</span>
+        </div>
+        <sc-for list="{{ dqMine }}" as="d" hint-placeholder-count="2">
+          <div style="border:1px solid var(--line-2);background:var(--card);padding:13px 15px;margin-bottom:9px;display:flex;align-items:center;gap:15px;">
+            <span style="font-family:'IBM Plex Mono';font-size:10px;font-weight:600;color:var(--ink-3);">{{ d.id }}</span>
+            <div style="flex:1;"><div style="font-size:12.5px;font-weight:500;color:var(--ink);">{{ d.title }}</div><div style="font-family:'IBM Plex Mono';font-size:9px;color:var(--ink-3);margin-top:2px;">{{ d.from }} · {{ d.amount }} · {{ d.age }} ago</div></div>
+            <span style="font-family:'IBM Plex Mono';font-size:9px;font-weight:600;padding:3px 9px;background:{{ d.sm.bg }};color:{{ d.sm.c }};">{{ d.sm.l }}</span>
+          </div>
+        </sc-for>
+        <div style="font-family:'IBM Plex Mono';font-size:9px;color:var(--ink-3);margin-top:6px;">You see only the decisions you submitted, and their status. Other proposals and the full queue stay hidden.</div>
+        </sc-if>
+
+        <sc-if value="{{ canSeeQueue }}" hint-placeholder-val="{{ true }}">
+        <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-bottom:16px;">
+          <div style="border:1px solid var(--signal);background:var(--signal-soft);padding:13px;"><div style="font-family:'IBM Plex Mono';font-size:9px;color:var(--signal);font-weight:600;">⌛ PENDING</div><div style="font-family:'IBM Plex Mono';font-weight:600;font-size:26px;color:var(--signal);margin-top:4px;">{{ dqCounts.pending }}</div><div style="font-size:10px;color:var(--ink-2);">awaiting your decision</div></div>
+          <div style="border:1px solid var(--line-2);background:var(--card);padding:13px;"><div style="font-family:'IBM Plex Mono';font-size:9px;color:var(--ink-3);font-weight:600;">⚑ AUTO-FLAGGED</div><div style="font-family:'IBM Plex Mono';font-weight:600;font-size:26px;color:var(--ink);margin-top:4px;">{{ dqCounts.escalated }}</div><div style="font-size:10px;color:var(--ink-2);">budget / sync breaches</div></div>
+          <div style="border:1px solid var(--line-2);background:var(--card);padding:13px;"><div style="font-family:'IBM Plex Mono';font-size:9px;color:var(--ink-3);font-weight:600;">↩ NEED-INFO</div><div style="font-family:'IBM Plex Mono';font-weight:600;font-size:26px;color:var(--warn);margin-top:4px;">{{ dqCounts.needinfo }}</div><div style="font-size:10px;color:var(--ink-2);">awaiting submitter</div></div>
+        </div>
+        <sc-if value="{{ isAdmin }}" hint-placeholder-val="{{ false }}">
+          <div style="font-family:'IBM Plex Mono';font-size:9.5px;color:var(--ink-3);padding:7px 11px;border:1px dashed var(--line-2);margin-bottom:12px;">ADMIN VIEW (the Marketing Lead) · you can submit and read the queue, but approve / reject / need-info are reserved for Leadership. <span style="color:var(--ink-2);">— documented assumption, see Spec.</span></div>
+        </sc-if>
+
+        <sc-for list="{{ dqAll }}" as="d" hint-placeholder-count="6">
+          <div style="border:1px solid var(--line-2);background:var(--card);margin-bottom:10px;border-left:3px solid {{ d.sm.c }};">
+            <div style="display:flex;gap:14px;padding:13px 16px;">
+              <div style="min-width:62px;"><div style="font-family:'IBM Plex Mono';font-size:11px;font-weight:600;color:var(--ink);">{{ d.id }}</div><div style="font-family:'IBM Plex Mono';font-size:8px;color:var(--ink-3);margin-top:3px;">{{ d.age }} ago</div></div>
+              <div style="flex:1;">
+                <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;"><span style="font-family:'IBM Plex Mono';font-size:8.5px;font-weight:600;letter-spacing:.4px;padding:1px 6px;border:1px solid {{ d.typeColor }};color:{{ d.typeColor }};">{{ d.type }}</span><span style="font-size:13px;font-weight:600;color:var(--ink);">{{ d.title }}</span></div>
+                <div style="font-size:11.5px;color:var(--ink-2);margin-top:5px;line-height:1.5;max-width:660px;">{{ d.detail }}</div>
+                <div style="font-family:'IBM Plex Mono';font-size:9px;color:var(--ink-3);margin-top:7px;">⌖ {{ d.from }} · raised by {{ d.by }} · {{ d.amount }}</div>
+              </div>
+              <div style="display:flex;flex-direction:column;align-items:flex-end;gap:8px;min-width:172px;">
+                <span style="font-family:'IBM Plex Mono';font-size:9px;font-weight:600;padding:3px 10px;background:{{ d.sm.bg }};color:{{ d.sm.c }};">{{ d.sm.l }}</span>
+                <sc-if value="{{ d.showActions }}" hint-placeholder-val="{{ false }}">
+                  <div style="display:flex;gap:5px;">
+                    <button onClick="{{ d.approve }}" style="cursor:pointer;font-family:'IBM Plex Mono';font-size:9px;font-weight:600;padding:5px 9px;border:1px solid var(--ok);background:var(--ok-soft);color:var(--ok);">✓ APPROVE</button>
+                    <button onClick="{{ d.needinfo }}" style="cursor:pointer;font-family:'IBM Plex Mono';font-size:9px;font-weight:600;padding:5px 9px;border:1px solid var(--warn);background:var(--warn-soft);color:var(--warn);">↩ INFO</button>
+                    <button onClick="{{ d.reject }}" style="cursor:pointer;font-family:'IBM Plex Mono';font-size:9px;font-weight:600;padding:5px 9px;border:1px solid var(--line-2);background:var(--card-2);color:var(--ink-2);">✕ REJECT</button>
+                  </div>
+                </sc-if>
+              </div>
+            </div>
+          </div>
+        </sc-for>
+        <div style="font-family:'IBM Plex Mono';font-size:9px;color:var(--ink-3);margin-top:6px;">Async approve / reject / need-info. Proposals arrive from operators; budget variance &gt;10%, sync-parity drops, and hot-family flags auto-escalate here. Decisions write back to their source module.</div>
+        </sc-if>
+      </section>
+      </sc-if>
+
+      <!-- ============ CRM / MARKETING OPS ============ -->
+      <sc-if value="{{ isCrm }}" hint-placeholder-val="{{ false }}">
+      <section class="scr" data-screen-label="CRM Ops" style="padding:20px 22px 40px;">
+        <div style="display:grid;grid-template-columns:1fr 1fr 1.4fr;gap:12px;margin-bottom:16px;">
+          <div style="border:1px solid var(--line-2);background:var(--card);padding:14px;">
+            <div style="font-family:'IBM Plex Mono';font-size:9px;letter-spacing:.5px;color:var(--ink-3);">SYNC PARITY · SUPABASE ⇄ HUBSPOT</div>
+            <div style="font-family:'IBM Plex Mono';font-weight:600;font-size:32px;color:var(--warn);margin-top:6px;">96.2%</div>
+            <div style="font-size:10px;color:var(--ink-2);">below 97% threshold · 3 fields drifting</div>
+          </div>
+          <div style="border:1px solid var(--signal);background:var(--signal-soft);padding:14px;">
+            <div style="font-family:'IBM Plex Mono';font-size:9px;letter-spacing:.5px;color:var(--signal);font-weight:600;">UTM ATTRIBUTION HEALTH</div>
+            <div style="font-family:'IBM Plex Mono';font-weight:600;font-size:32px;color:var(--signal);margin-top:6px;">BROKEN</div>
+            <div style="font-size:10px;color:var(--ink-2);">permanent red until rebuilt · tracked here</div>
+          </div>
+          <div style="border:1px solid var(--line-2);background:var(--card);padding:14px;">
+            <div style="font-family:'IBM Plex Mono';font-size:9px;letter-spacing:.5px;color:var(--ink-3);">RULE OF TRUTH · ALWAYS ON</div>
+            <div style="font-size:13px;color:var(--ink);margin-top:8px;line-height:1.5;font-weight:500;">Supabase <b>app_form</b> is the source of truth for <b>funnel / TEFA / income / grade</b> — never HubSpot field values for these.</div>
+          </div>
+        </div>
+
+        <div style="display:grid;grid-template-columns:1.7fr 1fr;gap:14px;margin-bottom:16px;">
+          <div style="border:1px solid var(--line-2);background:var(--card);">
+            <div style="font-family:'IBM Plex Mono';font-size:9px;letter-spacing:.5px;color:var(--ink-3);padding:10px 16px;border-bottom:2px solid var(--ink);font-weight:600;">SOURCE SYSTEMS · LAST SYNC</div>
+            <sc-for list="{{ crmSystems }}" as="c" hint-placeholder-count="8">
+              <div style="display:grid;grid-template-columns:1.3fr 1.5fr .8fr 1fr;align-items:center;padding:9px 16px;border-bottom:1px solid var(--line);">
+                <div style="display:flex;align-items:center;gap:8px;"><span style="width:7px;height:7px;border-radius:50%;background:{{ c.sc }};"></span><span style="font-size:12px;font-weight:600;color:var(--ink);">{{ c.name }}</span></div>
+                <div style="font-size:10px;color:var(--ink-2);">{{ c.role }}</div>
+                <div style="font-family:'IBM Plex Mono';font-size:9.5px;color:var(--ink-3);">{{ c.last }}</div>
+                <div style="display:flex;justify-content:flex-end;"><span style="font-family:'IBM Plex Mono';font-size:8.5px;font-weight:600;padding:2px 8px;background:{{ c.sbg }};color:{{ c.sc }};white-space:nowrap;">{{ c.status }}</span></div>
+              </div>
+            </sc-for>
+          </div>
+          <div style="display:flex;flex-direction:column;gap:14px;">
+            <div style="border:1px solid var(--line-2);background:var(--card);">
+              <div style="font-family:'IBM Plex Mono';font-size:9px;letter-spacing:.5px;color:var(--ink-3);padding:10px 14px;border-bottom:1px solid var(--line-2);font-weight:600;">⚑ FIELD RELIABILITY FLAGS</div>
+              <sc-for list="{{ fieldFlags }}" as="f" hint-placeholder-count="3">
+                <div style="display:flex;justify-content:space-between;align-items:center;padding:9px 14px;border-bottom:1px solid var(--line);"><span style="font-size:11.5px;color:var(--ink);">{{ f.field }}</span><span style="font-family:'IBM Plex Mono';font-size:8.5px;font-weight:600;padding:2px 7px;background:var(--signal-soft);color:var(--signal);">{{ f.flag }}</span></div>
+              </sc-for>
+            </div>
+            <div style="border:1px solid var(--line-2);background:var(--card);padding:13px 14px;">
+              <div style="font-family:'IBM Plex Mono';font-size:9px;letter-spacing:.5px;color:var(--ink-3);font-weight:600;">⚙ DATA-QUALITY QUEUE · AUTO-DETECTED</div>
+              <div style="display:flex;gap:14px;margin-top:9px;"><div><div style="font-family:'IBM Plex Mono';font-size:20px;font-weight:600;color:var(--signal);">4</div><div style="font-size:9.5px;color:var(--ink-2);">open</div></div><div><div style="font-family:'IBM Plex Mono';font-size:20px;font-weight:600;color:var(--ink);">11</div><div style="font-size:9.5px;color:var(--ink-2);">resolved 30d</div></div></div>
+              <div style="font-size:10px;color:var(--ink-2);margin-top:8px;line-height:1.45;">System auto-detects sync drift + UTM breakage and opens queue items — not manual-only.</div>
+            </div>
+          </div>
+        </div>
+        <div style="font-family:'IBM Plex Mono';font-size:9.5px;color:var(--ink-3);line-height:1.6;">⌖ This module is where the Phase-1 sync backbone surfaces as product. Every figure elsewhere cites one of these systems. When parity drops below threshold, the <b>data-confidence banner</b> follows the affected numbers across every module — the Hub never silently picks a winner.</div>
+      </section>
+      </sc-if>
+
+      <!-- ============ NURTURE & LIFECYCLE ============ -->
+      <sc-if value="{{ isNurture }}" hint-placeholder-val="{{ false }}">
+      <section class="scr" data-screen-label="Nurture" style="padding:20px 22px 40px;">
+        <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:14px;">
+          <div style="border:1px solid var(--gold);background:var(--gold-soft);padding:13px;"><div style="font-family:'IBM Plex Mono';font-size:9px;letter-spacing:.4px;color:var(--gold);font-weight:600;">TOP CONVERSION PREDICTOR</div><div style="font-family:'IBM Plex Mono';font-weight:600;font-size:22px;color:var(--ink);margin-top:5px;">52% <span style="font-size:12px;color:var(--ink-3);">vs 16%</span></div><div style="font-size:10px;color:var(--ink-2);margin-top:2px;">clicked-cohort commit vs cold</div></div>
+          <div style="border:1px solid var(--line-2);background:var(--card);padding:13px;"><div style="font-family:'IBM Plex Mono';font-size:9px;letter-spacing:.4px;color:var(--ink-3);">24-HR SLA</div><div style="font-family:'IBM Plex Mono';font-weight:600;font-size:22px;color:var(--warn);margin-top:5px;">78%</div><div style="font-size:10px;color:var(--ink-2);margin-top:2px;">9 late · target 90% · HUBS</div></div>
+          <div style="border:1px solid var(--line-2);background:var(--card);padding:13px;"><div style="font-family:'IBM Plex Mono';font-size:9px;letter-spacing:.4px;color:var(--ink-3);">MKTG → ONBOARDING HANDOFF</div><div style="font-family:'IBM Plex Mono';font-weight:600;font-size:22px;color:var(--ink);margin-top:5px;">26</div><div style="font-size:10px;color:var(--ink-2);margin-top:2px;">this week · 71% onboard rate</div></div>
+          <div style="border:1px solid var(--line-2);background:var(--card);padding:13px;"><div style="font-family:'IBM Plex Mono';font-size:9px;letter-spacing:.4px;color:var(--ink-3);">MULTI-TOUCH ATTRIBUTION</div><div style="font-family:'IBM Plex Mono';font-weight:600;font-size:22px;color:var(--broken);margin-top:5px;">——</div><div style="font-size:10px;color:var(--ink-2);margin-top:2px;">UTM broken · not reported</div></div>
+        </div>
+
+        <div style="display:grid;grid-template-columns:1fr 1.55fr;gap:14px;margin-bottom:14px;">
+          <!-- segments -->
+          <div style="border:1px solid var(--line-2);background:var(--card);padding:14px;">
+            <div style="font-family:'Archivo';font-weight:700;font-size:13px;color:var(--ink);">Segments · T1 / T2 / T3</div>
+            <div style="font-family:'IBM Plex Mono';font-size:8px;color:var(--ink-3);margin-bottom:11px;">⌖ Supabase app_form (not HubSpot fields) · TEFA cohort frozen → 2027</div>
+            <sc-for list="{{ segments }}" as="s" hint-placeholder-count="3">
+              <div style="padding:9px 0;border-top:1px solid var(--line);">
+                <div style="display:flex;justify-content:space-between;align-items:baseline;"><span style="font-size:12px;color:var(--ink);font-weight:600;">{{ s.tier }}</span><span style="font-family:'IBM Plex Mono';font-size:13px;font-weight:600;color:var(--ink);">{{ s.count }}</span></div>
+                <div style="font-size:10.5px;color:var(--ink-2);margin-top:2px;line-height:1.4;">{{ s.desc }}</div>
+              </div>
+            </sc-for>
+          </div>
+
+          <!-- engagement x attribute heatmap (hero) -->
+          <div style="border:1px solid var(--ink);background:var(--card);padding:14px;">
+            <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:3px;"><div style="font-family:'Archivo';font-weight:700;font-size:13px;color:var(--ink);">Engagement × attribute heatmap</div><span style="font-family:'IBM Plex Mono';font-size:8px;color:var(--ink-3);">conversion % · SUPA × HUBS</span></div>
+            <div style="font-size:9.5px;color:var(--ink-3);margin-bottom:11px;">Income is the master variable; grade K–2 is the sweet spot.</div>
+            <div style="display:grid;grid-template-columns:70px repeat(4,1fr);gap:3px;">
+              <div></div>
+              <div style="font-family:'IBM Plex Mono';font-size:8.5px;color:var(--ink-3);text-align:center;font-weight:600;">$160K+</div>
+              <div style="font-family:'IBM Plex Mono';font-size:8.5px;color:var(--ink-3);text-align:center;font-weight:600;">TX geo</div>
+              <div style="font-family:'IBM Plex Mono';font-size:8.5px;color:var(--ink-3);text-align:center;font-weight:600;">Grade K–2</div>
+              <div style="font-family:'IBM Plex Mono';font-size:8.5px;color:var(--ink-3);text-align:center;font-weight:600;">Alpha-X</div>
+
+              <div style="font-family:'IBM Plex Mono';font-size:9px;color:var(--ink);display:flex;align-items:center;font-weight:600;">Clicked</div>
+              <div style="background:var(--gold);color:#fff;font-family:'IBM Plex Mono';font-size:11px;font-weight:600;text-align:center;padding:11px 0;">38%</div>
+              <div style="background:var(--gold);opacity:.82;color:#fff;font-family:'IBM Plex Mono';font-size:11px;font-weight:600;text-align:center;padding:11px 0;">31%</div>
+              <div style="background:var(--gold);color:#fff;font-family:'IBM Plex Mono';font-size:11px;font-weight:600;text-align:center;padding:11px 0;">41%</div>
+              <div style="background:var(--signal);color:#fff;font-family:'IBM Plex Mono';font-size:11px;font-weight:600;text-align:center;padding:11px 0;">44%</div>
+
+              <div style="font-family:'IBM Plex Mono';font-size:9px;color:var(--ink);display:flex;align-items:center;font-weight:600;">Opened</div>
+              <div style="background:var(--gold);opacity:.5;color:var(--ink);font-family:'IBM Plex Mono';font-size:11px;font-weight:600;text-align:center;padding:11px 0;">22%</div>
+              <div style="background:var(--gold);opacity:.42;color:var(--ink);font-family:'IBM Plex Mono';font-size:11px;font-weight:600;text-align:center;padding:11px 0;">18%</div>
+              <div style="background:var(--gold);opacity:.55;color:var(--ink);font-family:'IBM Plex Mono';font-size:11px;font-weight:600;text-align:center;padding:11px 0;">24%</div>
+              <div style="background:var(--gold);opacity:.48;color:var(--ink);font-family:'IBM Plex Mono';font-size:11px;font-weight:600;text-align:center;padding:11px 0;">21%</div>
+
+              <div style="font-family:'IBM Plex Mono';font-size:9px;color:var(--ink);display:flex;align-items:center;font-weight:600;">Cold</div>
+              <div style="background:var(--accent-soft);color:var(--ink-3);font-family:'IBM Plex Mono';font-size:11px;font-weight:600;text-align:center;padding:11px 0;">9%</div>
+              <div style="background:var(--accent-soft);color:var(--ink-3);font-family:'IBM Plex Mono';font-size:11px;font-weight:600;text-align:center;padding:11px 0;">7%</div>
+              <div style="background:var(--accent-soft);color:var(--ink-3);font-family:'IBM Plex Mono';font-size:11px;font-weight:600;text-align:center;padding:11px 0;">11%</div>
+              <div style="background:var(--accent-soft);color:var(--ink-3);font-family:'IBM Plex Mono';font-size:11px;font-weight:600;text-align:center;padding:11px 0;">8%</div>
+            </div>
+            <div style="display:flex;gap:6px;margin-top:10px;flex-wrap:wrap;">
+              <span style="font-family:'IBM Plex Mono';font-size:8px;padding:2px 7px;background:var(--accent-soft);color:var(--ink-2);">$160K+ ≈ 25% regardless of geo</span>
+              <span style="font-family:'IBM Plex Mono';font-size:8px;padding:2px 7px;background:var(--accent-soft);color:var(--ink-2);">K–2 sweet spot · 609 apps</span>
+              <span style="font-family:'IBM Plex Mono';font-size:8px;padding:2px 7px;background:var(--accent-soft);color:var(--ink-2);">"I follow Alpha on X" = 27.4%</span>
+            </div>
+          </div>
+        </div>
+
+        <div style="display:grid;grid-template-columns:1.55fr 1fr;gap:14px;">
+          <!-- sequences -->
+          <div style="border:1px solid var(--line-2);background:var(--card);">
+            <div style="display:flex;justify-content:space-between;align-items:center;padding:10px 16px;border-bottom:2px solid var(--ink);"><div style="font-family:'Archivo';font-weight:700;font-size:13px;color:var(--ink);">Sequences</div><span style="font-family:'IBM Plex Mono';font-size:8px;color:var(--ink-3);">read-only · HubSpot runs every sequence</span></div>
+            <div style="display:grid;grid-template-columns:1.7fr .9fr .7fr .7fr .8fr;font-family:'IBM Plex Mono';font-size:8.5px;letter-spacing:.3px;color:var(--ink-3);padding:8px 16px;border-bottom:1px solid var(--line-2);font-weight:600;"><div>SEQUENCE</div><div>TYPE</div><div style="text-align:right;">AUD</div><div style="text-align:right;">OPEN</div><div style="text-align:center;">HEALTH</div></div>
+            <sc-for list="{{ sequences }}" as="q" hint-placeholder-count="5">
+              <div style="display:grid;grid-template-columns:1.7fr .9fr .7fr .7fr .8fr;align-items:center;padding:9px 16px;border-bottom:1px solid var(--line);">
+                <div style="font-size:11.5px;color:var(--ink);font-weight:500;">{{ q.name }}</div>
+                <div style="font-family:'IBM Plex Mono';font-size:9px;color:var(--ink-2);">{{ q.type }}</div>
+                <div style="text-align:right;font-family:'IBM Plex Mono';font-size:10.5px;color:var(--ink-2);">{{ q.aud }}</div>
+                <div style="text-align:right;font-family:'IBM Plex Mono';font-size:10.5px;color:var(--ink);">{{ q.open }}</div>
+                <div style="display:flex;justify-content:center;"><span style="font-family:'IBM Plex Mono';font-size:8.5px;font-weight:600;padding:2px 7px;background:{{ q.sbg }};color:{{ q.sc }};">{{ q.health }}</span></div>
+              </div>
+            </sc-for>
+          </div>
+
+          <!-- SMS inbox themes -->
+          <div style="border:1px solid var(--line-2);background:var(--card);">
+            <div style="display:flex;justify-content:space-between;align-items:center;padding:10px 14px;border-bottom:2px solid var(--ink);"><div style="font-family:'Archivo';font-weight:700;font-size:13px;color:var(--ink);">SMS inbox themes</div><span style="font-family:'IBM Plex Mono';font-size:8px;color:var(--ink-3);">HubSpot Conv.</span></div>
+            <sc-for list="{{ smsThemes }}" as="m" hint-placeholder-count="5">
+              <div style="display:flex;align-items:center;gap:10px;padding:8px 14px;border-bottom:1px solid var(--line);">
+                <span style="font-family:'IBM Plex Mono';font-size:9px;font-weight:600;padding:2px 7px;background:{{ m.bg }};color:{{ m.c }};min-width:84px;text-align:center;">{{ m.tag }}</span>
+                <span style="flex:1;font-size:10.5px;color:var(--ink-2);">{{ m.note }}</span>
+                <span style="font-family:'IBM Plex Mono';font-size:11px;font-weight:600;color:var(--ink);">{{ m.count }}</span>
+              </div>
+            </sc-for>
+            <div style="padding:8px 14px;font-family:'IBM Plex Mono';font-size:8px;color:var(--ink-3);">v1 keyword rules · LLM auto-theme deferred to v2 · flag-to-hot-family → Decision Queue</div>
+          </div>
+        </div>
+      </section>
+      </sc-if>
+
+      <!-- ============ GENERIC MODULE ============ -->
+      <sc-if value="{{ isGeneric }}" hint-placeholder-val="{{ false }}">
+      <section class="scr" style="padding:20px 22px 40px;">
+        <div style="border:1px solid var(--line-2);background:var(--card);padding:18px;margin-bottom:14px;">
+          <div style="display:flex;justify-content:space-between;align-items:flex-start;">
+            <div>
+              <div style="font-family:'IBM Plex Mono';font-size:9px;letter-spacing:1px;color:var(--ink-3);">MODULE {{ mod.idx }}</div>
+              <div style="font-family:'Archivo';font-weight:700;font-size:22px;color:var(--ink);margin-top:3px;">{{ mod.label }}</div>
+              <div style="font-family:'IBM Plex Mono';font-size:10px;color:var(--ink-3);margin-top:5px;">⌖ {{ mod.source }}</div>
+            </div>
+            <span style="font-family:'IBM Plex Mono';font-size:9px;padding:3px 9px;border:1px solid var(--line-2);color:var(--ink-2);">OWNER · {{ mod.owner }}</span>
+          </div>
+          <p style="font-size:13px;color:var(--ink-2);max-width:680px;line-height:1.55;margin:14px 0 0;">{{ mod.summary }}</p>
+        </div>
+
+        <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-bottom:14px;">
+          <sc-for list="{{ mod.stats }}" as="s" hint-placeholder-count="3">
+            <div style="border:1px solid var(--line-2);background:var(--card);padding:14px;">
+              <div style="font-family:'IBM Plex Mono';font-size:9px;letter-spacing:.5px;color:var(--ink-3);">{{ s.label }}</div>
+              <div style="font-family:'IBM Plex Mono';font-weight:600;font-size:24px;color:{{ s.color }};margin-top:6px;">{{ s.value }}</div>
+              <div style="font-size:10px;color:var(--ink-3);margin-top:3px;">{{ s.note }}</div>
+            </div>
+          </sc-for>
+        </div>
+
+        <sc-if value="{{ mod.broken }}" hint-placeholder-val="{{ false }}">
+        <div style="padding:13px;background:repeating-linear-gradient(45deg,var(--hatch) 0 1px,transparent 1px 8px);border:1px dashed var(--broken);margin-bottom:14px;">
+          <div style="font-family:'IBM Plex Mono';font-size:9.5px;font-weight:600;color:var(--ink-2);">⃠ KNOWN BROKEN / DEFERRED</div>
+          <div style="font-size:11.5px;color:var(--ink-2);margin-top:4px;">{{ mod.broken }}</div>
+        </div>
+        </sc-if>
+
+        <div style="border-top:1px solid var(--line);padding-top:11px;">
+          <div style="font-family:'IBM Plex Mono';font-size:9px;letter-spacing:.5px;color:var(--ink-3);margin-bottom:7px;">⛓ AUTO-CREATED CROSS-LINKS</div>
+          <div style="display:flex;gap:7px;flex-wrap:wrap;">
+            <sc-for list="{{ mod.links }}" as="l" hint-placeholder-count="3">
+              <span style="font-family:'IBM Plex Mono';font-size:9.5px;padding:4px 9px;border:1px solid var(--line-2);background:var(--card);color:var(--ink-2);">↳ {{ l }}</span>
+            </sc-for>
+          </div>
+        </div>
+      </section>
+      </sc-if>
+
+      <!-- ============ SPEC & DECISIONS ============ -->
+      <sc-if value="{{ isSpec }}" hint-placeholder-val="{{ false }}">
+      <section class="scr" data-screen-label="Spec" style="padding:20px 22px 60px;max-width:920px;">
+        <div style="border-bottom:2px solid var(--ink);padding-bottom:11px;margin-bottom:18px;">
+          <div style="font-family:'IBM Plex Mono';font-size:9px;letter-spacing:1.5px;color:var(--signal);font-weight:600;">PRD · DESIGN SPEC · SELF-DOCUMENTING</div>
+          <h2 style="font-family:'Archivo';font-weight:800;font-size:28px;margin:6px 0 0;letter-spacing:-.5px;color:var(--ink);">GT Marketing Hub — Spec &amp; Decisions</h2>
+          <div style="font-size:12.5px;color:var(--ink-2);margin-top:6px;line-height:1.55;">Built to <b>Product Specification v2</b> + the Technical Project Brief. Centralized marketing-ops app for GT Anywhere running a Fall enrollment push and Summer Camp concurrently. 13 modules; the team runs the Monday meeting straight through it.</div>
+        </div>
+
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:22px;">
+          <div>
+            <div style="font-family:'Archivo';font-weight:700;font-size:13px;color:var(--ink);border-bottom:1px solid var(--line-2);padding-bottom:5px;margin-bottom:9px;">§1 · ROLES &amp; HARD GATING</div>
+            <sc-for list="{{ specRoles }}" as="r" hint-placeholder-count="3">
+              <div style="margin-bottom:9px;"><span style="font-family:'IBM Plex Mono';font-size:10px;font-weight:600;color:var(--gold);">{{ r.name }}</span><div style="font-size:11.5px;color:var(--ink-2);line-height:1.5;">{{ r.desc }}</div></div>
+            </sc-for>
+          </div>
+          <div>
+            <div style="font-family:'Archivo';font-weight:700;font-size:13px;color:var(--ink);border-bottom:1px solid var(--line-2);padding-bottom:5px;margin-bottom:9px;">§2 · CROSS-MODULE TRUTHS</div>
+            <sc-for list="{{ specTruths }}" as="t" hint-placeholder-count="5">
+              <div style="font-size:11.5px;color:var(--ink-2);line-height:1.5;margin-bottom:8px;display:flex;gap:7px;"><span style="color:var(--signal);font-family:'IBM Plex Mono';">◆</span><span>{{ t }}</span></div>
+            </sc-for>
+          </div>
+        </div>
+
+        <div style="font-family:'Archivo';font-weight:700;font-size:13px;color:var(--ink);border-bottom:1px solid var(--line-2);padding-bottom:5px;margin:22px 0 11px;">§3 · DESIGN DECISIONS</div>
+        <sc-for list="{{ specDecisions }}" as="d" hint-placeholder-count="7">
+          <div style="display:grid;grid-template-columns:180px 1fr;gap:14px;padding:9px 0;border-bottom:1px solid var(--line);">
+            <div style="font-family:'IBM Plex Mono';font-size:10px;font-weight:600;color:var(--ink);">{{ d.k }}</div>
+            <div style="font-size:11.5px;color:var(--ink-2);line-height:1.5;">{{ d.v }}</div>
+          </div>
+        </sc-for>
+
+        <div style="font-family:'Archivo';font-weight:700;font-size:13px;color:var(--ink);border-bottom:1px solid var(--line-2);padding-bottom:5px;margin:22px 0 11px;">§4 · ASSUMPTIONS (spec leaves open)</div>
+        <sc-for list="{{ specAssume }}" as="a" hint-placeholder-count="4">
+          <div style="font-size:11.5px;color:var(--ink-2);line-height:1.5;margin-bottom:7px;display:flex;gap:7px;"><span style="color:var(--gold);font-family:'IBM Plex Mono';">▸</span><span>{{ a }}</span></div>
+        </sc-for>
+
+        <div style="font-family:'Archivo';font-weight:700;font-size:13px;color:var(--ink);border-bottom:1px solid var(--line-2);padding-bottom:5px;margin:22px 0 11px;">§5 · 13 MODULES · OWNER · SOURCE</div>
+        <sc-for list="{{ specModules }}" as="m" hint-placeholder-count="13">
+          <div style="display:grid;grid-template-columns:22px 1.3fr 1fr 1.4fr;gap:10px;padding:5px 0;border-bottom:1px dotted var(--line);align-items:baseline;"><span style="font-family:'IBM Plex Mono';font-size:9.5px;color:var(--ink-3);">{{ m.idx }}</span><span style="font-size:11.5px;color:var(--ink);font-weight:500;">{{ m.label }}</span><span style="font-family:'IBM Plex Mono';font-size:9px;color:var(--ink-2);">{{ m.owner }}</span><span style="font-family:'IBM Plex Mono';font-size:9px;color:var(--ink-3);">{{ m.src }}</span></div>
+        </sc-for>
+      </section>
+      </sc-if>
+
+    </div>
+  </main>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{&quot;$preview&quot;:{&quot;width&quot;:1380,&quot;height&quot;:880}}">
+class Component extends DCLogic {
+  state = { role:'leader', theme:'light', module:'home', now:Date.now(), dq:[
+    {id:'DQ-118',type:'AUTO · BUDGET',title:'Guerrilla / earned media bets +17.5% over plan',detail:'Committed $47.0K vs $40.0K planned. The >10% variance threshold was breached, so the Budget Tracker routed this here automatically. Reallocate, approve the overage, or cut scope?',from:'Budget Tracker',by:'System · auto-flag',amount:'+$7.0K',age:'2h',status:'pending',mine:false},
+    {id:'DQ-117',type:'PROPOSAL',title:'Fund parent-panel guerrilla bet for the Aug push',detail:'$8K for two parent-panel pop-ups in high-income TX zips during the late-July conversion phase. Projected 30–40 warm intros.',from:'Grassroots Engine',by:'the Grassroots Owner',amount:'+$8.0K',age:'1d',status:'pending',mine:true},
+    {id:'DQ-116',type:'PROPOSAL',title:'Approve Joe sizzle-reel + Thailand videographer travel',detail:'Founder content: sizzle reel for Joe and a 5-family interview shoot. Travel + production within content workstream.',from:'Content & Thought Leadership',by:'the Content Owner',amount:'+$6.0K',age:'1d',status:'pending',mine:false},
+    {id:'DQ-115',type:'GOAL CHANGE',title:'Raise ambassador-influenced enrollment target 30 → 40',detail:'Ambassador attribution pacing ahead; leadership proposes a higher bar for end-of-August review.',from:'KPI Scorecard',by:'Leadership',amount:'—',age:'2d',status:'approved',mine:false},
+    {id:'DQ-114',type:'HOT FAMILY',title:'Urgent follow-up — T1 family flagged from SMS',detail:'High-intent T1 family ($160K+, K-2, clicked) went quiet after a tuition question. Escalated from Nurture / Admissions for a personal response.',from:'Nurture & Lifecycle',by:'the Admissions Owner',amount:'—',age:'3d',status:'needinfo',mine:false},
+    {id:'DQ-112',type:'AUTO · SYNC',title:'Sync parity drop — income field at 94%',detail:'Supabase ⇄ HubSpot income-field parity fell below threshold; data-confidence banner is live app-wide. Acknowledge and prioritize the fix?',from:'CRM / Marketing Ops',by:'System · auto-flag',amount:'—',age:'4d',status:'rejected',mine:false},
+    {id:'DQ-108',type:'PROPOSAL',title:'Toolkit budget for 12 new ambassadors',detail:'Onboarding kits + first-event materials for the new ambassador cohort.',from:'Grassroots Engine',by:'the Grassroots Owner',amount:'+$2.4K',age:'9d',status:'approved',mine:true},
+  ] };
+
+  componentDidMount(){ this._t=setInterval(()=>this.setState({now:Date.now()}),1000);
+    this._k=(e)=>{ if((e.altKey||e.metaKey)&&(e.key==='t'||e.key==='T')){ this.setState(s=>({theme:s.theme==='light'?'dark':'light'})); } };
+    window.addEventListener('keydown',this._k);
+  }
+  componentWillUnmount(){ clearInterval(this._t); window.removeEventListener('keydown',this._k); }
+  go(id){ return ()=>this.setState({module:id}); }
+  act(id,status){ return ()=>this.setState(s=>({dq:s.dq.map(d=>d.id===id?{...d,status}:d)})); }
+
+  renderVals(){
+    const S=this.state, role=S.role;
+    const isAdmin=role==='admin', isLeader=role==='leader', isOperator=role==='operator';
+    const cv=v=>`var(${v})`;
+
+    const target=Date.UTC(2026,7,17,4,0,0);
+    let s=Math.max(0,Math.floor((target-S.now)/1000));
+    const dd=Math.floor(s/86400); s-=dd*86400;
+    const hh=Math.floor(s/3600); s-=hh*3600;
+    const mm=Math.floor(s/60); s-=mm*60;
+    const pad=n=>String(n).padStart(2,'0');
+
+    const cat=[
+      {g:'COMMAND',items:[
+        {id:'home',idx:'01',label:'Executive Command',src:'Aggregates · all 12 modules',owner:'All (personal)'},
+        {id:'dashboard',idx:'06',label:'KPI Scorecard',src:'Reads all · owns nothing',owner:'the Marketing Lead'},
+        {id:'decision',idx:'11',label:'Decision Queue',src:'Manual submission · leadership',owner:'Leadership (submit: all)'},
+        {id:'budget',idx:'10',label:'Budget Tracker',src:'System of record · the Hub',owner:'the Budget Owner'},
+      ]},
+      {g:'GROWTH',items:[
+        {id:'grassroots',idx:'02',label:'Grassroots Engine',src:'HubSpot + community.gt.school',owner:'the Grassroots Owner'},
+        {id:'content',idx:'03',label:'Content & Thought Ldr',src:'Google Sheet + HubSpot + Meta',owner:'the Content Owner'},
+        {id:'camp',idx:'04',label:'Summer Camp',src:'summer.gt.school + reg form',owner:'the Content Owner'},
+        {id:'events',idx:'08',label:'Field & Events',src:'Manual entry',owner:'the Field & Events Owner'},
+        {id:'nurture',idx:'05',label:'Nurture & Lifecycle',src:'Supabase app_form + HubSpot',owner:'the Marketing Lead'},
+      ]},
+      {g:'OPERATIONS',items:[
+        {id:'crm',idx:'07',label:'CRM / Marketing Ops',src:'Supabase ⇄ HubSpot parity',owner:'the Marketing Lead'},
+        {id:'admissions',idx:'09',label:'Admissions & VoC',src:'HubSpot Conversations + manual',owner:'the Admissions Owner'},
+        {id:'website',idx:'13',label:'Website & Digital',src:'GA4 · gt.school + anywhere.gt.school',owner:'the Marketing Lead'},
+        {id:'resources',idx:'12',label:'Resource Library',src:'Manual upload + linked docs',owner:'All'},
+      ]},
+      {g:'SYSTEM',items:[
+        {id:'spec',idx:'§',label:'Spec & Decisions',src:'This build · PRD',owner:'—'},
+      ]},
+    ];
+
+    const ownModule='grassroots';
+    const navGroups=cat.map(grp=>({group:grp.g,items:grp.items.map(it=>{
+      const active=S.module===it.id;
+      let tag=null,tagBg='transparent',tagColor=cv('--ink-3');
+      if(it.id==='decision' && isOperator){ tag='LEAD'; tagBg=cv('--accent-soft'); tagColor=cv('--ink-3'); }
+      if(it.id===ownModule && isOperator){ tag='OWN'; tagBg=cv('--gold-soft'); tagColor=cv('--gold'); }
+      return {idx:it.idx,label:it.label,go:this.go(it.id),
+        bg:active?cv('--accent-soft'):'transparent', color:active?cv('--ink'):cv('--ink-2'),
+        idxColor:active?cv('--signal'):cv('--ink-3'), bar:active?cv('--signal'):'transparent',
+        weight:active?'600':'400', tag,tagBg,tagColor};
+    })}));
+
+    const roles=[{k:'admin',label:'ADMIN'},{k:'leader',label:'LEADER'},{k:'operator',label:'OPER'}];
+    const roleBtns=roles.map(r=>{const a=role===r.k;return{label:r.label,go:()=>this.setState({role:r.k}),
+      bg:a?cv('--ink'):cv('--card-2'),color:a?cv('--paper'):cv('--ink-2'),border:a?cv('--ink'):cv('--line-2')};});
+
+    let curMeta=null; cat.forEach(g=>g.items.forEach(i=>{if(i.id===S.module)curMeta=i;}));
+    const titleMap={home:'Executive Command Center',dashboard:'KPI Scorecard',decision:'Decision Queue',budget:'Budget Tracker',crm:'CRM / Marketing Operations',nurture:'Nurture & Lifecycle',spec:'Spec & Decisions'};
+    const headerTitle=titleMap[S.module]||(curMeta?curMeta.label:'');
+    const headerSource=curMeta?curMeta.src:'';
+
+    const known=['home','dashboard','budget','decision','crm','nurture','spec'];
+    const isGeneric=!known.includes(S.module);
+
+    const genData={
+      content:{owner:'the Content Owner',summary:'Editorial calendar, production kanban (synced read+write to a Google Sheet), per-piece UTM attribution, and a brand-voice auditor in suggest-edits mode. Does NOT include summer-camp content (Module 4). Founder content in flight: Pam (AGL podcast), Joe (sizzle reel), advisor series.',stats:[{label:'PRODUCTIONS IN FLIGHT',value:'14',note:'4 in review',color:cv('--ink')},{label:'PUBLISHED · MTD',value:'9 / 12',note:'plan',color:cv('--ink')},{label:'X / TWITTER CONV.',value:'42%',note:'the pre-sold engine',color:cv('--ink')}],links:['Nurture (testimonials)','Admissions (objection briefs)','Resource Library'],broken:'UTM attribution per piece is unreliable — Module 7 tracks the rebuild. Substack + podcast counts are manual v1 (API later).'},
+      camp:{owner:'the Content Owner',summary:'GT summer-camp registrations, capacity, and revenue across 4 campuses (3× two-week + 1× one-week). Separate audience, timeline, and P&L from the Fall push. Reconciles summer.gt.school + a registration form without double-counting. No paid acquisition — ads are paused.',stats:[{label:'CAPACITY SOLD',value:'82%',note:'288 / 350 seats',color:cv('--ink')},{label:'REGISTERED → PAID',value:'76%',note:'reg form + summer.gt',color:cv('--ink')},{label:'REVENUE vs TARGET',value:'$214K',note:'of $260K',color:cv('--ink')}],links:['Content (camp content)','Phase-1 program isolation','KPI Scorecard'],broken:null},
+      events:{owner:'the Field & Events Owner',summary:'GT-organized external events — Shadow Days, chess tournaments, AMAs, festivals. Does NOT include ambassador-hosted events (those live in Grassroots, shown here read-only). Proposes priority events → leadership approves via Decision Queue.',stats:[{label:'UPCOMING · 30D',value:'7',note:'3 Shadow Days',color:cv('--ink')},{label:'RSVP → ATTENDANCE',value:'64%',note:'manual',color:cv('--ink')},{label:'EVENT → CONSULT',value:'——',note:'uninstrumented',color:cv('--broken')}],links:['Grassroots (ambassador events, read-only)','Decision Queue (proposals)','Budget Tracker'],broken:'Event-to-consult conversion is uninstrumented. v1 is manual entry per event ("how many RSVPs booked a consult?"); auto-tracking deferred.'},
+      admissions:{owner:'the Admissions Owner',summary:'Admission pipeline numbers + Voice of Customer. Surfaces family objections and closes the feedback loop to marketing — top objections auto-create content briefs in Module 3. "What are families saying, and what content answers it?"',stats:[{label:'OBJECTIONS LOGGED · WK',value:'47',note:'top: cost, accreditation',color:cv('--ink')},{label:'FAMILY SENTIMENT',value:'+47',note:'NPS · n=212',color:cv('--ok')},{label:'CONTENT BRIDGE HIT',value:'68%',note:'briefs → published',color:cv('--ink')}],links:['Content (auto-stub briefs)','Nurture (hot families)','Decision Queue'],broken:null},
+      website:{owner:'the Marketing Lead',summary:'Website performance across gt.school and anywhere.gt.school. Sessions, subpage performance, PDF downloads, and conversion paths. Sessions and acquisition data are reliable; UTM-tagged attribution is broken (Module 7 tracks the fix).',stats:[{label:'SESSIONS · 7D',value:'18.4K',note:'both sites · GA4',color:cv('--ink')},{label:'TOP CHANNEL',value:'Organic',note:'41% of sessions',color:cv('--ink')},{label:'UTM ATTRIBUTION',value:'BROKEN',note:'needs rebuild',color:cv('--signal')}],links:['CRM Ops (UTM source)','Content (top pages)','Resource Library (PDF downloads)'],broken:'UTM attribution is broken end-to-end (the website is where UTMs originate). GA4 cross-site linking between gt.school + anywhere.gt.school is still TBD. Sessions are trustworthy; channel ROI is not.'},
+      resources:{owner:'All',summary:'A flat, tag-filterable document shelf — strategy materials, persona dossiers, brand strategy, the outcomes tracker, Brainlifts. Deliberately simple: no automation, no versioning. Pre-loaded resources are mocked as sample uploads so the library has content to filter.',stats:[{label:'RESOURCES',value:'38',note:'mocked sample set',color:cv('--ink')},{label:'TYPES',value:'6',note:'DOC·SHEET·SLIDES·PDF·MD·HTML',color:cv('--ink')},{label:'MOST ACCESSED',value:'Persona v2',note:'dossier',color:cv('--ink')}],links:['Content','Website (PDF downloads)','Grassroots'],broken:null},
+      grassroots:{owner:'the Grassroots Owner',summary:'Parent-ambassador program, market map of gifted-family nodes, referral sprints, and the parent-led event calendar (ambassador events live HERE; Field Marketing reads them read-only). Reconciles HubSpot + community.gt.school. This is the demo Operator’s module — editable here, read-only elsewhere.',stats:[{label:'AMBASSADORS ACTIVE',value:'47 / 25',note:'goal exceeded',color:cv('--ok')},{label:'WARM INTROS',value:'138 / 200',note:'running total',color:cv('--ink')},{label:'INFLUENCED ENROLL.',value:'18 / 30',note:'attribution chain',color:cv('--ink')}],links:['CRM (reconcile dual source)','Field & Events (read-only)','Admissions (hot families)','Content (testimonial stubs)'],broken:null},
+    };
+    const gd=genData[S.module]||{owner:'—',summary:'',stats:[],links:[],broken:null};
+    const mod={idx:curMeta?curMeta.idx:'',label:curMeta?curMeta.label:'',source:curMeta?curMeta.src:'',owner:gd.owner,summary:gd.summary,stats:gd.stats,links:gd.links,broken:gd.broken};
+
+    const C={ok:cv('--ok'),warn:cv('--warn'),bad:cv('--signal'),okBg:cv('--ok-soft'),warnBg:cv('--warn-soft'),badBg:cv('--signal-soft'),ink3:cv('--ink-3'),soft:cv('--accent-soft')};
+
+    const kpiRows=[
+      {name:'Applicants (total)',note:'fall push · cumulative',source:'SUPA',now:'1,284',last:'1,221',delta:'▲5%',deltaColor:C.ok,target:'—',status:'ON TRACK',statusBg:C.okBg,statusColor:C.ok},
+      {name:'Deposits vs Fall goal',note:'goal 180',source:'SUPA',now:'112',last:'101',delta:'▲11%',deltaColor:C.ok,target:'180',status:'WATCH',statusBg:C.warnBg,statusColor:C.warn},
+      {name:'Conversion · top channel (X)',note:'pre-sold engine',source:'SUPA',now:'42%',last:'40%',delta:'▲2pt',deltaColor:C.ok,target:'40%',status:'ON TRACK',statusBg:C.okBg,statusColor:C.ok},
+      {name:'Engagement-tier mix (clicked)',note:'top conversion predictor',source:'HUBS',now:'31%',last:'29%',delta:'▲2pt',deltaColor:C.ok,target:'35%',status:'ON TRACK',statusBg:C.okBg,statusColor:C.ok},
+      {name:'24-hr follow-up SLA',note:'owner-attributable',source:'HUBS',now:'78%',last:'82%',delta:'▼4pt',deltaColor:C.bad,target:'90%',status:'AT RISK',statusBg:C.badBg,statusColor:C.bad},
+      {name:'Objections logged',note:'BDR + SMS + admissions',source:'HUBS+M',now:'47',last:'39',delta:'▲21%',deltaColor:C.warn,target:'—',status:'WATCH',statusBg:C.warnBg,statusColor:C.warn},
+      {name:'Ambassador-influenced enroll.',note:'attribution chain',source:'GRASS',now:'18',last:'15',delta:'▲3',deltaColor:C.ok,target:'30',status:'ON TRACK',statusBg:C.okBg,statusColor:C.ok},
+      {name:'Marketing → onboarding handoffs',note:'deal-stage transitions',source:'HUBS',now:'26',last:'22',delta:'▲18%',deltaColor:C.ok,target:'—',status:'ON TRACK',statusBg:C.okBg,statusColor:C.ok},
+      {name:'Event-to-consult conversion',note:'uninstrumented · manual v1',source:'—',now:'——',last:'——',delta:'n/a',deltaColor:C.ink3,target:'—',status:'⃠ NOT INSTRUMENTED',statusBg:C.soft,statusColor:cv('--ink-2')},
+    ].map((r,i)=>({...r,rowBg:i%2?cv('--card-2'):'transparent'}));
+
+    const Bsrc=[
+      {name:'Grassroots marketing',owner:'the Grassroots Owner',planned:'$210.0K',committed:'$196.0K',actual:'$138.0K',pctN:93,over:false},
+      {name:'Thought leadership + content engine',owner:'the Content Owner',planned:'$90.0K',committed:'$73.0K',actual:'$49.0K',pctN:81,over:false},
+      {name:'Guerrilla / earned media bets',owner:'Leadership',planned:'$40.0K',committed:'$47.0K',actual:'$33.0K',pctN:118,over:true},
+      {name:'Marketing foundations + operations',owner:'the Marketing Lead',planned:'$25.0K',committed:'$18.0K',actual:'$13.0K',pctN:72,over:false},
+    ];
+    const budgetRows=Bsrc.map(b=>{
+      const statusBg=b.over?C.badBg:(b.pctN>=90?C.warnBg:C.okBg);
+      const statusColor=b.over?C.bad:(b.pctN>=90?C.warn:C.ok);
+      const status=b.over?'⚑ +17.5% → DQ':(b.pctN>=90?'NEAR CAP':'HEALTHY');
+      return {...b,pct:b.pctN+'%',statusBg,statusColor,status,
+        pctColor:b.over?cv('--signal'):(b.pctN>=90?cv('--warn'):cv('--ink-2'))};
+    });
+
+    // Decision Queue
+    const stMeta={pending:{l:'PENDING',c:cv('--signal'),bg:C.badBg},approved:{l:'APPROVED',c:cv('--ok'),bg:C.okBg},rejected:{l:'CLOSED',c:cv('--ink-3'),bg:C.soft},needinfo:{l:'NEED-INFO',c:cv('--warn'),bg:C.warnBg}};
+    const typeColor=t=>t.indexOf('AUTO')===0?cv('--signal'):t==='GOAL CHANGE'?cv('--gold'):t==='HOT FAMILY'?cv('--signal'):cv('--ink-2');
+    const decorate=d=>({...d,sm:stMeta[d.status],typeColor:typeColor(d.type),
+      showActions:d.status==='pending'&&isLeader,
+      approve:this.act(d.id,'approved'),reject:this.act(d.id,'rejected'),needinfo:this.act(d.id,'needinfo')});
+    const dqAll=S.dq.map(decorate);
+    const dqMine=S.dq.filter(d=>d.mine).map(decorate);
+    const dqCounts={pending:S.dq.filter(d=>d.status==='pending').length,
+      escalated:S.dq.filter(d=>d.type.indexOf('AUTO')===0&&d.status==='pending').length,
+      needinfo:S.dq.filter(d=>d.status==='needinfo').length};
+
+    // CRM systems
+    const mk=(name,role,last,status,kind)=>{const m={ok:[cv('--ok'),C.okBg],warn:[cv('--warn'),C.warnBg],bad:[cv('--signal'),C.badBg]}[kind];return {name,role,last,status,sc:m[0],sbg:m[1]};};
+    const crmSystems=[
+      mk('Supabase app_form','SOURCE OF TRUTH · funnel/TEFA/income/grade','3m ago','HEALTHY','ok'),
+      mk('HubSpot','CRM · pipeline · engagement · sequences','6m ago','FIELD DRIFT','bad'),
+      mk('community.gt.school','Ambassadors (dual-source w/ HubSpot)','22m ago','RECONCILE','warn'),
+      mk('summer.gt.school','Camp registrations (dual-source w/ form)','14m ago','HEALTHY','ok'),
+      mk('Meta Business Suite','FB + IG engagement (stood-in / seeded)','1h ago','STOOD-IN','warn'),
+      mk('X / Twitter','X engagement (stood-in / seeded)','1h ago','STOOD-IN','warn'),
+      mk('GA4','Web analytics · UTM origin','11m ago','UTM BROKEN','bad'),
+      mk('Google Sheet','Content production (synced r+w)','5m ago','HEALTHY','ok'),
+    ];
+    const fieldFlags=[
+      {field:'income',flag:'UNRELIABLE'},{field:'source',flag:'UNRELIABLE'},{field:'TEFA status',flag:'UNRELIABLE'},
+    ];
+
+    // Nurture
+    const segments=[
+      {tier:'T1 · messaging cohort',count:'~40',desc:'Pamela Hobart + the Marketing Lead own messaging tests for the highest-intent families.'},
+      {tier:'T2 · conversion sprint',count:'3,142',desc:'Email-driven; ~323 families per sales rep, with TX geo-targeting on the subset.'},
+      {tier:'T3 · waitlist',count:'1,124',desc:'Three sub-buckets — ESA-planned, ESA-ineligible, no-indicator. Out-of-pocket is the largest-impact group.'},
+    ];
+    const sqMk=(name,type,aud,open,kind)=>{const m={ok:[cv('--ok'),C.okBg],warn:[cv('--warn'),C.warnBg]}[kind];return {name,type,aud,open,health:kind==='ok'?'OK':'WATCH',sc:m[0],sbg:m[1]};};
+    const sequences=[
+      sqMk('Apply Now — fall','nurture','2,310','31%','ok'),
+      sqMk('Tour no-show re-engage','re-engage','214','28%','ok'),
+      sqMk('Summer camp — seats filling','event','1,180','34%','ok'),
+      sqMk('Lapsed inquiry win-back','re-engage','3,420','19%','warn'),
+      sqMk('Welcome / onboarding','welcome','58','53%','ok'),
+    ];
+    const smMk=(tag,note,count,kind)=>{const m={a:[cv('--signal'),C.badBg],b:[cv('--warn'),C.warnBg],c:[cv('--gold'),cv('--gold-soft')],d:[cv('--ink-3'),C.soft]}[kind];return {tag,note,count,c:m[0],bg:m[1]};};
+    const smsThemes=[
+      smMk('TUITION','cost / price / ESA questions',58,'a'),
+      smMk('NO REPLY','"haven\u2019t heard back" follow-ups',41,'b'),
+      smMk('ACCREDITATION','is it a real school / diploma',27,'d'),
+      smMk('READY','ready to enroll / next steps',19,'c'),
+      smMk('SCHEDULING','start dates / shadow days',16,'d'),
+    ];
+
+    // Workstream health (Home)
+    const wh=(name,owner,week,metric,kind)=>{const c={ok:cv('--ok'),warn:cv('--warn'),bad:cv('--signal')}[kind];return {name,owner,week,metric,color:c,metricColor:kind==='bad'?cv('--signal'):cv('--ink-2')};};
+    const workstreamHealth=[
+      wh('Grassroots Engine','the Grassroots Owner','47 ambassadors active','18 influenced enrollments','ok'),
+      wh('Content & Thought Ldr','the Content Owner','9 / 12 published','founder travel → Decision Queue','warn'),
+      wh('Summer Camp','the Content Owner','82% seats sold','288 / 350 · revenue $214K','ok'),
+      wh('Nurture & Lifecycle','the Marketing Lead','SLA 78% (target 90%)','clicked → 52% commit','warn'),
+      wh('Field & Events','the Field & Events Owner','7 events upcoming','event→consult uninstrumented','warn'),
+      wh('Admissions & VoC','the Admissions Owner','47 objections logged','NPS +47 · bridge 68%','ok'),
+      wh('CRM / Marketing Ops','the Marketing Lead','parity 96.2% · UTM broken','rebuild UTM attribution','bad'),
+      wh('Budget Tracker','the Budget Owner','$233K burned · 64%','Guerrilla +17.5% → DQ','bad'),
+    ];
+
+    // Spec content
+    const specRoles=[
+      {name:'ADMIN — the Marketing Lead',desc:'Full access to every module and can submit decisions, but cannot make Decision-Queue decisions. Owns Nurture, KPI, CRM Ops, and the budget master.'},
+      {name:'LEADER — leadership',desc:'Designated leadership (Growth Marketing Officer, the Budget Owner / fractional CMO, the Co-founder). Full read access; sets goals; comments on any workstream; the ONLY role that can view + decide the full Decision Queue.'},
+      {name:'OPERATOR — module owner',desc:'Owns one module (the Content / Grassroots / Field & Events / Admissions Owner) — write own, read others. Can submit proposals into the Decision Queue but can never view or act on the full queue.'},
+    ];
+    const specTruths=[
+      'Every number has exactly one source of record — funnel/TEFA/income/grade from Supabase app_form (never HubSpot fields), engagement from HubSpot, budget from the Hub itself. Cited inline on every figure.',
+      'The $365K budget reconciles across all four workstreams; the same line item means the same thing in Home, Scorecard, and Decision Queue. Summer Camp is a separate P&L.',
+      'Modules auto-create cross-links: testimonials → Content stubs, objections → content briefs, hot families → Admissions + Decision Queue, ambassador events → Field calendar (read-only).',
+      'Budget variance >10% and sync-parity drops auto-flag into the Decision Queue.',
+      'The Hub is honest about what is broken — UTM attribution, event-to-consult, and unreliable fields (income/source/TEFA) are hatched and labelled, never shown as on-track.',
+    ];
+    const specDecisions=[
+      {k:'Aesthetic POV',v:'"Operations almanac / paper of record." Editorial, dense, hairline-ruled — a fresh interpretation of the brand’s Analog Futurism (gold + navy DNA carried into dark mode), deliberately not a generic SaaS admin or a literal reuse of the brand kit.'},
+      {k:'Source-tag device',v:'Every metric carries a mono citation (SUPA, HUBS, GRASS, GA4…) to its single source of record. Conflicts raise the app-wide data-confidence banner.'},
+      {k:'Honest-broken pattern',v:'Diagonal hatch + plain-language reason for anything uninstrumented or unreliable. "On track" status is reserved for verified-healthy only.'},
+      {k:'Typography',v:'Archivo (display), Public Sans (dense body), IBM Plex Mono (all figures). A fresh stand-in for the brand’s Literata/Inter/Inconsolata trio.'},
+      {k:'Role gating',v:'Hard, visible gates. The Decision Queue renders a different surface per role: Leader (full async approve/reject/need-info), Admin (read + submit, no decisions), Operator (blocked + own submissions only).'},
+      {k:'Composable Home',v:'Per-user dashboard from a 32-widget library with the spec’s default starter pack (Applicants, Deposits, Conversion, T1/T2/T3, Engagement mix, 24-hr SLA, Executive narrative, Workstream health grid).'},
+      {k:'Naming',v:'The spec anonymizes operators to role titles, so the product uses "the Marketing Lead / the Grassroots Owner / …" rather than invented people. Only the spec’s real names appear (founders Pam & Joe; leadership Dave).'},
+    ];
+    const specAssume=[
+      'Admin (the Marketing Lead) may read the Decision Queue but not decide — resolving the spec’s "full access except DQ decision-making" against the brief’s "gated to Leaders only."',
+      'Budget committed/actual figures, KPI weekly values, and segment counts are seeded test data modeled to the spec’s shapes and the $365K total — the brief makes test data part of the deliverable.',
+      'Meta, X, GA4, and summer.gt.school are stood-in/seeded behind the same interface and labelled as such in CRM Ops.',
+      'Demo users: Admin = the Marketing Lead, Leader = Dave (Budget Owner / fractional CMO), Operator = the Grassroots Owner.',
+    ];
+    const specModules=cat.flatMap(g=>g.items).filter(i=>i.id!=='spec').sort((a,b)=>(a.idx==='§'?99:+a.idx)-(b.idx==='§'?99:+b.idx)).map(i=>({idx:i.idx,label:i.label,owner:i.owner,src:i.src}));
+
+    const u = isAdmin?{n:'the Marketing Lead',r:'Admin · Marketing Lead',i:'ML',g:'Good morning, Marketing Lead'}
+           : isLeader?{n:'Dave',r:'Leader · Budget Owner / CMO',i:'DV',g:'Good morning, Dave'}
+           : {n:'the Grassroots Owner',r:'Operator · Grassroots Engine',i:'GO',g:'Good morning, Grassroots Owner'};
+
+    return {
+      dqAll, dqMine, dqCounts, crmSystems, fieldFlags, segments, sequences, smsThemes, workstreamHealth,
+      theme:S.theme, role, isAdmin,isLeader,isOperator,
+      isHome:S.module==='home', isDashboard:S.module==='dashboard', isBudget:S.module==='budget',
+      isDecision:S.module==='decision', isCrm:S.module==='crm', isNurture:S.module==='nurture',
+      isSpec:S.module==='spec', isGeneric,
+      canSeeQueue:isLeader||isAdmin,
+      dd:String(dd), hh:pad(hh), mm:pad(mm), ss:pad(Math.max(0,Math.floor(((target-S.now)/1000)%60))),
+      userName:u.n, userRole:u.r, userInitials:u.i, homeGreeting:u.g,
+      readonlyChip: isOperator?(S.module===ownModule?'YOU OWN THIS':(['dashboard','budget','crm','nurture'].includes(S.module)||isGeneric?'READ-ONLY':null)):null,
+      confidence:true,
+      navGroups, roleBtns, headerTitle, headerSource, mod,
+      kpiRows, budgetRows, specRoles, specTruths, specDecisions, specAssume, specModules,
+      themeLabel:S.theme==='light'?'◐ LIGHT MODE':'◑ DARK MODE',
+      toggleTheme:()=>this.setState(st=>({theme:st.theme==='light'?'dark':'light'})),
+      goDash:this.go('dashboard'), goBudget:this.go('budget'), goDecision:this.go('decision'),
+      goCrm:this.go('crm'), goNurture:this.go('nurture'), goWebsite:this.go('website'),
+    };
+  }
+}
+</script>
+</body>
+</html>
