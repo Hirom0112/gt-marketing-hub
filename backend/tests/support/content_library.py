@@ -51,6 +51,18 @@ class InMemoryContentLibrary(ContentLibrary):
             results.append(asset)
         return results
 
+    def list_drafts(self, source_ref: str) -> list[LibraryAsset]:
+        """Return DRAFT assets carrying ``source_ref`` (insertion order).
+
+        Mirrors :meth:`SqliteContentLibrary.list_drafts`: only ``lifecycle=draft``
+        assets whose ``source_ref`` matches exactly (search hides drafts).
+        """
+        return [
+            asset
+            for asset in self._assets.values()
+            if asset.lifecycle is LifecycleStage.DRAFT and asset.source_ref == source_ref
+        ]
+
     @classmethod
     def seeded(cls) -> InMemoryContentLibrary:
         """Hydrate from the same seed contract as the production library.

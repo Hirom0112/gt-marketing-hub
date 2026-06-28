@@ -59,6 +59,18 @@ class ContentLibrary(ABC):
         kept+validated set in insertion order.
         """
 
+    @abstractmethod
+    def list_drafts(self, source_ref: str) -> list[LibraryAsset]:
+        """Return the DRAFT assets carrying ``source_ref`` (insertion order).
+
+        The surgical companion to :meth:`search` for cross-module stubs (e.g. the
+        Module-2 grassroots testimonial drafts, ``source_ref='grassroots_testimonial'``):
+        :meth:`search` deliberately hides drafts (it returns only kept+validated
+        assets), so the Content surface needs this narrow read to surface the
+        recently-captured stubs for the team to pick up. Returns ONLY
+        ``lifecycle=draft`` assets whose ``source_ref`` matches exactly.
+        """
+
 
 class SqliteContentLibrary(ContentLibrary):
     """Persistent :class:`ContentLibrary` backed by stdlib ``sqlite3`` (D-8, A-11).
@@ -181,6 +193,25 @@ class SqliteContentLibrary(ContentLibrary):
             if wanted_tags and not wanted_tags.issubset({t.lower() for t in asset.tags}):
                 continue
             results.append(asset)
+        return results
+
+    def list_drafts(self, source_ref: str) -> list[LibraryAsset]:
+        """Return DRAFT assets carrying ``source_ref`` (insertion order via ``seq``).
+
+        Pushes the draft filter to SQL (``lifecycle='draft'``) then matches
+        ``source_ref`` over the deserialized asset. Does NOT touch :meth:`search`'s
+        kept-only contract — a draft never surfaces in search (FR-3.4 / §5).
+        """
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT payload FROM content_library WHERE lifecycle = ? ORDER BY seq",
+                (LifecycleStage.DRAFT.value,),
+            ).fetchall()
+        results: list[LibraryAsset] = []
+        for (payload,) in rows:
+            asset = LibraryAsset.model_validate_json(payload)
+            if asset.lifecycle is LifecycleStage.DRAFT and asset.source_ref == source_ref:
+                results.append(asset)
         return results
 
     @classmethod

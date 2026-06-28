@@ -448,6 +448,15 @@ grassroots:                 # Module 2 (Grassroots Engine) — goal-bar targets 
   sprint_health:                    # referral-sprint pacing band
     behind_pace_frac: 0.8           # a sprint at >= 80% of linearly-expected conversions reads on_pace; below it reads behind
 
+content:                    # Module 3 (Content & Thought Leadership) — channel labels + the 42% X conversion-engine figure + calendar conflict + ranking sizes; single home for the surfaced numbers (INV-11)
+  channels: [substack, x, instagram, facebook, podcast, email, youtube]  # the seven content channel labels (aggregate; INV-1/INV-6)
+  x_conversion_rate: 0.42           # the "42% conversion engine" for X/Twitter — the seed derives X conversions from this so the surfaced rate is computed, not hardcoded
+  calendar:
+    conflict_threshold: 4           # >= 4 entries on the same day flags that day as a scheduling conflict
+  rankings:
+    top_n: 3                        # how many top pieces the performance rollup surfaces
+    bottom_n: 3                     # how many bottom pieces the performance rollup surfaces
+
 rbac:                       # B1 — role-based access-control matrix; single home for the three-role permission grid (CLAUDE.md §7; INV-11)
   roles: [admin, leader, operator]  # the closed role set; the three canonical roles MUST be present
   permissions:                      # permission name → roles that hold it (permission → roles); permits = role in permissions[perm]

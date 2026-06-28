@@ -16,6 +16,7 @@ from app.api.auth import router as auth_router
 from app.api.budget import router as budget_router
 from app.api.contact_outcome import router as contact_outcome_router
 from app.api.content import router as content_router
+from app.api.content_analytics import router as content_analytics_router
 from app.api.content_kanban import router as content_kanban_router
 from app.api.crm_ops import router as crm_ops_router
 from app.api.crm_status import router as crm_status_router
@@ -186,6 +187,14 @@ app.include_router(crm_ops_router)
 # brand memory, discard strengthens a dont signal), /content/library (kept+
 # validated search). Nothing publishes without an explicit keep (INV-2/INV-3).
 app.include_router(content_router)
+
+# Content & Thought-Leadership analytics (Module 3; ARCH §5.3/§6) — GET
+# /content/overview|calendar|performance|testimonial-stubs (any seat); owner-gated
+# POST /content/calendar/reschedule|entry (operator must own 'content'; leaders/admins
+# any); POST /content/brand-voice/suggest (advisory V-4 suggest-edits — INV-2 proposal,
+# never applied). Pure core (app.core.content_analytics) + store seam
+# (app.data.content_metrics_store, 0036) + the V-4 brand judge. INV-1/6/11.
+app.include_router(content_analytics_router)
 
 # GEO tracking (FR-3.7/4.4; ARCH §5.5/§6) — /geo GET (coverage vs the 0% baseline
 # + lift, a deterministic default pass) + /geo/sample POST (a fresh repeated-

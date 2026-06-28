@@ -44,6 +44,11 @@ from app.data.budget_store import (
     InMemoryBudgetStore,
     build_supabase_budget_store,
 )
+from app.data.content_metrics_store import (
+    ContentMetricsStore,
+    InMemoryContentMetricsStore,
+    build_supabase_content_metrics_store,
+)
 from app.data.decisions_store import (
     DecisionsStore,
     InMemoryDecisionsStore,
@@ -480,6 +485,60 @@ def _seeded_in_memory_grassroots_store(program: Program) -> InMemoryGrassrootsSt
 _grassroots_store: GrassrootsStore = _build_grassroots_store()
 
 
+def _build_content_metrics_store() -> ContentMetricsStore:
+    """Bind the Module-3 Content-metrics store, MIRRORING ``_build_grassroots_store``.
+
+    The same ``COCKPIT_REPO`` / ``SUPABASE_URL`` selection as the family, watermark,
+    payments, decisions, layouts, budget, and grassroots stores, so they never disagree
+    on which backend is live (the NFR-8 store seam):
+
+    - ``synthetic`` ⇒ FORCE the in-memory store (never Supabase), with the deterministic
+      demo calendar/metrics/pieces seeded for the active program (INV-1).
+    - ``supabase`` ⇒ REQUIRE the live store; a missing ``SUPABASE_URL`` is a misconfig
+      ⇒ raise (fail loud, the family-store posture).
+    - ``auto`` (default) ⇒ Supabase when ``SUPABASE_URL`` is configured, else the seeded
+      in-memory v1 fallback (A-3).
+    """
+    settings = Settings.from_env()
+    repo_mode = settings.cockpit_repo
+    program = resolve_program(settings.gt_program_id)
+    if repo_mode == "synthetic":
+        return _seeded_in_memory_content_metrics_store(program)
+    if repo_mode == "supabase":
+        supabase = build_supabase_content_metrics_store()
+        if supabase is None:
+            raise RuntimeError(
+                "COCKPIT_REPO=supabase requires SUPABASE_URL (+ "
+                "SUPABASE_SERVICE_ROLE_KEY) for the Content-metrics store; none was "
+                "configured. Set them, or use COCKPIT_REPO=synthetic / auto."
+            )
+        return supabase
+    return build_supabase_content_metrics_store() or _seeded_in_memory_content_metrics_store(
+        program
+    )
+
+
+def _seeded_in_memory_content_metrics_store(program: Program) -> InMemoryContentMetricsStore:
+    """Build the in-memory content-metrics store + the deterministic demo seed (Module 3).
+
+    The demo calendar/metrics/pieces are seeded for the active program so the overview +
+    calendar + performance surfaces are demonstrable on synthetic data alone (idempotent;
+    INV-1). The seed reads the channel labels + the 42% X conversion rate from ``params``
+    (INV-11). Tests that need a CLEAN store construct :class:`InMemoryContentMetricsStore`
+    directly (no seed).
+    """
+    store = InMemoryContentMetricsStore(params=_params)
+    store.seed_demo(program)
+    return store
+
+
+# Singleton Content-metrics store (Module 3) — the editorial-calendar + channel/piece
+# metrics state behind the same NFR-8 seam as ``_repository``. Default v1 = in-memory
+# (A-3), seeded with the deterministic demo; production swaps the Supabase-backed impl
+# over the 0036 tables.
+_content_metrics_store: ContentMetricsStore = _build_content_metrics_store()
+
+
 def _build_goals_store() -> GoalsStore:
     """Bind the Module-6 KPI-goals store, MIRRORING ``_build_budget_store``.
 
@@ -878,6 +937,11 @@ def get_budget_store() -> BudgetStore:
 def get_grassroots_store() -> GrassrootsStore:
     """FastAPI dependency yielding the active Grassroots Engine store (Module 2 seam)."""
     return _grassroots_store
+
+
+def get_content_metrics_store() -> ContentMetricsStore:
+    """FastAPI dependency yielding the active Content-metrics store (Module 3 seam)."""
+    return _content_metrics_store
 
 
 def get_goals_store() -> GoalsStore:

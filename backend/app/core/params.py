@@ -1577,6 +1577,83 @@ class Grassroots(_StrictModel):
     sprint_health: GrassrootsSprintHealth
 
 
+class ContentCalendar(_StrictModel):
+    """content.calendar — the editorial-calendar conflict rule (Module 3; INV-11).
+
+    ``conflict_threshold`` is the number of calendar entries scheduled on the SAME
+    day at/above which that day is flagged a SCHEDULING CONFLICT (too many pieces
+    competing for one day). The single canonical home (INV-11); the conflict deriver
+    (``core/content_analytics.py``) reads it, never a code literal. MUST be ``>= 2``
+    (a threshold of 1 would flag every scheduled day).
+    """
+
+    conflict_threshold: int
+
+    @model_validator(mode="after")
+    def _threshold_valid(self) -> ContentCalendar:
+        if self.conflict_threshold < 2:
+            raise ValueError(
+                f"content.calendar.conflict_threshold must be >= 2, got {self.conflict_threshold!r}"
+            )
+        return self
+
+
+class ContentRankings(_StrictModel):
+    """content.rankings — the per-piece top/bottom ranking sizes (Module 3; INV-11).
+
+    ``top_n``/``bottom_n`` cap how many best/worst pieces the performance rollup
+    surfaces. The single canonical home (INV-11); the ranking core reads them, never
+    a code literal. Each MUST be ``>= 1``.
+    """
+
+    top_n: int
+    bottom_n: int
+
+    @model_validator(mode="after")
+    def _sizes_positive(self) -> ContentRankings:
+        for name in ("top_n", "bottom_n"):
+            value = getattr(self, name)
+            if value < 1:
+                raise ValueError(f"content.rankings.{name} must be >= 1, got {value!r}")
+        return self
+
+
+class Content(_StrictModel):
+    """content — Module 3 (Content & Thought Leadership) business tunables (INV-11).
+
+    The single canonical home for the Content surface's surfaced numbers — the
+    deterministic core (``core/content_analytics.py``) and the demo seed read them
+    here, never a code literal:
+
+    * ``channels`` — the closed list of content channel labels (substack / x /
+      instagram / facebook / podcast / email / youtube). Aggregate labels only
+      (INV-1/INV-6); the channel CATEGORIES live here, not in the migration.
+    * ``x_conversion_rate`` — the "42% conversion engine" figure for X/Twitter: the
+      demo seed derives X's conversions from this rate (so the surfaced ~42% is a
+      REAL computed rate over seeded reach/clicks, never a hardcoded headline). A
+      FRACTION in [0, 1].
+    * ``calendar`` — the editorial-calendar conflict rule.
+    * ``rankings`` — the per-piece top/bottom ranking sizes.
+    """
+
+    channels: list[str]
+    x_conversion_rate: float
+    calendar: ContentCalendar
+    rankings: ContentRankings
+
+    @model_validator(mode="after")
+    def _content_valid(self) -> Content:
+        if not self.channels:
+            raise ValueError("content.channels must be non-empty")
+        if len(set(self.channels)) != len(self.channels):
+            raise ValueError(f"content.channels must not repeat a label, got {self.channels!r}")
+        if not 0.0 <= self.x_conversion_rate <= 1.0:
+            raise ValueError(
+                f"content.x_conversion_rate must be in [0, 1], got {self.x_conversion_rate!r}"
+            )
+        return self
+
+
 class SummerCamp(_StrictModel):
     """summer_camp — Summer Camp dual-source reconcile business tunables (INV-11).
 
@@ -1850,6 +1927,7 @@ class Params(_StrictModel):
     rbac: Rbac
     budget: Budget
     grassroots: Grassroots
+    content: Content
     summer_camp: SummerCamp
 
 
