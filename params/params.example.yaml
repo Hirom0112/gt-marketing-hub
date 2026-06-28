@@ -437,6 +437,17 @@ budget:                     # B4 — marketing budget partition + variance-flag 
     guerrilla: 40000                # guerrilla / experiential
     ops: 25000                      # marketing ops
 
+grassroots:                 # Module 2 (Grassroots Engine) — goal-bar targets + market-map categories + sprint pacing; single home for the surfaced numbers (INV-11)
+  targets:                          # the four goal-bar targets the roster is measured against
+    active_ambassadors: 25          # target count of ACTIVE/CHAMPION ambassadors
+    warm_intros: 200                # target total of warm introductions made
+    p2p_calls: 50                   # target total of peer-to-peer calls logged
+    influenced_enrollments: 30      # target count of grassroots-influenced enrollments (attributed conversions)
+  market_map:                       # aggregate community-segment labels the market map groups nodes by (INV-1/INV-6 — labels only)
+    categories: [Parent groups, Homeschool co-ops, Chess clubs, Robotics teams, Debate leagues, Math circles, STEM meetups]
+  sprint_health:                    # referral-sprint pacing band
+    behind_pace_frac: 0.8           # a sprint at >= 80% of linearly-expected conversions reads on_pace; below it reads behind
+
 rbac:                       # B1 — role-based access-control matrix; single home for the three-role permission grid (CLAUDE.md §7; INV-11)
   roles: [admin, leader, operator]  # the closed role set; the three canonical roles MUST be present
   permissions:                      # permission name → roles that hold it (permission → roles); permits = role in permissions[perm]

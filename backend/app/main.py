@@ -28,6 +28,7 @@ from app.api.families import router as families_router
 from app.api.field_events import router as field_events_router
 from app.api.funding import router as funding_router
 from app.api.geo import router as geo_router
+from app.api.grassroots import router as grassroots_router
 from app.api.layouts import router as layouts_router
 from app.api.marketing import router as marketing_router
 from app.api.merge import router as merge_router
@@ -279,6 +280,15 @@ app.include_router(open_data_router)
 # synthetic sources, deduped to the union with conflicts surfaced for human review
 # (INV-2/4). Aggregate, adult-only (INV-6). Backs the Grassroots RECONCILED badge.
 app.include_router(ambassadors_router)
+
+# Grassroots Engine (Module 2) — roster/sprints/market-map/events + cross-links.
+# GET /grassroots/overview|ambassadors|market-map|sprints|events (any seat); owner-gated
+# POST writes (operator must own 'grassroots'; leaders/admins any). Three cross-module
+# links: POST /grassroots/hot-family → Decision Queue (flag_decision), POST
+# /grassroots/testimonial → Content library DRAFT stub, and ambassador_event as the
+# READ-ONLY source the Field & Events module consumes (GET /grassroots/events). Pure
+# core (app.core.grassroots) + store seam (app.data.grassroots_store, 0035). INV-1/6/11.
+app.include_router(grassroots_router)
 
 # Summer Camp dual-source reconcile (summer.gt.school + standalone registration form) —
 # GET /summer/reconcile. Pure reconciler (app.core.summer_reconcile) merges the two

@@ -1486,6 +1486,97 @@ class Budget(_StrictModel):
         return self
 
 
+class GrassrootsTargets(_StrictModel):
+    """grassroots.targets — the four Grassroots goal-bar targets (Module 2; INV-11).
+
+    The single canonical home for the targets the goal-progress core
+    (``core/grassroots.py``) measures the roster against — never a code literal:
+
+    * ``active_ambassadors`` — the target count of ACTIVE/CHAMPION ambassadors.
+    * ``warm_intros`` — the target total of warm introductions made.
+    * ``p2p_calls`` — the target total of peer-to-peer calls logged.
+    * ``influenced_enrollments`` — the target count of grassroots-influenced
+      enrollments (the attributed conversions).
+
+    Every target MUST be ``>= 1`` (a zero target makes the progress bar's pct
+    undefined — drift fails the build, CLAUDE.md §4.1).
+    """
+
+    active_ambassadors: int
+    warm_intros: int
+    p2p_calls: int
+    influenced_enrollments: int
+
+    @model_validator(mode="after")
+    def _targets_positive(self) -> GrassrootsTargets:
+        for name in ("active_ambassadors", "warm_intros", "p2p_calls", "influenced_enrollments"):
+            value = getattr(self, name)
+            if value < 1:
+                raise ValueError(f"grassroots.targets.{name} must be >= 1, got {value!r}")
+        return self
+
+
+class GrassrootsMarketMap(_StrictModel):
+    """grassroots.market_map — the community market-map category labels (Module 2).
+
+    ``categories`` is the closed list of AGGREGATE community-segment labels (parent
+    groups / homeschool co-ops / chess clubs / robotics teams / debate leagues / math
+    circles / …) the market map groups nodes by — aggregate labels only, never a real
+    org/person identity (INV-1/INV-6). The single canonical home (INV-11); the market
+    summary reads it, never a code literal. MUST be non-empty and free of duplicates.
+    """
+
+    categories: list[str]
+
+    @model_validator(mode="after")
+    def _categories_valid(self) -> GrassrootsMarketMap:
+        if not self.categories:
+            raise ValueError("grassroots.market_map.categories must be non-empty")
+        if len(set(self.categories)) != len(self.categories):
+            raise ValueError(
+                f"grassroots.market_map.categories must not repeat a label, got {self.categories!r}"
+            )
+        return self
+
+
+class GrassrootsSprintHealth(_StrictModel):
+    """grassroots.sprint_health — the referral-sprint pacing band (Module 2; INV-11).
+
+    The single canonical home for the threshold the sprint-health core
+    (``core/grassroots.py``) reads — never a code literal. ``behind_pace_frac`` is the
+    FRACTION of the linearly-expected conversions (``families_identified * elapsed``)
+    a sprint must keep up with to read ``on_pace``; below it the sprint reads
+    ``behind``. A FRACTION in (0, 1].
+    """
+
+    behind_pace_frac: float
+
+    @model_validator(mode="after")
+    def _frac_is_valid(self) -> GrassrootsSprintHealth:
+        if not 0.0 < self.behind_pace_frac <= 1.0:
+            raise ValueError(
+                f"grassroots.sprint_health.behind_pace_frac must be in (0, 1], "
+                f"got {self.behind_pace_frac!r}"
+            )
+        return self
+
+
+class Grassroots(_StrictModel):
+    """grassroots — Module 2 (Grassroots Engine) business tunables (INV-11).
+
+    The single canonical home for the Grassroots surface's surfaced numbers — the
+    deterministic core (``core/grassroots.py``) reads them here, never a code literal:
+
+    * ``targets`` — the four goal-bar targets.
+    * ``market_map`` — the aggregate community-category labels.
+    * ``sprint_health`` — the referral-sprint pacing band.
+    """
+
+    targets: GrassrootsTargets
+    market_map: GrassrootsMarketMap
+    sprint_health: GrassrootsSprintHealth
+
+
 class SummerCamp(_StrictModel):
     """summer_camp — Summer Camp dual-source reconcile business tunables (INV-11).
 
@@ -1758,6 +1849,7 @@ class Params(_StrictModel):
     resilience: Resilience
     rbac: Rbac
     budget: Budget
+    grassroots: Grassroots
     summer_camp: SummerCamp
 
 
