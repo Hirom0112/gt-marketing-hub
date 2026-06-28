@@ -196,6 +196,24 @@ class ContactDisposition(StrEnum):
     FOLLOW_UP_NEEDED = "follow_up_needed"
 
 
+class ObjectionReason(StrEnum):
+    """Why a family pushed back on enrolling — the structured objection a rep logs.
+
+    Captured on a contact outcome so the weekly scorecard's "objections logged" KPI
+    reads a REAL count off the append-only contact-outcome spine (our DB), not a
+    placeholder. ``None`` on an outcome means no objection was raised on that attempt;
+    a set value is one counted objection. The taxonomy is the common enrollment
+    push-backs; ``OTHER`` is the catch-all so a rep is never forced to mis-file one.
+    """
+
+    PRICE = "price"
+    TIMING = "timing"
+    LOCATION = "location"
+    PROGRAM_FIT = "program_fit"
+    COMPETITOR = "competitor"
+    OTHER = "other"
+
+
 # The dispositions that count as "no live response" — the silence the presumed-lost
 # rule accumulates (a left voicemail is still no answer back). Named here so the
 # policy (core/nurture.py) reads ONE canonical set, never a scattered literal.
@@ -228,6 +246,11 @@ class ContactOutcomeRecord(BaseModel):
     # A future-dated commitment captured from the call ("paying next week"); drives
     # the follow-up surface and suppresses a premature nudge. None = no promise.
     promised_by: date | None = None
+    # The structured objection the family raised on this attempt, if any (Module 6).
+    # None = no objection logged; a set value is one counted objection (the source of
+    # the scorecard's "objections logged" KPI). Additive + default-None so every
+    # existing caller that omits it still validates (back-compat).
+    objection: ObjectionReason | None = None
     note: str = ""
     created_at: datetime
 
@@ -408,19 +431,32 @@ class ObservabilityLog(ABC):
         human: str,
         student_id: UUID | None = None,
         promised_by: date | None = None,
+        objection: ObjectionReason | None = None,
         note: str = "",
         created_at: datetime | None = None,
     ) -> ContactOutcomeRecord:
         """Append a rep's contact-attempt outcome (the 'log a call outcome' event).
 
         Append-only (INV-2): a logged event the core derives recency/lifecycle from,
-        never a direct state write. ``promised_by`` captures a commitment date.
+        never a direct state write. ``promised_by`` captures a commitment date;
+        ``objection`` captures a structured push-back the scorecard counts (Module 6).
         """
         raise NotImplementedError
 
     @abstractmethod
     def list_contact_outcomes(self, family_id: UUID) -> list[ContactOutcomeRecord]:
         """This family's contact outcomes, in append order (owner-scoped at the API)."""
+        raise NotImplementedError
+
+    @abstractmethod
+    def count_objections(self) -> int:
+        """Total contact-outcome events carrying a logged objection (Module 6 KPI).
+
+        The real source behind the weekly scorecard's "objections logged" number: a
+        count of append-only contact-outcome records whose ``objection`` is set (our
+        DB). A logged objection increments it; zero logged objections ⇒ ``0`` — an
+        honest absence, never a fabricated figure.
+        """
         raise NotImplementedError
 
     @abstractmethod
@@ -630,6 +666,7 @@ class InMemoryObservabilityLog(ObservabilityLog):
         human: str,
         student_id: UUID | None = None,
         promised_by: date | None = None,
+        objection: ObjectionReason | None = None,
         note: str = "",
         created_at: datetime | None = None,
     ) -> ContactOutcomeRecord:
@@ -640,6 +677,7 @@ class InMemoryObservabilityLog(ObservabilityLog):
             disposition=disposition,
             human=human,
             promised_by=promised_by,
+            objection=objection,
             note=note,
             created_at=created_at if created_at is not None else _now(),
         )
@@ -648,6 +686,12 @@ class InMemoryObservabilityLog(ObservabilityLog):
 
     def list_contact_outcomes(self, family_id: UUID) -> list[ContactOutcomeRecord]:
         return [r for r in self._contact_outcomes if r.family_id == family_id]
+
+    def count_objections(self) -> int:
+        # A direct count off the append-only contact-outcome spine (our DB): one per
+        # recorded outcome carrying an objection reason (Module 6 KPI). No clock, no
+        # derivation — the logged facts themselves.
+        return sum(1 for r in self._contact_outcomes if r.objection is not None)
 
     def log_lost(
         self,

@@ -23,8 +23,11 @@ the real verifier with the test secret configured (mirrors ``test_principal``).
 
 from __future__ import annotations
 
+from uuid import uuid4
+
 from fastapi.testclient import TestClient
 
+from app.adapters.hubspot.crm_adapter import EngagementSnapshot, SimulatedCRMAdapter
 from app.api import deps
 from app.core.metric_provenance import (
     KIND_DERIVED,
@@ -35,6 +38,11 @@ from app.core.metric_provenance import (
 )
 from app.core.settings import Settings
 from app.main import app
+from app.observability.log_store import (
+    ContactChannel,
+    ContactDisposition,
+    ObjectionReason,
+)
 from tests.api._jwt import TEST_JWT_SECRET
 from tests.conftest import install_test_principal_override
 
@@ -98,19 +106,77 @@ def test_every_metric_has_provenance() -> None:
 
 
 def test_uninstrumented_and_stood_in_rows_are_labeled() -> None:
-    """The event-to-consult row reads uninstrumented; the placeholder rows read stood_in."""
+    """The event-to-consult row reads uninstrumented; the remaining proxy reads stood_in."""
     body = _get_weekly()
 
     event = _by_key(body, "event_to_consult")
     assert event["provenance"]["kind"] == KIND_UNINSTRUMENTED
     assert event["this_week"] == 0.0
 
-    for key in ("objections", "engagement_clicked", "ambassador_enrollments"):
-        assert _by_key(body, key)["provenance"]["kind"] == KIND_STOOD_IN
+    # Ambassador enrollments remains a labeled proxy (enrollment attribution untracked).
+    assert _by_key(body, "ambassador_enrollments")["provenance"]["kind"] == KIND_STOOD_IN
 
     # The real reads are labeled as our_db / derived, never stood-in.
     assert _by_key(body, "applicants")["provenance"]["kind"] == KIND_OUR_DB
     assert _by_key(body, "conversion_top_channel")["provenance"]["kind"] == KIND_DERIVED
+
+
+def test_engagement_clicked_is_seam_sourced_not_stood_in() -> None:
+    """Engagement-tier (clicked) is now DERIVED from the CRM engagement seam, not stood_in.
+
+    Overrides the CRM adapter with a fake returning a known snapshot and asserts the KPI
+    reflects the seam's clicked share (so the number comes from the seam, not a hardcode).
+    """
+    prov = PROVENANCE["engagement_clicked"]
+    assert prov.kind == KIND_DERIVED
+    assert prov.kind != KIND_STOOD_IN
+
+    class _FakeEngagementCRM(SimulatedCRMAdapter):
+        def read_engagement(self, family_ids: object) -> EngagementSnapshot:
+            return EngagementSnapshot(total=4, clicked=1)  # a known 0.25 share
+
+    app.dependency_overrides[deps.get_crm_adapter_dep] = _FakeEngagementCRM
+    try:
+        body = _get_weekly()
+        row = _by_key(body, "engagement_clicked")
+        assert row["provenance"]["kind"] == KIND_DERIVED
+        assert row["this_week"] == 0.25  # the seam's clicked_share, not a placeholder
+    finally:
+        app.dependency_overrides.pop(deps.get_crm_adapter_dep, None)
+
+
+def test_objections_counted_from_contact_outcome_spine() -> None:
+    """Objections logged is now an our_db COUNT off the contact-outcome spine, not stood_in.
+
+    Logging an objection on a contact outcome increments the scorecard's objections KPI —
+    the value comes from the seam, not a hardcoded stand-in.
+    """
+    prov = PROVENANCE["objections"]
+    assert prov.kind == KIND_OUR_DB
+    assert prov.kind != KIND_STOOD_IN
+
+    deps.reset_observability_log()
+    try:
+        before = _by_key(_get_weekly(), "objections")["this_week"]
+        log = deps.get_observability_log()
+        log.log_contact_outcome(
+            family_id=uuid4(),
+            channel=ContactChannel.CALL,
+            disposition=ContactDisposition.NOT_INTERESTED,
+            human="rep",
+            objection=ObjectionReason.PRICE,
+        )
+        # An outcome with NO objection must not be counted (only logged objections).
+        log.log_contact_outcome(
+            family_id=uuid4(),
+            channel=ContactChannel.SMS,
+            disposition=ContactDisposition.NO_ANSWER,
+            human="rep",
+        )
+        after = _by_key(_get_weekly(), "objections")["this_week"]
+        assert after == before + 1.0
+    finally:
+        deps.reset_observability_log()
 
 
 def test_spec_default_targets_surfaced() -> None:

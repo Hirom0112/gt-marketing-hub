@@ -22,9 +22,9 @@ rest of the cockpit reads — no second KPI engine:
 * ``applicants``             — Supabase app spine (``repository.pipeline_counts``).
 * ``deposits``               — Stripe → payment ledger (``payments_store``).
 * ``conversion_top_channel`` — Supabase ``attribution_source`` (derived rate).
-* ``engagement_clicked``     — HubSpot engagement (STOOD-IN proxy, labeled).
+* ``engagement_clicked``     — CRM engagement seam (``read_engagement`` clicked share).
 * ``followup_sla``           — assignment + contact log (``is_sla_breached``).
-* ``objections``             — HubSpot conversations (STOOD-IN, not yet wired).
+* ``objections``             — contact-outcome spine (``count_objections``, our DB).
 * ``ambassador_enrollments`` — Grassroots reconcile (roster proxy, labeled).
 * ``handoffs``               — funnel enroll/onboarding boundary (derived).
 * ``event_to_consult``       — explicitly NOT INSTRUMENTED (labeled gap).
@@ -60,6 +60,7 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
+from app.adapters.hubspot.crm_adapter import CRMAdapter
 from app.adapters.registry import (
     effective_crm_mode,
     effective_open_data_mode,
@@ -70,6 +71,7 @@ from app.api.ambassadors import get_ambassador_sources
 from app.api.deps import (
     Principal,
     get_active_program,
+    get_crm_adapter_dep,
     get_goals_store,
     get_observability_log,
     get_params,
@@ -102,6 +104,7 @@ router = APIRouter(tags=["scorecard"])
 # avoids ruff B008; the idiomatic FastAPI style, matching app/api/scoreboard.py). ---
 ParamsDep = Annotated[Params, Depends(get_params)]
 RepositoryDep = Annotated[FamilyRepository, Depends(get_repository)]
+CrmAdapterDep = Annotated[CRMAdapter, Depends(get_crm_adapter_dep)]
 PaymentsStoreDep = Annotated[PaymentsStore, Depends(get_payments_store)]
 LogDep = Annotated[ObservabilityLog, Depends(get_observability_log)]
 ProgramDep = Annotated[Program, Depends(get_active_program)]
@@ -191,24 +194,29 @@ def _conversion_top_channel_value(repository: FamilyRepository) -> float:
     return enrolled.get(top, 0) / totals[top]
 
 
-def _engagement_clicked_value(repository: FamilyRepository) -> float:
-    """STOOD-IN engagement-tier share — families with any email engagement (0–1).
+def _engagement_clicked_value(crm: CRMAdapter, repository: FamilyRepository) -> float:
+    """Engagement-tier share — contacts in the CLICKED tier, via the CRM seam (0–1).
 
-    The real HubSpot "clicked" tier isn't wired, so this is an HONEST proxy
-    (labeled ``stood_in`` in provenance): the share of families whose
-    ``community_profile.engagement_signals`` shows ANY email opens. A presence
-    check, not a tuned threshold (INV-11). No families ⇒ ``0.0``.
+    Sourced through the :class:`CRMAdapter` engagement seam
+    (:meth:`~app.adapters.hubspot.crm_adapter.CRMAdapter.read_engagement`): the cohort's
+    family ids are read into an :class:`EngagementSnapshot` and the KPI is its
+    ``clicked_share``. Under the default simulate seam this is a DETERMINISTIC synthetic
+    tier (labeled ``derived`` in provenance — honest, never claiming a live HubSpot
+    call); the live HubSpot read is a documented stub, so a ``NotImplementedError`` from
+    an unwired live engagement read degrades to an honest ``0.0`` rather than a 500. No
+    contacts ⇒ ``0.0``.
     """
-    joined = repository.list_joined()
-    if not joined:
+    family_ids = [record.family_id for record in repository.list_families()]
+    if not family_ids:
         return 0.0
-    engaged = 0
-    for row in joined:
-        signals = row.community_profile.engagement_signals if row.community_profile else {}
-        opens = signals.get("email_opens", 0)
-        if isinstance(opens, int) and opens > 0:
-            engaged += 1
-    return engaged / len(joined)
+    try:
+        snapshot = crm.read_engagement(family_ids)
+    except NotImplementedError:
+        # The live HubSpot engagement read is not wired (a documented stub) — surface
+        # an honest absence, never a fabricated share (INV-9). The default simulate
+        # seam is the real, demoable path.
+        return 0.0
+    return snapshot.clicked_share
 
 
 def _followup_sla_value(
@@ -252,6 +260,7 @@ def _handoffs_value(repository: FamilyRepository) -> float:
 def _build_metric_series(
     *,
     repository: FamilyRepository,
+    crm: CRMAdapter,
     payments_store: PaymentsStore,
     log: ObservabilityLog,
     sources: AmbassadorSources,
@@ -275,10 +284,11 @@ def _build_metric_series(
         "applicants": _applicants_value(repository),
         "deposits": _deposits_value(payments_store, program),
         "conversion_top_channel": _conversion_top_channel_value(repository),
-        "engagement_clicked": _engagement_clicked_value(repository),
+        "engagement_clicked": _engagement_clicked_value(crm, repository),
         "followup_sla": _followup_sla_value(repository, log, params, now),
-        # Objections have no source yet — an honest 0.0, labeled stood_in in provenance.
-        "objections": 0.0,
+        # Objections — a real count off the append-only contact-outcome spine (our DB):
+        # one per outcome carrying a logged objection reason (Module 6). 0 ⇒ honest 0.0.
+        "objections": float(log.count_objections()),
         "ambassador_enrollments": _ambassador_value(sources),
         "handoffs": _handoffs_value(repository),
         # Event-to-consult is explicitly NOT INSTRUMENTED — a 0.0 gap, labeled in provenance.
@@ -303,6 +313,7 @@ def _provenance_json(provenance: MetricProvenance) -> Mapping[str, object]:
 @router.get("/scorecard/weekly")
 def get_weekly_scorecard(
     repository: RepositoryDep,
+    crm: CrmAdapterDep,
     payments_store: PaymentsStoreDep,
     log: LogDep,
     sources: SourcesDep,
@@ -328,6 +339,7 @@ def get_weekly_scorecard(
     goals = goals_store.get_goals(program)
     series = _build_metric_series(
         repository=repository,
+        crm=crm,
         payments_store=payments_store,
         log=log,
         sources=sources,

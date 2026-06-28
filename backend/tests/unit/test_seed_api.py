@@ -20,7 +20,7 @@ route calls ``push_family`` on the deterministic path.
 
 from __future__ import annotations
 
-from collections.abc import Iterator
+from collections.abc import Iterator, Sequence
 from typing import Any
 from uuid import UUID, uuid4
 
@@ -29,6 +29,7 @@ from fastapi.testclient import TestClient
 
 from app.adapters.hubspot.crm_adapter import (
     CRMAdapter,
+    EngagementSnapshot,
     SendResult,
     SimulatedCRMAdapter,
     StudentSyncResult,
@@ -108,6 +109,11 @@ class _RecordingAdapter(CRMAdapter):
 
     def send_message(self, message: dict[str, Any]) -> SendResult:
         return SendResult(simulated=False, recorded_id="note-1", channel="email")
+
+    def read_engagement(self, family_ids: Sequence[UUID]) -> EngagementSnapshot:
+        # Module-6 engagement seam — not exercised on the enrollment-seed path;
+        # present only so this CRMAdapter double stays instantiable after the merge.
+        return EngagementSnapshot(total=0, clicked=0)
 
     def mirror_social_post(self, dispatch: object, *, request: object) -> str | None:
         # Not exercised on the enrollment-seed path (marketing's W3 social mirror);

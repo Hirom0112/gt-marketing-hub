@@ -43,6 +43,7 @@ from app.data.repository import FamilyRepository, JoinedFamily
 from app.observability.log_store import (
     ContactChannel,
     ContactDisposition,
+    ObjectionReason,
     ObservabilityLog,
 )
 
@@ -62,6 +63,9 @@ class ContactOutcomeRequest(BaseModel):
     # A future-dated commitment captured on the call ("paying next week"); drives the
     # follow-up surface and suppresses a premature nudge. None = no promise made.
     promised_by: date | None = None
+    # A structured objection the family raised on the attempt (Module 6); counted by
+    # the weekly scorecard. None = no objection logged. Optional/back-compat.
+    objection: ObjectionReason | None = None
     note: str = ""
 
 
@@ -72,6 +76,7 @@ class ContactOutcomeResponse(BaseModel):
     channel: ContactChannel
     disposition: ContactDisposition
     promised_by: date | None
+    objection: ObjectionReason | None
     note: str
     created_at: datetime
     recovery_state: RecoveryState
@@ -148,6 +153,7 @@ def log_contact_outcome(
         disposition=request.disposition,
         human=DEFAULT_HUMAN,
         promised_by=request.promised_by,
+        objection=request.objection,
         note=request.note,
     )
     now = datetime.now(UTC)
@@ -157,6 +163,7 @@ def log_contact_outcome(
         channel=record.channel,
         disposition=record.disposition,
         promised_by=record.promised_by,
+        objection=record.objection,
         note=record.note,
         created_at=record.created_at,
         recovery_state=state,

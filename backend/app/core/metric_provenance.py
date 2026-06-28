@@ -86,12 +86,18 @@ PROVENANCE: dict[str, MetricProvenance] = {
         kind=KIND_DERIVED,
         compute="enrolled / total for the top attribution_source",
     ),
-    # 4. Engagement-tier mix (clicked) — HubSpot click tier is not wired; honest proxy.
+    # 4. Engagement-tier mix (clicked) — sourced through the CRM engagement seam.
+    # DERIVED: under the default simulate seam the clicked tier is a deterministic
+    # synthetic read (honest — NOT a live HubSpot call); the live HubSpot click-tier
+    # read sits behind the same interface (a documented stub until wired).
     "engagement_clicked": MetricProvenance(
         system="HubSpot",
-        locator="community_profile.engagement_signals",
-        kind=KIND_STOOD_IN,
-        compute="share of families with any email engagement (HubSpot click tier stood-in)",
+        locator="CRMAdapter.read_engagement (EngagementSnapshot.clicked_share)",
+        kind=KIND_DERIVED,
+        compute=(
+            "share of contacts in the clicked engagement tier via the CRM engagement "
+            "seam (simulate: deterministic synthetic tiers; live: HubSpot email engagement)"
+        ),
     ),
     # 5. 24-hr follow-up SLA — derived from the assignment + contact-log spine.
     "followup_sla": MetricProvenance(
@@ -100,12 +106,12 @@ PROVENANCE: dict[str, MetricProvenance] = {
         kind=KIND_DERIVED,
         compute="share of assigned leads worked within the SLA window (not breached / assigned)",
     ),
-    # 6. Objections logged — no source yet; honest stood-in.
+    # 6. Objections logged — a real count off our append-only contact-outcome spine.
     "objections": MetricProvenance(
-        system="HubSpot",
-        locator="—",
-        kind=KIND_STOOD_IN,
-        compute="objections recorded in HubSpot conversations (not yet wired)",
+        system="Supabase",
+        locator="observability.contact_outcome.objection (count_objections)",
+        kind=KIND_OUR_DB,
+        compute="count of contact-outcome events carrying a logged objection reason",
     ),
     # 7. Ambassador-influenced enrollments — enrollment attribution untracked; roster proxy.
     "ambassador_enrollments": MetricProvenance(

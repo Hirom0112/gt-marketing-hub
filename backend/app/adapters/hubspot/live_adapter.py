@@ -33,7 +33,7 @@ from __future__ import annotations
 
 import logging
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from datetime import UTC, datetime
 from typing import Any
 from uuid import UUID
@@ -43,6 +43,7 @@ import httpx
 from app.adapters._resilience import with_retry
 from app.adapters.hubspot.crm_adapter import (
     CRMAdapter,
+    EngagementSnapshot,
     SendResult,
     StudentSyncResult,
     SyncResult,
@@ -536,6 +537,29 @@ class LiveHubSpotCRMAdapter(CRMAdapter):
         """Resolve a contact/deal object id by ``gt_synthetic_id`` (never email)."""
         match = self._search_by_gt_id(object_path, gt_id, [_GT_SYNTHETIC_ID])
         return None if match is None else str(match["id"])
+
+    def read_engagement(self, family_ids: Sequence[UUID]) -> EngagementSnapshot:
+        """Live email-engagement (clicked tier) read — a DOCUMENTED stub (Module 6).
+
+        The real read would page the HubSpot email-engagement / marketing-events API
+        for each synthetic contact's click tier behind guard 3's per-run budget (the
+        same firewall as :meth:`read_mirror` — aggregate counts only, never a
+        per-contact behavioral field; INV-6). That engagement API is not wired here:
+        the scorecard's engagement KPI runs on the REAL simulate seam by default
+        (INV-9), and the live path stays a fail-loud stub rather than fabricating a
+        share. The composition root (the scorecard builder) degrades a missing live
+        engagement read to an honest absence rather than a 500.
+
+        Raises:
+            NotImplementedError: always — the live HubSpot engagement read is not
+                wired in this slice (the simulate seam is the default, real path).
+        """
+        raise NotImplementedError(
+            "Live HubSpot email-engagement (clicked tier) read is not wired in this "
+            "slice; the scorecard engagement KPI runs on the simulate seam by default "
+            "(INV-9). Use CRM_MODE='simulate', or wire the engagement API behind the "
+            "guard-3 budget + INV-6 aggregate firewall."
+        )
 
     # ----------------------------------------------------- GT Social Post mirror
     def _social_post_properties(

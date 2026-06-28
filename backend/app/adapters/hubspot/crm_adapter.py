@@ -25,6 +25,8 @@ log), provable without mocking sockets. This module imports nothing from
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from collections.abc import Sequence
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
 from uuid import UUID, uuid4
@@ -104,6 +106,31 @@ class SendResult(BaseModel):
     channel: str
 
 
+@dataclass(frozen=True, slots=True)
+class EngagementSnapshot:
+    """Aggregate email-engagement tier counts across a set of contacts (Module 6).
+
+    The source behind the weekly scorecard's "engagement-tier mix (clicked)" KPI.
+    Reported through the :class:`CRMAdapter` engagement seam so the same interface
+    serves both impls: the simulated adapter synthesizes deterministic tiers from
+    the seeded cohort (INV-9 — no I/O), the live HubSpot adapter would read the real
+    email-engagement (click) tier. Aggregate only — a count of contacts in the top
+    (clicked) tier over the total, never any per-person/behavioral field (INV-6).
+
+    Attributes:
+        total: How many contacts were read (the denominator).
+        clicked: How many of them are in the top engagement (clicked) tier.
+    """
+
+    total: int
+    clicked: int
+
+    @property
+    def clicked_share(self) -> float:
+        """Share of read contacts in the clicked tier (0–1). No contacts ⇒ ``0.0``."""
+        return self.clicked / self.total if self.total else 0.0
+
+
 class CRMAdapter(ABC):
     """The CRM external boundary (§7.1).
 
@@ -158,6 +185,22 @@ class CRMAdapter(ABC):
     @abstractmethod
     def send_message(self, message: dict[str, Any]) -> SendResult:
         """Send an outbound email/nudge. Simulated in v1 (INV-9)."""
+
+    @abstractmethod
+    def read_engagement(self, family_ids: Sequence[UUID]) -> EngagementSnapshot:
+        """Read the email-engagement tier mix for the given contacts (Module 6).
+
+        The read behind the weekly scorecard's "engagement-tier mix (clicked)" KPI:
+        given the cohort's family ids, return an :class:`EngagementSnapshot` (total
+        read + how many sit in the top *clicked* tier). Aggregate only — never a
+        per-person/behavioral field (INV-6).
+
+        The simulated impl synthesizes a DETERMINISTIC tier per contact from its
+        family id (INV-9 — no network client, fully demoable offline). The live
+        HubSpot impl would read the real email-engagement (click) tier; until that
+        engagement API is wired it is a documented stub (raises) — the live read is
+        out of scope here, the simulate seam is the real, default path.
+        """
 
     @abstractmethod
     def mirror_social_post(
@@ -219,6 +262,14 @@ def apply_mirror_results(
     return monitor.model_copy(
         update={"dispatches": tuple(updated), "hubspot_object_id": first_mirrored}
     )
+
+
+# Simulated engagement: a contact is placed in the top (clicked) tier when its
+# family id hashes into 1-of-N buckets. N is a synthetic-SHAPING constant (INV-11) —
+# not a tuned business threshold; it only sets the deterministic, demoable clicked
+# share the offline seam reports (≈ 1/N of the cohort). The live tier comes from
+# HubSpot, never this divisor.
+_SIMULATED_CLICKED_TIER_DIVISOR = 3
 
 
 class SimulatedCRMAdapter(CRMAdapter):
@@ -347,6 +398,19 @@ class SimulatedCRMAdapter(CRMAdapter):
         result = SendResult(simulated=True, recorded_id=uuid4().hex, channel=channel)
         self.sent_log.append(result)
         return result
+
+    def read_engagement(self, family_ids: Sequence[UUID]) -> EngagementSnapshot:
+        """Return a DETERMINISTIC synthetic engagement snapshot (INV-9 — no I/O).
+
+        A contact is placed in the top *clicked* tier when its family id hashes into
+        1-of-:data:`_SIMULATED_CLICKED_TIER_DIVISOR` buckets — a stable, repeatable
+        synthesis over the passed cohort (the same ids always yield the same share),
+        so the scorecard's engagement KPI is real and demoable offline. Aggregate
+        only (a count, never a per-contact field; INV-6). No network client.
+        """
+        ids = list(family_ids)
+        clicked = sum(1 for fid in ids if fid.int % _SIMULATED_CLICKED_TIER_DIVISOR == 0)
+        return EngagementSnapshot(total=len(ids), clicked=clicked)
 
     def mirror_social_post(
         self, dispatch: PlatformDispatch, *, request: PublishRequest
