@@ -54,3 +54,5 @@ supabase/
 /coworker/
 /design-import/
 /infra/
+# Build history + planning doc suite — kept on disk, not in the submission repo.
+/archive/

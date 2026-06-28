@@ -49,8 +49,8 @@ a `live` implementation, switched by env, behind a hard per-run cap + kill switc
 live external call unless you opt in, and `simulate` still *verifies* (e.g. the Stripe webhook checks
 real HMAC signatures offline).
 
-> The full source-of-truth traceability — every number → its one authoritative source → backend
-> endpoint — is preserved in **`archive/DATA_SOURCE_MAP.md`**.
+> **Single source of truth:** every number resolves to exactly one authoritative source (per the
+> table above) and is never computed two ways — the discipline the spec scores.
 
 ---
 
@@ -83,7 +83,7 @@ Grassroots, Summer Camp, Content) read **live** from the backbone and fall back 
 unreachable. Use the **"VIEWING AS"** switcher (top bar) to change roles.
 
 > **Real integrations are opt-in.** Each live source needs its own env var + credential (the full
-> registry is in `archive/TECH_STACK.md §5`). Defaults are `simulate`, so the system is fully
+> registry is in `backend/app/core/settings.py`). Defaults are `simulate`, so the system is fully
 > demoable with zero secrets. Secrets are never committed (`.gitignore` covers `.secrets/`, `.env*`).
 
 ---
@@ -191,9 +191,9 @@ Google Sheets ◀──▶│  • idempotent payments (replay = NOOP)    │   
 - **Single source of truth.** Supabase `app_form` owns funnel/TEFA/income/grade; HubSpot owns
   pipeline/engagement; the Hub owns budget. No figure is computed two ways.
 
-Full detail lives in `archive/ARCHITECTURE.md`, `archive/THREAT_MODEL.md`, `archive/TECH_STACK.md`,
-`archive/CONTENT_SPEC.md`, `archive/PROJECT.md` (the production planning suite), and `archive/CLAUDE.md`
-(the build rulebook / invariants).
+The pure logic lives in `backend/app/core/` (seam, parity, payments, identity, the reconcilers — no
+I/O); the adapters in `backend/app/adapters/`; the data model, synthetic generators, and Supabase
+migrations (RLS + program isolation) in `backend/app/data/`.
 
 ---
 
@@ -263,9 +263,4 @@ backend/            FastAPI backbone — app/{api,core,adapters,data,observabili
 web/                Next.js 14 Hub — components/modules/* (the 13 modules), lib/
 params/             params.yaml — every tunable (budget, weights, eval thresholds, caps)
 scripts/            pii_scan, dep budget, seed/provision scripts
-archive/            full planning doc suite + build history (PROJECT/ARCHITECTURE/spec/etc.)
 ```
-
-> The complete production doc suite and build history (spec, architecture, threat model, decisions,
-> assumptions, per-slice reports) is preserved under **`archive/`** — moved out of the root for a
-> clean submission, not deleted.

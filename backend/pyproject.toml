@@ -76,6 +76,23 @@ ignore_missing_imports = true
 module = ["mcp", "mcp.*"]
 ignore_missing_imports = true
 
+# `google-auth` / `google-api-python-client` are OPTIONAL live-only dependencies
+# (the SHEETS_MODE=live path; not in the runtime dep set, imported lazily in
+# app/adapters/registry.py). mypy must pass whether or not they are installed:
+# absent ⇒ this suppresses import-not-found (no inline ignore to go stale under
+# strict's warn_unused_ignores); present ⇒ they are untyped, so this also covers it.
+[[tool.mypy.overrides]]
+module = ["google.*", "googleapiclient.*"]
+ignore_missing_imports = true
+
+# The lazy Sheets live-build in registry.py carries one inline no-untyped-call ignore
+# for google-auth's partially-typed API. That ignore is USED when the optional lib is
+# installed (local/dev) and UNUSED when it is absent (CI's `uv sync` omits it), so the
+# unused-ignore check is relaxed for this ONE module to keep both environments green.
+[[tool.mypy.overrides]]
+module = ["app.adapters.registry"]
+warn_unused_ignores = false
+
 # The import-guarded MCP wrapper itself: its tool callables are decorated by the
 # optional, untyped FastMCP SDK (untyped-decorator) and rebind `FastMCP = None` on
 # the absent-SDK branch. It is thin glue around the tested core (A-33), so strict

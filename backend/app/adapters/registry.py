@@ -467,9 +467,12 @@ def get_sheets_adapter() -> SheetsAdapter:
     if sheet_id is None:  # pragma: no cover — unreachable past the fail-loud guard
         raise RuntimeError("SHEETS_MODE='live' requires GSHEETS_SHEET_ID — none is configured.")
     from google.oauth2 import service_account  # noqa: PLC0415 — lazy: live path only
-    from googleapiclient.discovery import build  # type: ignore[import-untyped]  # noqa: PLC0415
+    from googleapiclient.discovery import build  # noqa: PLC0415 — lazy: live path only
 
     key_path = _resolve_sheets_key_path(settings.gsheets_sa_key_path)
+    # google-auth ships partial types: present ⇒ from_service_account_file is an
+    # untyped def (no-untyped-call); absent ⇒ the override Any-ifies it and this ignore
+    # is unused. warn_unused_ignores is relaxed for this module so both envs pass.
     creds = service_account.Credentials.from_service_account_file(  # type: ignore[no-untyped-call]
         str(key_path), scopes=["https://www.googleapis.com/auth/spreadsheets"]
     )
