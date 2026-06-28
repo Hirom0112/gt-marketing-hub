@@ -22,7 +22,7 @@ interface Ctx {
 // matching the design prototype (owns `grassroots`, reads everything else).
 const ROLE_PRESET: Record<Role, Session> = {
   admin: { role: 'admin', ownedModules: [], userName: 'Maya Chen', userRole: 'Admin · the Marketing Lead' },
-  leader: { role: 'leader', ownedModules: [], userName: 'Dave Ruiz', userRole: 'Leader · Growth Marketing Officer' },
+  leader: { role: 'leader', ownedModules: [], userName: 'David Chen', userRole: 'Leader · Growth Marketing Officer' },
   operator: {
     role: 'operator',
     ownedModules: ['grassroots'] as ModuleId[],
