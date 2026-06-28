@@ -103,6 +103,8 @@ nurture:                      # later-lifecycle policy dials (rep close-loop) �
   long_horizon:               # future-enrollment families (incoming-K / future grade)
     drip_months: 18           # nurtured over a long horizon — not treated as lost
     channel_priority: [sms, email]
+  escalation:                 # Module 11 — hot-family auto-escalation into the leadership Decision Queue
+    recoverable_now_min: 3000.0   # recoverable_now ($ at risk × likelihood × freshness) at/above which a HOT family auto-flags as ONE open escalation decision (INV-11; reuses the work-queue deriver, not a new score)
 
 sis:                        # M5 — seam reconcile bucket rules (MULTI_AGENT_COCKPIT §6); thresholds are tunables, not hardcoded
   match_confidence_cutoff: 0.9        # below this normalized GT↔SIS match score ⇒ ambiguous → merge queue

@@ -25,6 +25,7 @@ from app.api.deps import get_params, get_security_event_log
 from app.api.enrollment import router as enrollment_router
 from app.api.evals import router as evals_router
 from app.api.families import router as families_router
+from app.api.field_events import router as field_events_router
 from app.api.funding import router as funding_router
 from app.api.geo import router as geo_router
 from app.api.layouts import router as layouts_router
@@ -238,6 +239,12 @@ app.include_router(security_router)
 # through the pure state machine, fail-closed on an illegal transition). The actor is
 # the VERIFIED principal; every decided action is LOGGED to the §10 spine (NFR-6).
 app.include_router(decisions_router)
+
+# Field & Events → Decision Queue (Module 11; INV-1/INV-2) — /field/events/proposal
+# POST. The Field & Events Owner's priority recommendations land as OPEN leadership
+# decisions on the `field_events` workstream via the B2 feeder; `raised_by` is the
+# VERIFIED principal (never the body). No LLM, no external send.
+app.include_router(field_events_router)
 
 # Composable Home layout (B3; PLAN_v2 §B3; INV-5/INV-11) — /home/layout GET + PUT.
 # Per-user dashboard widget arrangement, scoped to the VERIFIED principal's user_id

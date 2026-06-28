@@ -217,6 +217,17 @@ class DecisionsStore(ABC):
         """
         raise NotImplementedError
 
+    @abstractmethod
+    def latest_action(self, program: Program, decision_id: UUID) -> DecisionAction | None:
+        """The most recent action VERDICT for ``decision_id``, or ``None``.
+
+        Returns the ``action`` (``approve``/``reject``/``need_info``) on the latest
+        appended ``decision_event``, or ``None`` when no action is recorded yet. Powers
+        the history outcome filter and the approved-vs-rejected resolution feedback (so
+        a decided row reads "approved"/"rejected", not a flat "resolved").
+        """
+        raise NotImplementedError
+
 
 class InMemoryDecisionsStore(DecisionsStore):
     """In-memory :class:`DecisionsStore` — per-program dicts; no credential, no I/O.
@@ -335,6 +346,10 @@ class InMemoryDecisionsStore(DecisionsStore):
     def latest_comment(self, program: Program, decision_id: UUID) -> str | None:
         events = self.list_events(program, decision_id)
         return events[-1].comment if events else None
+
+    def latest_action(self, program: Program, decision_id: UUID) -> DecisionAction | None:
+        events = self.list_events(program, decision_id)
+        return events[-1].action if events else None
 
 
 class SupabaseDecisionsStore(DecisionsStore):
@@ -568,6 +583,22 @@ class SupabaseDecisionsStore(DecisionsStore):
             return None
         comment = rows[0].get("comment")
         return str(comment) if comment is not None else None
+
+    def latest_action(self, program: Program, decision_id: UUID) -> DecisionAction | None:
+        rows = self._get(
+            _DECISION_EVENT_TABLE,
+            {
+                "program_id": f"eq.{program.value}",
+                "decision_id": f"eq.{decision_id}",
+                "select": "action,created_at",
+                "order": "created_at.desc",
+                "limit": "1",
+            },
+        )
+        if not rows:
+            return None
+        action = rows[0].get("action")
+        return DecisionAction(str(action)) if action is not None else None
 
 
 def _row_to_decision(row: dict[str, Any]) -> Decision:

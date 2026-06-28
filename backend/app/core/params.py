@@ -1334,14 +1334,40 @@ class LongHorizon(_StrictModel):
     channel_priority: list[str]
 
 
+class NurtureEscalation(_StrictModel):
+    """nurture.escalation — the hot-family → Decision-Queue escalation bar (Module 11; INV-11).
+
+    The single canonical home for the threshold at which a HOT family (high-value,
+    at-risk, recoverable) auto-escalates from Nurture/Grassroots into the leadership
+    Decision Queue. ``recoverable_now_min`` is the cutoff on the work-queue
+    ``recoverable_now`` ranking key (``value × likelihood × freshness`` — the existing
+    deriver, NOT a new score): a family at/above it is enqueued as ONE open escalation
+    decision. A threshold, never a code literal — the auto-flag reads it here. MUST be
+    ``> 0`` (a non-positive bar would escalate every stalled family).
+    """
+
+    recoverable_now_min: float
+
+    @model_validator(mode="after")
+    def _positive(self) -> NurtureEscalation:
+        if self.recoverable_now_min <= 0:
+            raise ValueError(
+                f"nurture.escalation.recoverable_now_min must be > 0, got "
+                f"{self.recoverable_now_min!r}"
+            )
+        return self
+
+
 class Nurture(_StrictModel):
     """nurture — the later-lifecycle policy dials (INV-11; all BUSINESS-owned).
 
     Every value here is a team dial, not engineering: how long until COLD, when a
     silent family is PRESUMED LOST (human-confirmed), the base re-contact cadence and
-    touch cap before DORMANT, the channel order, and the school-year anchors that ramp
-    re-engagement. Nurture EXECUTION (the actual drip sends) is HubSpot's job (the
-    locked seam plan); the cockpit owns these dials and pushes the trigger.
+    touch cap before DORMANT, the channel order, the school-year anchors that ramp
+    re-engagement, and the hot-family escalation bar (Module 11) at which a high-value
+    at-risk family auto-flags into the leadership Decision Queue. Nurture EXECUTION (the
+    actual drip sends) is HubSpot's job (the locked seam plan); the cockpit owns these
+    dials and pushes the trigger.
     """
 
     cold_after_days: int
@@ -1351,6 +1377,7 @@ class Nurture(_StrictModel):
     channel_priority: list[str]
     anchors: list[NurtureAnchor]
     long_horizon: LongHorizon
+    escalation: NurtureEscalation
 
 
 class Programs(_StrictModel):

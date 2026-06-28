@@ -17,13 +17,17 @@ from pydantic import BaseModel
 from app.adapters.hubspot.crm_adapter import CRMAdapter, StudentSyncResult
 from app.adapters.registry import get_enrollment_system_adapter
 from app.adapters.sis.base import EnrollmentSystemAdapter
+from app.api.decisions import flag_decision
 from app.api.deps import (
     Principal,
+    get_active_program,
     get_crm_adapter_dep,
+    get_decisions_store,
     get_observability_log,
     get_params,
     get_principal,
     get_repository,
+    require_role,
     resolve_owner_scope,
 )
 from app.api.schemas import (
@@ -57,6 +61,7 @@ from app.core.conversion import ConversionScore, ConversionSignals, conversion_l
 from app.core.family_record import assemble_deal_view
 from app.core.nurture import is_cold, is_presumed_lost
 from app.core.params import Params
+from app.core.program import Program
 from app.core.recovery_state import (
     RecoveredOutcome,
     RecoveryState,
@@ -81,6 +86,7 @@ from app.core.work_queue import (
     student_value,
     value,
 )
+from app.data.decisions_store import PRIORITY_URGENT, DecisionsStore
 from app.data.models import (
     FamilyRecord,
     FundingState,
@@ -130,6 +136,36 @@ _OWNER_QUERY_DESC = (
 
 # The operator identity recorded on a manual write (mirrors seam/ai_actions).
 DEFAULT_HUMAN = "operator"
+
+# ---------------------------------------------------------------------------- #
+# Module 11 — hot-family escalation auto-flag (Nurture/Grassroots → Decision Queue).
+# Mirrors budget.py's variance feeder EXACTLY: a derived read sweeps the cohort, and
+# each family crossing the params escalation bar becomes ONE open human decision,
+# IDEMPOTENT by family_id in the payload (a re-run never duplicates an open item).
+# ---------------------------------------------------------------------------- #
+
+# The source tag every hot-family Decision-Queue item carries (the idempotency key the
+# sweep de-dupes on, alongside family_id in the payload). A named wire token, not a
+# tunable (INV-11 carve-out, mirroring budget.BUDGET_VARIANCE_SOURCE).
+HOT_FAMILY_SOURCE = "hot_family_escalation"
+# The workstream a hot-family escalation belongs to — these come off the Nurture lane
+# (one of decisions_store.WORKSTREAMS). Named, not a literal (INV-11).
+HOT_FAMILY_WORKSTREAM = "nurture"
+# The system actor stamped as ``raised_by`` for this PURELY AUTOMATED flag (no human
+# submitter — the deriver selects the families). The verified-principal stamp is for the
+# user-driven paths; an auto-flag uses this fixed system token (the budget feeder leaves
+# it blank — this is the more explicit posture for an actor-less system flag).
+HOT_FAMILY_ACTOR = "system:hot_family_escalation"
+
+# The leadership gate for the escalation sweep (it produces leadership decisions over
+# EVERY book), built ONCE at MODULE level so FastAPI resolves it from the route's
+# PEP-563 string annotation — the same wrinkle/fix as budget._BUDGET_GUARD.
+_ESCALATE_GUARD = require_role("admin", "leader")
+
+# Dependency aliases for the escalation feeder (Annotated keeps the call in the type).
+DecisionsStoreDep = Annotated[DecisionsStore, Depends(get_decisions_store)]
+ProgramDep = Annotated[Program, Depends(get_active_program)]
+EscalatePrincipalDep = Annotated[Principal, Depends(_ESCALATE_GUARD)]
 
 
 def _work_queue_family(joined: JoinedFamily, params: Params) -> WorkQueueFamily:
@@ -835,6 +871,108 @@ def get_work_queue(
         if scope != "active" and len(rows) >= limit:
             break
     return rows
+
+
+class HotFamilyEscalationResponse(BaseModel):
+    """The result of one hot-family escalation sweep (Module 11 auto-flag).
+
+    ``threshold`` echoes the params bar; ``scanned`` is how many stalled candidates were
+    scored; ``flagged`` are the family ids escalated as NEW open decisions this run; and
+    ``already_open`` are the qualifying families skipped because they already carry an
+    OPEN escalation (the idempotency story — a re-run flips a family from ``flagged`` to
+    ``already_open`` and creates nothing new).
+    """
+
+    threshold: float
+    scanned: int
+    flagged: list[str]
+    already_open: list[str]
+
+
+@router.post("/work-queue/escalate-hot", response_model=HotFamilyEscalationResponse)
+def escalate_hot_families(
+    repository: RepositoryDep,
+    params: ParamsDep,
+    decisions_store: DecisionsStoreDep,
+    program: ProgramDep,
+    principal: EscalatePrincipalDep,
+) -> HotFamilyEscalationResponse:
+    """Sweep the cohort and auto-flag every HOT family into the Decision Queue (Module 11).
+
+    The Nurture/Grassroots → Decision-Queue feeder, mirroring the budget-variance feeder
+    (``app.api.budget.add_budget_entry``): leadership-gated (admin/leader; an operator is
+    403), it scores the existing work-queue ``recoverable_now`` deriver over the cohort
+    and enqueues ONE open ``hot_family_escalation`` decision for each family whose
+    recoverable value at risk meets ``params.nurture.escalation.recoverable_now_min``
+    (INV-11 — the bar is a param, never a literal). No second scoring engine: it reuses
+    :func:`app.core.work_queue.recoverable_now` (``value × likelihood × freshness``).
+
+    Candidates are pre-filtered to families that were ever stalled (the same cheap
+    ``stalled_since is not None`` gate the active work queue uses — only a stalled family
+    can be hot recovery work). Leadership scope is every book (``owner=None``).
+
+    **Idempotency** (the "exactly one open escalation per family" property): before
+    enqueuing, the route reads ``decisions_store.list_open(program)`` for an existing
+    OPEN ``hot_family_escalation`` carrying the same ``family_id`` in its payload — if
+    present the family is SKIPPED (no duplicate). So re-running the sweep yields exactly
+    one open escalation per family until a leader decides it; once decided (no longer
+    open) a fresh sweep re-flags it. ``raised_by`` is the fixed system actor token (a
+    purely automated flag, no human submitter); the payload is PII-free (family_id +
+    derived scores only — INV-1).
+    """
+    now = datetime.now(UTC)
+    threshold = params.nurture.escalation.recoverable_now_min
+
+    # Candidate cohort: every family ever stalled (the work-queue active pre-filter) over
+    # ALL books (leadership scope). A never-stalled family cannot be hot recovery work.
+    candidates = [j for j in repository.list_joined() if j.family.stalled_since is not None]
+
+    # Idempotency (mirror budget): the family ids that already have an OPEN escalation.
+    open_hot = {
+        d.payload.get("family_id")
+        for d in decisions_store.list_open(program)
+        if d.source == HOT_FAMILY_SOURCE
+    }
+
+    flagged: list[str] = []
+    already_open: list[str] = []
+    for joined in candidates:
+        wqf = _work_queue_family(joined, params)
+        score = recoverable_now(wqf, params, now=now)
+        if score < threshold:
+            continue  # below the escalation bar — not hot enough to surface to leadership.
+        family_id = str(joined.family.family_id)
+        if family_id in open_hot:
+            already_open.append(family_id)
+            continue  # already queued and undecided — do NOT duplicate (idempotent).
+        flag_decision(
+            decisions_store,
+            program,
+            source=HOT_FAMILY_SOURCE,
+            payload={
+                "family_id": family_id,
+                "recoverable_now": float(score),
+                "recoverability": recoverability(wqf, params, now=now),
+                "value": value(wqf, params),
+                "current_stage": joined.family.current_stage.value,
+            },
+            question=f"Escalate hot family {family_id} — high-value, at risk",
+            raised_by=HOT_FAMILY_ACTOR,
+            workstream=HOT_FAMILY_WORKSTREAM,
+            recommendation=(
+                f"Recoverable value ${score:,.0f} at risk — assign a closer and "
+                "prioritize outreach before the family goes cold."
+            ),
+            priority=PRIORITY_URGENT,
+        )
+        flagged.append(family_id)
+
+    return HotFamilyEscalationResponse(
+        threshold=threshold,
+        scanned=len(candidates),
+        flagged=flagged,
+        already_open=already_open,
+    )
 
 
 def _student_recovery_state(js: JoinedStudent, *, log: ObservabilityLog) -> RecoveryState:

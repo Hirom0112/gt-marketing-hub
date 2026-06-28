@@ -115,7 +115,35 @@ def test_action_approve_decides(client: TestClient) -> None:
         json={"action": "approve"},
     )
     assert resp.status_code == 200, resp.text
-    assert resp.json()["state"] == "decided"
+    body = resp.json()
+    assert body["state"] == "decided"
+    # The verdict is exposed so the UI shows approved/rejected (not a flat "resolved").
+    assert body["outcome"] == "approve"
+
+
+def test_outcome_verdict_exposed_in_history_and_mine(client: TestClient) -> None:
+    """A rejected decision surfaces outcome=reject in history AND to the submitter's /mine."""
+    decision_id = client.post(
+        "/decisions",
+        headers=_auth_sub("operator", _ALICE),
+        json={
+            "question": "Buy a $9k billboard?",
+            "recommendation": "No — low intent",
+            "workstream": "field_events",
+            "priority": "normal",
+        },
+    ).json()["id"]
+    client.post(
+        f"/decisions/{decision_id}/action",
+        headers=_auth("leader"),
+        json={"action": "reject", "comment": "Out of budget this quarter."},
+    )
+    # Leader history carries the verdict + the submitter sees it on /mine.
+    hist = client.get("/decisions?view=history", headers=_auth("leader")).json()
+    assert any(d["id"] == decision_id and d["outcome"] == "reject" for d in hist)
+    mine = client.get("/decisions/mine", headers=_auth_sub("operator", _ALICE)).json()
+    row = next(d for d in mine if d["id"] == decision_id)
+    assert row["outcome"] == "reject" and row["latest_comment"] == "Out of budget this quarter."
 
 
 def test_action_need_info_without_comment_unprocessable(client: TestClient) -> None:

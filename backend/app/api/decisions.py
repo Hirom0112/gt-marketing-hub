@@ -106,6 +106,11 @@ AnyPrincipalDep = Annotated[Principal, Depends(get_principal)]
 DECISION_FLOW = "decision_queue"
 DECISION_SCHEMA_VERSION = "1"
 
+# The source tag every Field & Events event-proposal Decision-Queue item carries — the
+# Field-Marketing owner's priority recommendation landing as a leadership decision
+# (Module 11). A named wire token, not a tunable (INV-11 carve-out, like DECISION_FLOW).
+FIELD_EVENT_SOURCE = "field_event_proposal"
+
 # Map the B2 human action onto the observability spine's verdict vocabulary (which
 # is APPROVE/EDIT/DISCARD): approve→APPROVE, reject→DISCARD, need_info→EDIT (more
 # info requested ≈ an edit-back). The audit payload always carries the EXACT B2
@@ -126,6 +131,16 @@ def _actor_token(principal: Principal) -> str:
     (INV-1; the IDOR/spoof posture).
     """
     return str(principal.user_id) if principal.user_id is not None else principal.role
+
+
+def _outcome_of(action: DecisionAction | None) -> str | None:
+    """The wire ``outcome`` value for a latest action — its enum value, or ``None``.
+
+    Maps the latest ``DecisionAction`` (``approve``/``reject``/``need_info``) to the
+    string the UI shows (approved/rejected/need-info) and filters history by. ``None``
+    when no action has been recorded (an OPEN row with no verdict yet).
+    """
+    return action.value if action is not None else None
 
 
 class DecisionResponse(BaseModel):
@@ -149,9 +164,13 @@ class DecisionResponse(BaseModel):
     due_date: date | None
     priority: str
     resolution_date: datetime | None
+    # The latest action VERDICT — "approve" | "reject" | "need_info" | None (no action
+    # yet). Lets a decided row read approved/rejected (not a flat "resolved") and powers
+    # the history outcome filter. None for an OPEN row with no recorded action.
+    outcome: str | None = None
 
     @classmethod
-    def of(cls, decision: Decision) -> DecisionResponse:
+    def of(cls, decision: Decision, *, outcome: str | None = None) -> DecisionResponse:
         """Project a stored :class:`Decision` onto the response shape (display-derived)."""
         return cls(
             id=decision.id,
@@ -166,6 +185,7 @@ class DecisionResponse(BaseModel):
             due_date=decision.due_date,
             priority=decision.priority,
             resolution_date=decision.resolution_date,
+            outcome=outcome,
         )
 
 
@@ -181,7 +201,9 @@ class MyDecisionResponse(DecisionResponse):
     latest_comment: str | None
 
     @classmethod
-    def of_mine(cls, decision: Decision, *, latest_comment: str | None) -> MyDecisionResponse:
+    def of_mine(
+        cls, decision: Decision, *, latest_comment: str | None, outcome: str | None = None
+    ) -> MyDecisionResponse:
         """Project a stored :class:`Decision` + its latest comment onto the mine shape."""
         return cls(
             id=decision.id,
@@ -196,6 +218,7 @@ class MyDecisionResponse(DecisionResponse):
             due_date=decision.due_date,
             priority=decision.priority,
             resolution_date=decision.resolution_date,
+            outcome=outcome,
             latest_comment=latest_comment,
         )
 
@@ -261,12 +284,18 @@ def list_decisions(
     - ``all``     — every decision (open + decided + in_flight).
     """
     if view == "active":
-        decisions = store.list_open(program)
-    elif view == "history":
+        # OPEN queue: no verdict yet, so skip the per-row latest_action lookup.
+        return [DecisionResponse.of(d) for d in store.list_open(program)]
+    if view == "history":
         decisions = [d for d in store.list_all(program) if d.state in _HISTORY_STATES]
     else:  # all
         decisions = store.list_all(program)
-    return [DecisionResponse.of(d) for d in decisions]
+    # History/all rows may carry a verdict — attach the latest action so the UI can
+    # show approved/rejected/need-info and filter by outcome.
+    return [
+        DecisionResponse.of(d, outcome=_outcome_of(store.latest_action(program, d.id)))
+        for d in decisions
+    ]
 
 
 @router.get("/decisions/mine", response_model=list[MyDecisionResponse])
@@ -286,7 +315,11 @@ def list_my_decisions(
     me = _actor_token(principal)
     mine = [d for d in store.list_all(program) if d.raised_by == me]
     return [
-        MyDecisionResponse.of_mine(d, latest_comment=store.latest_comment(program, d.id))
+        MyDecisionResponse.of_mine(
+            d,
+            latest_comment=store.latest_comment(program, d.id),
+            outcome=_outcome_of(store.latest_action(program, d.id)),
+        )
         for d in mine
     ]
 
@@ -414,7 +447,8 @@ def act_on_decision(
             priority=current.priority,
             resolution_date=resolution_date,
         )
-    return DecisionResponse.of(updated)
+    # The verdict just applied is the row's current outcome (approve/reject/need-info).
+    return DecisionResponse.of(updated, outcome=body.action.value)
 
 
 def flag_decision(
@@ -423,11 +457,35 @@ def flag_decision(
     *,
     source: str,
     payload: dict[str, Any],
+    question: str = "",
+    raised_by: str = "",
+    workstream: str = "",
+    recommendation: str = "",
+    budget_ask: float | None = None,
+    due_date: date | None = None,
+    priority: str = PRIORITY_NORMAL,
 ) -> Decision:
     """Enqueue an OPEN decision — the shared feeder B4/Nurture/Field call (B2).
 
     A thin wrapper over :meth:`DecisionsStore.submit` so other modules enqueue a
-    human decision without touching the store/route shape. Returns the created open
-    :class:`Decision`.
+    human decision without touching the store/route shape. The structured spec-fields
+    (``question`` / ``workstream`` / ``recommendation`` / ``budget_ask`` / ``due_date``
+    / ``priority``) are KEYWORD-OPTIONAL so the legacy budget-variance feeder still
+    calls with only ``source`` + ``payload`` (defaults unchanged), while the Module-11
+    hot-family + field-events feeders stamp a workstream/question/recommendation. For a
+    purely AUTOMATED flag with no human submitter, the caller passes a system actor
+    token as ``raised_by``; a user-driven proposal stamps the verified principal's
+    token. Returns the created open :class:`Decision`.
     """
-    return store.submit(program, source=source, payload=payload)
+    return store.submit(
+        program,
+        source=source,
+        payload=payload,
+        question=question,
+        raised_by=raised_by,
+        workstream=workstream,
+        recommendation=recommendation,
+        budget_ask=budget_ask,
+        due_date=due_date,
+        priority=priority,
+    )
