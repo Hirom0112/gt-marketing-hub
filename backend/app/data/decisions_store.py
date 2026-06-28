@@ -28,7 +28,7 @@ from __future__ import annotations
 import os
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from typing import Any
 from uuid import UUID, uuid4
 
@@ -45,15 +45,53 @@ _REST = "/rest/v1"
 _DECISION_TABLE = f"{_REST}/decision"
 _DECISION_EVENT_TABLE = f"{_REST}/decision_event"
 
+# The PostgREST select list for a decision row — the 0028 columns + the 0034
+# first-class spec-fields. One home so every read pulls the same shape.
+_DECISION_SELECT = (
+    "id,source,payload,state,created_at,question,raised_by,workstream,"
+    "recommendation,budget_ask,due_date,priority,resolution_date"
+)
+
+# --------------------------------------------------------------------------- #
+# Module 11 raise vocabulary — the ONE canonical home (INV-11) for the valid
+# workstream + priority sets a structured raise is validated against. Named, not
+# bare literals: the route imports these to reject an unknown workstream / priority
+# (a clean 422), and the migration's CHECK mirrors PRIORITIES in the DB backstop.
+# --------------------------------------------------------------------------- #
+
+# The workstreams a decision may belong to (the spec's Module-11 lanes).
+WORKSTREAMS: tuple[str, ...] = (
+    "content",
+    "grassroots",
+    "field_events",
+    "budget",
+    "admissions",
+    "nurture",
+)
+
+# The two priorities. ``normal`` is the default (matches the 0034 column default).
+PRIORITY_URGENT = "urgent"
+PRIORITY_NORMAL = "normal"
+PRIORITIES: tuple[str, ...] = (PRIORITY_URGENT, PRIORITY_NORMAL)
+
 
 @dataclass(frozen=True)
 class Decision:
     """One row of the Decision Queue (the in-memory/read accessor's shape).
 
-    A faithful subset of the 0028 ``decision`` columns the queue needs: ``source``
-    (which module flagged it), ``payload`` (the PII-free jsonb context, INV-1),
-    ``state`` (open / decided / in_flight), and the create stamp. Frozen — a state
-    change replaces the row, never mutates it (the append-only/audit posture).
+    The 0028 ``decision`` columns the queue needs — ``source`` (which module flagged
+    it), ``payload`` (the PII-free jsonb context, INV-1), ``state`` (open / decided /
+    in_flight), the create stamp — PLUS the 0034 first-class spec-fields a structured
+    raise carries: ``question`` (the decision's name), ``raised_by`` (the VERIFIED
+    principal's uid/role token, never a client name; INV-1), ``workstream``,
+    ``recommendation``, an optional ``budget_ask`` and ``due_date``, the ``priority``,
+    and ``resolution_date`` (set when the decision first leaves OPEN). Frozen — a
+    state change replaces the row, never mutates it (the append-only/audit posture).
+
+    Auto-flag sources (budget variance, open-data enrichment) leave the structured
+    fields at their defaults and carry context in ``payload`` instead; the display
+    helpers (:meth:`display_question` / :meth:`display_workstream`) derive a sensible
+    label from ``payload`` for those rows so the UI never shows a blank.
     """
 
     id: UUID
@@ -61,6 +99,38 @@ class Decision:
     payload: dict[str, Any]
     state: DecisionState
     created_at: datetime
+    # 0034 first-class spec-fields (safe defaults ⇒ existing/auto-flag rows valid).
+    question: str = ""
+    raised_by: str = ""
+    workstream: str = ""
+    recommendation: str = ""
+    budget_ask: float | None = None
+    due_date: date | None = None
+    priority: str = PRIORITY_NORMAL
+    resolution_date: datetime | None = None
+
+    def display_question(self) -> str:
+        """The question to show — the structured field, else derived from ``payload``.
+
+        A manual raise sets ``question`` directly. An auto-flag row leaves it blank,
+        so we fall back to a ``payload['question']`` if present (graceful — never a
+        blank label for the leader).
+        """
+        if self.question:
+            return self.question
+        payload_question = self.payload.get("question")
+        return str(payload_question) if payload_question else ""
+
+    def display_workstream(self) -> str:
+        """The workstream to show — the structured field, else from ``payload``.
+
+        Budget-variance auto-flags carry their workstream in ``payload['workstream']``
+        (the existing shape), so a payload-only row still renders a workstream.
+        """
+        if self.workstream:
+            return self.workstream
+        payload_workstream = self.payload.get("workstream")
+        return str(payload_workstream) if payload_workstream else ""
 
 
 class DecisionsStore(ABC):
@@ -73,12 +143,29 @@ class DecisionsStore(ABC):
     """
 
     @abstractmethod
-    def submit(self, program: Program, *, source: str, payload: dict[str, Any]) -> Decision:
+    def submit(
+        self,
+        program: Program,
+        *,
+        source: str,
+        payload: dict[str, Any],
+        question: str = "",
+        raised_by: str = "",
+        workstream: str = "",
+        recommendation: str = "",
+        budget_ask: float | None = None,
+        due_date: date | None = None,
+        priority: str = PRIORITY_NORMAL,
+    ) -> Decision:
         """Insert an OPEN decision (the "anyone/any-module submits" path).
 
         Returns the created :class:`Decision` (a fresh id + create stamp, state
         ``open``). Open to any authenticated principal at the route layer — this
-        store method does not authorize.
+        store method does not authorize. The 0034 spec-fields are KEYWORD-OPTIONAL so
+        an auto-flag feeder (``flag_decision``) submits with only ``source`` +
+        ``payload`` unchanged, while a manual raise threads the structured fields.
+        ``raised_by`` is the VERIFIED principal's token — the route stamps it; the
+        store never derives or trusts a client name (INV-1).
         """
         raise NotImplementedError
 
@@ -114,7 +201,19 @@ class DecisionsStore(ABC):
         the verified ``actor``) plus the resulting ``new_state`` written onto the
         decision row. ``new_state`` is computed by the caller via
         :func:`app.core.decision_queue.apply_action` — the store does not re-derive
-        the transition.
+        the transition. When ``new_state`` is no longer OPEN and ``resolution_date``
+        is still unset, the store stamps it with the deciding instant.
+        """
+        raise NotImplementedError
+
+    @abstractmethod
+    def latest_comment(self, program: Program, decision_id: UUID) -> str | None:
+        """The most recent action ``comment`` for ``decision_id``, or ``None``.
+
+        Powers the operator-visible ``GET /decisions/mine`` outcome ("what did the
+        leader say"). Returns the comment on the latest appended ``decision_event``
+        (which may itself be ``None`` for a no-comment approve/reject), or ``None``
+        when the decision has no recorded action yet.
         """
         raise NotImplementedError
 
@@ -141,13 +240,33 @@ class InMemoryDecisionsStore(DecisionsStore):
         # Append-only per-program event audit (mirrors the 0028 decision_event table).
         self._events: dict[Program, list[InMemoryDecisionsStore._Event]] = {}
 
-    def submit(self, program: Program, *, source: str, payload: dict[str, Any]) -> Decision:
+    def submit(
+        self,
+        program: Program,
+        *,
+        source: str,
+        payload: dict[str, Any],
+        question: str = "",
+        raised_by: str = "",
+        workstream: str = "",
+        recommendation: str = "",
+        budget_ask: float | None = None,
+        due_date: date | None = None,
+        priority: str = PRIORITY_NORMAL,
+    ) -> Decision:
         decision = Decision(
             id=uuid4(),
             source=source,
             payload=dict(payload),
             state=DecisionState.OPEN,
             created_at=datetime.now(UTC),
+            question=question,
+            raised_by=raised_by,
+            workstream=workstream,
+            recommendation=recommendation,
+            budget_ask=budget_ask,
+            due_date=due_date,
+            priority=priority,
         )
         self._decisions.setdefault(program, {})[decision.id] = decision
         return decision
@@ -187,6 +306,11 @@ class InMemoryDecisionsStore(DecisionsStore):
                 created_at=datetime.now(UTC),
             )
         )
+        # When the decision first LEAVES open, stamp the resolution instant (the
+        # deciding moment); a later DECIDED→IN_FLIGHT keeps the original stamp.
+        resolution_date = current.resolution_date
+        if new_state is not DecisionState.OPEN and resolution_date is None:
+            resolution_date = datetime.now(UTC)
         # Frozen dataclass ⇒ a state change replaces the row (never mutates it).
         decisions[decision_id] = Decision(
             id=current.id,
@@ -194,11 +318,23 @@ class InMemoryDecisionsStore(DecisionsStore):
             payload=current.payload,
             state=new_state,
             created_at=current.created_at,
+            question=current.question,
+            raised_by=current.raised_by,
+            workstream=current.workstream,
+            recommendation=current.recommendation,
+            budget_ask=current.budget_ask,
+            due_date=current.due_date,
+            priority=current.priority,
+            resolution_date=resolution_date,
         )
 
     def list_events(self, program: Program, decision_id: UUID) -> list[_Event]:
         """This decision's appended events, in append order (the in-memory read accessor)."""
         return [e for e in self._events.get(program, []) if e.decision_id == decision_id]
+
+    def latest_comment(self, program: Program, decision_id: UUID) -> str | None:
+        events = self.list_events(program, decision_id)
+        return events[-1].comment if events else None
 
 
 class SupabaseDecisionsStore(DecisionsStore):
@@ -304,7 +440,20 @@ class SupabaseDecisionsStore(DecisionsStore):
             )
 
     # ---------------------------------------------------------------- interface
-    def submit(self, program: Program, *, source: str, payload: dict[str, Any]) -> Decision:
+    def submit(
+        self,
+        program: Program,
+        *,
+        source: str,
+        payload: dict[str, Any],
+        question: str = "",
+        raised_by: str = "",
+        workstream: str = "",
+        recommendation: str = "",
+        budget_ask: float | None = None,
+        due_date: date | None = None,
+        priority: str = PRIORITY_NORMAL,
+    ) -> Decision:
         rows = self._post(
             _DECISION_TABLE,
             {
@@ -312,6 +461,13 @@ class SupabaseDecisionsStore(DecisionsStore):
                 "payload": payload,
                 "state": DecisionState.OPEN.value,
                 "program_id": program.value,
+                "question": question,
+                "raised_by": raised_by,
+                "workstream": workstream,
+                "recommendation": recommendation,
+                "budget_ask": budget_ask,
+                "due_date": due_date.isoformat() if due_date is not None else None,
+                "priority": priority,
             },
             prefer="return=representation",
         )
@@ -325,7 +481,7 @@ class SupabaseDecisionsStore(DecisionsStore):
             {
                 "program_id": f"eq.{program.value}",
                 "state": f"eq.{DecisionState.OPEN.value}",
-                "select": "id,source,payload,state,created_at",
+                "select": _DECISION_SELECT,
                 "order": "created_at.asc",
             },
         )
@@ -336,7 +492,7 @@ class SupabaseDecisionsStore(DecisionsStore):
             _DECISION_TABLE,
             {
                 "program_id": f"eq.{program.value}",
-                "select": "id,source,payload,state,created_at",
+                "select": _DECISION_SELECT,
                 "order": "created_at.asc",
             },
         )
@@ -348,7 +504,7 @@ class SupabaseDecisionsStore(DecisionsStore):
             {
                 "program_id": f"eq.{program.value}",
                 "id": f"eq.{decision_id}",
-                "select": "id,source,payload,state,created_at",
+                "select": _DECISION_SELECT,
             },
         )
         if not rows:
@@ -382,18 +538,67 @@ class SupabaseDecisionsStore(DecisionsStore):
             {"program_id": f"eq.{program.value}", "id": f"eq.{decision_id}"},
             {"state": new_state.value},
         )
+        # Stamp the resolution instant the FIRST time the decision leaves open. The
+        # extra ``resolution_date=is.null`` filter makes this idempotent: a later
+        # DECIDED→IN_FLIGHT (resolution already set) matches no row and is a no-op,
+        # so the original deciding instant is preserved.
+        if new_state is not DecisionState.OPEN:
+            self._patch(
+                _DECISION_TABLE,
+                {
+                    "program_id": f"eq.{program.value}",
+                    "id": f"eq.{decision_id}",
+                    "resolution_date": "is.null",
+                },
+                {"resolution_date": datetime.now(UTC).isoformat()},
+            )
+
+    def latest_comment(self, program: Program, decision_id: UUID) -> str | None:
+        rows = self._get(
+            _DECISION_EVENT_TABLE,
+            {
+                "program_id": f"eq.{program.value}",
+                "decision_id": f"eq.{decision_id}",
+                "select": "comment,created_at",
+                "order": "created_at.desc",
+                "limit": "1",
+            },
+        )
+        if not rows:
+            return None
+        comment = rows[0].get("comment")
+        return str(comment) if comment is not None else None
 
 
 def _row_to_decision(row: dict[str, Any]) -> Decision:
     """Map a PostgREST ``decision`` row to the :class:`Decision` accessor shape."""
     payload = row.get("payload")
+    budget_ask = row.get("budget_ask")
     return Decision(
         id=UUID(str(row["id"])),
         source=str(row["source"]),
         payload=payload if isinstance(payload, dict) else {},
         state=DecisionState(str(row["state"])),
         created_at=_parse_timestamp(row.get("created_at")) or datetime.now(UTC),
+        question=str(row.get("question") or ""),
+        raised_by=str(row.get("raised_by") or ""),
+        workstream=str(row.get("workstream") or ""),
+        recommendation=str(row.get("recommendation") or ""),
+        budget_ask=float(budget_ask) if budget_ask is not None else None,
+        due_date=_parse_date(row.get("due_date")),
+        priority=str(row.get("priority") or PRIORITY_NORMAL),
+        resolution_date=_parse_timestamp(row.get("resolution_date")),
     )
+
+
+def _parse_date(raw: object) -> date | None:
+    """Parse a PostgREST ``date`` (``YYYY-MM-DD``) to a date, or ``None`` if absent/bad."""
+    if not raw:
+        return None
+    try:
+        return date.fromisoformat(str(raw))
+    except ValueError:
+        return None
 
 
 def _parse_timestamp(raw: object) -> datetime | None:
