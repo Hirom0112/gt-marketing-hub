@@ -1,12 +1,26 @@
 'use client';
 
-// Per-module sub-view tab bar. Client-local active state for now (deep sub-view
-// routing comes when each module's tabs are individually built out).
+// Per-module sub-view tab bar. Works UNCONTROLLED (own local active state — the
+// default for modules whose tabs are cosmetic) or CONTROLLED: pass `active` +
+// `onChange` and the parent drives which sub-view renders (the Dashboard does this).
 
 import { useState } from 'react';
 
-export function TabBar({ tabs }: { tabs: string[] }) {
-  const [active, setActive] = useState(0);
+export function TabBar({
+  tabs,
+  active: controlledActive,
+  onChange,
+}: {
+  tabs: string[];
+  active?: number;
+  onChange?: (index: number) => void;
+}) {
+  const [localActive, setLocalActive] = useState(0);
+  const active = controlledActive ?? localActive;
+  const setActive = (i: number) => {
+    onChange?.(i);
+    if (controlledActive === undefined) setLocalActive(i);
+  };
   if (tabs.length <= 1) return null;
   return (
     <div style={{ display: 'flex', gap: 2, borderBottom: '1px solid var(--line-2)', padding: '0 22px', background: 'var(--card)' }}>

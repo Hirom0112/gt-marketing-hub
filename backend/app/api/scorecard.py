@@ -315,4 +315,6 @@ def get_weekly_scorecard(
         row = asdict(metric)
         row["provenance"] = _provenance_json(PROVENANCE[metric.key])
         metrics.append(row)
-    return {"metrics": metrics, "as_of": as_of}
+    # goal_date — the pacing horizon (params.kpi.scorecard.goal_date, INV-11). The
+    # Goal-pacing tab projects each metric to this date; surfaced alongside as_of.
+    return {"metrics": metrics, "as_of": as_of, "goal_date": params.kpi.scorecard.goal_date}
