@@ -42,9 +42,12 @@ stood-in / uninstrumented KPI is LABELED via its provenance ``kind`` rather than
 
 PARAMS vs DEFAULTS (INV-11). The status BAND (``green_at``/``yellow_at``) and the pacing
 ``goal_date`` are read from ``params.kpi.scorecard`` (the one canonical home). The
-per-metric ``target`` has NO params home yet — the KPI-goals store is a later phase —
-so each spec-default target is a documented API-layer named constant (:data:`_TARGETS`),
-PROVISIONAL: promote it to a Supabase goals store once the KPI owner sets real goals.
+per-metric ``target`` now comes from the leadership-editable KPI-goals STORE
+(:class:`app.data.goals_store.GoalsStore`, migration 0033): the scorecard injects it and
+reads ``get_goals(program)``. The store is SEEDED from the same spec defaults
+(``goals_store.DEFAULT_GOALS`` — the targets' one canonical home, moved out of this
+module), so an unedited program reads the spec values verbatim; a leader edits them via
+``GET``/``PUT /scorecard/goals`` (every change logged to the 0033 change log).
 """
 
 from __future__ import annotations
@@ -54,7 +57,8 @@ from dataclasses import asdict
 from datetime import UTC, date, datetime
 from typing import Annotated
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel, Field
 
 from app.adapters.registry import (
     effective_crm_mode,
@@ -66,6 +70,7 @@ from app.api.ambassadors import get_ambassador_sources
 from app.api.deps import (
     Principal,
     get_active_program,
+    get_goals_store,
     get_observability_log,
     get_params,
     get_payments_store,
@@ -73,6 +78,7 @@ from app.api.deps import (
     get_repository,
     get_settings_dep,
     get_watermark_store,
+    require_role,
 )
 from app.core.ambassador_reconcile import reconcile_ambassadors
 from app.core.contact_log import last_contact_at
@@ -82,6 +88,7 @@ from app.core.params import Params
 from app.core.program import Program
 from app.core.settings import Settings
 from app.core.weekly_scorecard import MetricSeries, build_weekly_scorecard
+from app.data.goals_store import GOAL_KEYS, GoalChangeEvent, GoalsStore
 from app.data.models import Stage
 from app.data.payments_store import InMemoryPaymentsStore, PaymentsStore
 from app.data.repository import FamilyRepository
@@ -101,8 +108,17 @@ ProgramDep = Annotated[Program, Depends(get_active_program)]
 SourcesDep = Annotated[AmbassadorSources, Depends(get_ambassador_sources)]
 SettingsDep = Annotated[Settings, Depends(get_settings_dep)]
 WatermarkStoreDep = Annotated[WatermarkStore, Depends(get_watermark_store)]
+GoalsStoreDep = Annotated[GoalsStore, Depends(get_goals_store)]
 # Any authenticated principal — the scorecard is identical for everyone (no role gate).
 AnyPrincipalDep = Annotated[Principal, Depends(get_principal)]
+
+# Editing a KPI goal is a leadership write (the KPI owner sets real goals). Built ONCE
+# at MODULE level so FastAPI resolves it from the route's (string, PEP 563) annotation —
+# a closure-local guard is invisible to `get_type_hints` and the route param would
+# degrade to a query param (then 422). Admin shares the leadership lens here (mirrors
+# the decisions VIEW gate); an operator is 403.
+_GOALS_WRITE_GUARD = require_role("leader", "admin")
+GoalsWriterDep = Annotated[Principal, Depends(_GOALS_WRITE_GUARD)]
 
 # The CRM-poll watermark object type whose last-sync stands for "HubSpot freshness"
 # (the deal stream — the pull crm_sync advances; A2). A named constant, not a tunable.
@@ -127,30 +143,10 @@ _LABELS: dict[str, str] = {
     "event_to_consult": "Event-to-consult conversion",
 }
 
-# Per-KPI targets — the spec defaults (INV-11): named, NOT bare literals, and
-# PROVISIONAL (no params home yet — see the module docstring; a later phase moves these
-# to a Supabase goals store). Spec values: deposits 180, SLA 90%, conversion 40%,
-# engagement-tier 35%, ambassador 30. Applicants / objections / handoffs /
-# event-to-consult have no spec goal yet ⇒ a provisional ``0.0`` (a target of 0 reads
-# green for any non-negative value — the pure core's documented zero-target degrade).
-_TARGET_DEPOSITS = 180.0
-_TARGET_SLA = 0.90
-_TARGET_CONVERSION = 0.40
-_TARGET_ENGAGEMENT = 0.35
-_TARGET_AMBASSADOR = 30.0
-_TARGET_PROVISIONAL = 0.0
-
-_TARGETS: dict[str, float] = {
-    "applicants": _TARGET_PROVISIONAL,
-    "deposits": _TARGET_DEPOSITS,
-    "conversion_top_channel": _TARGET_CONVERSION,
-    "engagement_clicked": _TARGET_ENGAGEMENT,
-    "followup_sla": _TARGET_SLA,
-    "objections": _TARGET_PROVISIONAL,
-    "ambassador_enrollments": _TARGET_AMBASSADOR,
-    "handoffs": _TARGET_PROVISIONAL,
-    "event_to_consult": _TARGET_PROVISIONAL,
-}
+# Per-KPI targets are no longer hardcoded here: they come from the leadership-editable
+# KPI-goals store (:class:`app.data.goals_store.GoalsStore`, migration 0033), whose seed
+# (``goals_store.DEFAULT_GOALS``) is the targets' ONE canonical home (INV-11). The series
+# builder is handed the resolved ``goals`` dict; the GET/PUT routes read/edit it.
 
 # The funnel stages that count as "reached onboarding handoff" — a family at enroll
 # (or the downstream tuition stage) has crossed the marketing→onboarding boundary. A
@@ -261,6 +257,7 @@ def _build_metric_series(
     sources: AmbassadorSources,
     params: Params,
     program: Program,
+    goals: dict[str, float],
     now: datetime,
 ) -> list[MetricSeries]:
     """Sample the nine business KPIs into single-point :class:`MetricSeries` (STEP 1).
@@ -270,6 +267,9 @@ def _build_metric_series(
     ``last_week`` = ``0.0``; no fabricated trend). Stood-in / uninstrumented KPIs are
     sampled to their honest value (a proxy or ``0.0``) and LABELED via provenance,
     never faked green. Pure in its injected inputs + ``now`` (the API reads the clock).
+
+    The per-metric ``target`` is read from ``goals`` (the resolved KPI-goals store
+    snapshot for ``program``) — the seed defaults until a leader edits one (INV-11).
     """
     values: dict[str, float] = {
         "applicants": _applicants_value(repository),
@@ -288,7 +288,7 @@ def _build_metric_series(
         MetricSeries(
             key=key,
             label=_LABELS[key],
-            target=_TARGETS[key],
+            target=goals[key],
             weekly_values=(values[key],),
         )
         for key in _LABELS
@@ -308,6 +308,7 @@ def get_weekly_scorecard(
     sources: SourcesDep,
     params: ParamsDep,
     program: ProgramDep,
+    goals_store: GoalsStoreDep,
     principal: AnyPrincipalDep,
 ) -> dict[str, object]:
     """The weekly KPI scorecard — the nine business KPIs + per-metric provenance (B5/B6).
@@ -322,6 +323,9 @@ def get_weekly_scorecard(
     """
     now = datetime.now(UTC)
     as_of: date = now.date()
+    # The per-metric targets come from the leadership-editable goals store (the seed
+    # defaults until edited) — read once for the active program (INV-11).
+    goals = goals_store.get_goals(program)
     series = _build_metric_series(
         repository=repository,
         payments_store=payments_store,
@@ -329,6 +333,7 @@ def get_weekly_scorecard(
         sources=sources,
         params=params,
         program=program,
+        goals=goals,
         now=now,
     )
     scorecard = build_weekly_scorecard(series, params=params, as_of=as_of)
@@ -393,3 +398,74 @@ def get_connector_freshness(
         *stood_in,
     ]
     return {"connectors": connectors}
+
+
+class GoalsUpdateRequest(BaseModel):
+    """Body for ``PUT /scorecard/goals`` — set one or more KPI targets (leader/admin).
+
+    ``goals`` maps a KPI key (one of the nine scorecard KPIs) to its new numeric target.
+    ``note`` is an optional reason recorded on every change-log entry. An unknown key is
+    rejected (422).
+    """
+
+    goals: dict[str, float] = Field(min_length=1)
+    note: str | None = None
+
+
+def _event_json(event: GoalChangeEvent) -> dict[str, object]:
+    """Serialize one change-log entry to the JSON the UI reads."""
+    return {
+        "key": event.key,
+        "old_target": event.old_target,
+        "new_target": event.new_target,
+        "changed_by": event.changed_by,
+        "changed_at": event.changed_at.isoformat(),
+        "note": event.note,
+    }
+
+
+@router.get("/scorecard/goals")
+def get_scorecard_goals(
+    goals_store: GoalsStoreDep,
+    program: ProgramDep,
+    principal: AnyPrincipalDep,
+) -> dict[str, object]:
+    """The current KPI goals + the recent change log (any authenticated seat).
+
+    Returns the resolved per-KPI targets for the active program (the seed defaults until
+    a leader edits one) and the append-only change log so the UI can show who changed
+    what. Read-only — identical for everyone, gated only by ``Depends(get_principal)``.
+    """
+    return {
+        "goals": goals_store.get_goals(program),
+        "events": [_event_json(e) for e in goals_store.list_events(program)],
+    }
+
+
+@router.put("/scorecard/goals")
+def put_scorecard_goals(
+    body: GoalsUpdateRequest,
+    goals_store: GoalsStoreDep,
+    program: ProgramDep,
+    principal: GoalsWriterDep,
+) -> dict[str, object]:
+    """Set one or more KPI targets — LEADER/ADMIN only (the KPI owner sets real goals).
+
+    An operator is 403 (the leadership write gate). Rejects an unknown KPI key with 422
+    (fail-closed) BEFORE writing anything. Each provided key is set on the store and a
+    change event is appended (old→new + the verified actor + the optional note — the
+    audit the brief asks for). Returns the updated goals + the change log.
+    """
+    unknown = sorted(set(body.goals) - set(GOAL_KEYS))
+    if unknown:
+        raise HTTPException(status_code=422, detail=f"unknown KPI goal key(s): {unknown}")
+
+    # The actor is taken from the VERIFIED principal — never a client claim.
+    actor = str(principal.user_id) if principal.user_id is not None else principal.role
+    for key, target in body.goals.items():
+        goals_store.set_goal(program, key, float(target), changed_by=actor, note=body.note)
+
+    return {
+        "goals": goals_store.get_goals(program),
+        "events": [_event_json(e) for e in goals_store.list_events(program)],
+    }

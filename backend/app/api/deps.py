@@ -49,6 +49,11 @@ from app.data.decisions_store import (
     InMemoryDecisionsStore,
     build_supabase_decisions_store,
 )
+from app.data.goals_store import (
+    GoalsStore,
+    InMemoryGoalsStore,
+    build_supabase_goals_store,
+)
 from app.data.layouts_store import (
     InMemoryLayoutsStore,
     LayoutsStore,
@@ -401,6 +406,43 @@ def _build_budget_store() -> BudgetStore:
 # (A-3), seeded from ``params.budget``; production swaps the Supabase-backed impl over
 # the 0030 tables.
 _budget_store: BudgetStore = _build_budget_store()
+
+
+def _build_goals_store() -> GoalsStore:
+    """Bind the Module-6 KPI-goals store, MIRRORING ``_build_budget_store``.
+
+    The same ``COCKPIT_REPO`` / ``SUPABASE_URL`` selection as the family, watermark,
+    payments, decisions, layouts, and budget stores, so they never disagree on which
+    backend is live (the NFR-8 store seam):
+
+    - ``synthetic`` ⇒ FORCE the in-memory store (never Supabase); the nine KPI targets
+      are SEEDED from ``goals_store.DEFAULT_GOALS`` (INV-11 — the targets' one home).
+    - ``supabase`` ⇒ REQUIRE the live store; a missing ``SUPABASE_URL`` is a misconfig
+      ⇒ raise (fail loud, the family-store posture).
+    - ``auto`` (default) ⇒ Supabase when ``SUPABASE_URL`` is configured, else the
+      in-memory v1 fallback (A-3). Default CI is the seeded :class:`InMemoryGoalsStore`.
+    """
+    repo_mode = Settings.from_env().cockpit_repo
+    if repo_mode == "synthetic":
+        return InMemoryGoalsStore()
+    if repo_mode == "supabase":
+        supabase = build_supabase_goals_store()
+        if supabase is None:
+            raise RuntimeError(
+                "COCKPIT_REPO=supabase requires SUPABASE_URL (+ "
+                "SUPABASE_SERVICE_ROLE_KEY) for the KPI-goals store; none was "
+                "configured. Set them, or use COCKPIT_REPO=synthetic / auto."
+            )
+        return supabase
+    return build_supabase_goals_store() or InMemoryGoalsStore()
+
+
+# Singleton KPI-goals store (Module 6 Phase 3) — the leadership-editable scorecard
+# targets + append-only change log behind the same NFR-8 seam as ``_repository``.
+# Default v1 = the seeded in-memory store (A-3); production swaps the Supabase-backed
+# impl over the 0033 tables. Held in a one-slot list so ``reset_goals_store`` can rebind
+# it for test isolation (the ``_observability`` pattern).
+_goals_store: list[GoalsStore] = [_build_goals_store()]
 
 # Singleton env snapshot, read once at import (TECH_STACK §5; INV-11). Tests that
 # need a different env override `get_settings_dep`; named so it never clashes with
@@ -759,6 +801,22 @@ def get_layouts_store() -> LayoutsStore:
 def get_budget_store() -> BudgetStore:
     """FastAPI dependency yielding the active Budget Tracker store (B4 seam)."""
     return _budget_store
+
+
+def get_goals_store() -> GoalsStore:
+    """FastAPI dependency yielding the active KPI-goals store (Module 6 Phase 3 seam)."""
+    return _goals_store[0]
+
+
+def reset_goals_store() -> None:
+    """Rebind the KPI-goals singleton to a fresh store (test isolation only).
+
+    Rebuilds the seam from the env (the seeded in-memory store under the default/CI
+    path) so each test starts from the canonical seed with no cross-test leakage — the
+    same one-slot rebind pattern as :func:`reset_observability_log`. Production never
+    calls this.
+    """
+    _goals_store[0] = _build_goals_store()
 
 
 # ===========================================================================

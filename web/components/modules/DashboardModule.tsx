@@ -7,16 +7,18 @@
 //   • "Reads all · owns nothing" — identical for every user/role; authoritative for
 //     no number (each cites its single source of record).
 
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { moduleById } from '@/lib/registry';
 import { TabBar } from '@/components/TabBar';
 import { useSession } from '@/lib/session';
-import { apiGet } from '@/lib/api';
+import { apiGet, apiPut } from '@/lib/api';
 import {
   type KpiRow,
   type WeeklyScorecardApi,
   type ConnectorApi,
   type ConnectorsApi,
+  type GoalsApi,
+  type GoalEvent,
   KPI_ROWS,
   kindOf,
   toKpiRow,
@@ -32,26 +34,53 @@ export function DashboardModule() {
   const { session } = useSession();
   const [live, setLive] = useState<WeeklyScorecardApi | null>(null);
   const [connectors, setConnectors] = useState<ConnectorApi[] | null>(null);
+  const [goals, setGoals] = useState<Record<string, number> | null>(null);
+  const [events, setEvents] = useState<GoalEvent[]>([]);
   const [tab, setTab] = useState(0);
 
-  useEffect(() => {
-    let active = true;
+  const loadWeekly = useCallback(() => {
     apiGet<WeeklyScorecardApi>('/scorecard/weekly', session.role).then((data) => {
-      if (active && data && Array.isArray(data.metrics) && data.metrics.length > 0) {
-        setLive(data);
+      if (data && Array.isArray(data.metrics) && data.metrics.length > 0) setLive(data);
+    });
+  }, [session.role]);
+
+  const loadGoals = useCallback(() => {
+    apiGet<GoalsApi>('/scorecard/goals', session.role).then((data) => {
+      if (data && data.goals) {
+        setGoals(data.goals);
+        setEvents(data.events ?? []);
       }
     });
-    apiGet<ConnectorsApi>('/scorecard/connectors', session.role).then((data) => {
-      if (active && data && Array.isArray(data.connectors)) setConnectors(data.connectors);
-    });
-    return () => {
-      active = false;
-    };
   }, [session.role]);
+
+  useEffect(() => {
+    loadWeekly();
+    loadGoals();
+    apiGet<ConnectorsApi>('/scorecard/connectors', session.role).then((data) => {
+      if (data && Array.isArray(data.connectors)) setConnectors(data.connectors);
+    });
+  }, [session.role, loadWeekly, loadGoals]);
+
+  // Leader/admin save: PUT the changed targets, then refresh goals + the scorecard
+  // (the weekly endpoint reads targets server-side, so the table/pacing update too).
+  const saveGoals = useCallback(
+    async (changed: Record<string, number>, note: string): Promise<boolean> => {
+      const res = await apiPut<GoalsApi>('/scorecard/goals', session.role, { goals: changed, note });
+      if (res && res.goals) {
+        setGoals(res.goals);
+        setEvents(res.events ?? []);
+        loadWeekly();
+        return true;
+      }
+      return false;
+    },
+    [session.role, loadWeekly],
+  );
 
   const isLive = live !== null;
   const rows: KpiRow[] = isLive ? (live!.metrics ?? []).map(toKpiRow) : KPI_ROWS;
   const goalDate = live?.goal_date ?? null;
+  const canEditGoals = session.role === 'leader' || session.role === 'admin';
 
   return (
     <>
@@ -60,7 +89,16 @@ export function DashboardModule() {
       {tab === 0 && <ScorecardTab rows={rows} isLive={isLive} asOf={live?.as_of} />}
       {tab === 1 && <TrendsTab rows={rows} />}
       {tab === 2 && <SlaOpsTab rows={rows} />}
-      {tab === 3 && <GoalPacingTab rows={rows} goalDate={goalDate} />}
+      {tab === 3 && (
+        <GoalPacingTab
+          rows={rows}
+          goalDate={goalDate}
+          goals={goals}
+          events={events}
+          canEdit={canEditGoals}
+          onSave={saveGoals}
+        />
+      )}
       {tab === 4 && <HubSpotMirrorTab rows={rows} />}
     </>
   );

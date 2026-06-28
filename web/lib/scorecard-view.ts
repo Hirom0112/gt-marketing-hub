@@ -85,6 +85,23 @@ export interface ConnectorsApi {
   connectors?: ConnectorApi[];
 }
 
+// ---- Leadership-editable goals (GET/PUT /scorecard/goals) --------------------
+export interface GoalEvent {
+  key: string;
+  old_target: number;
+  new_target: number;
+  changed_by: string;
+  changed_at: string;
+  note: string | null;
+}
+export interface GoalsApi {
+  goals?: Record<string, number>;
+  events?: GoalEvent[];
+}
+
+// KPI keys whose target is a rate (edited/displayed as a percentage, stored 0–1).
+export const RATE_KEYS = new Set(['conversion_top_channel', 'followup_sla', 'engagement_clicked']);
+
 // Map the backend green/yellow/red band onto the scorecard's status pills/tokens.
 export function statusPresentation(status: string): { label: string; statusBg: string; statusColor: string } {
   if (status === 'green') return { label: 'ON TRACK', statusBg: 'var(--ok-soft)', statusColor: 'var(--ok)' };

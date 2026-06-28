@@ -5,7 +5,15 @@
 // and shows where its numbers come from (provenance carried on every row).
 
 import { useState } from 'react';
-import { kindOf, fmtValue, fmtNum, type KpiRow, TRACKING_GAPS } from '@/lib/scorecard-view';
+import {
+  kindOf,
+  fmtValue,
+  fmtNum,
+  type KpiRow,
+  type GoalEvent,
+  TRACKING_GAPS,
+  RATE_KEYS,
+} from '@/lib/scorecard-view';
 
 const MONO = 'JetBrains Mono';
 
@@ -244,16 +252,59 @@ export function SlaOpsTab({ rows }: { rows: KpiRow[] }) {
 }
 
 // ========================= GOAL PACING ======================================
-export function GoalPacingTab({ rows, goalDate }: { rows: KpiRow[]; goalDate: string | null }) {
+export function GoalPacingTab({
+  rows,
+  goalDate,
+  goals,
+  events,
+  canEdit,
+  onSave,
+}: {
+  rows: KpiRow[];
+  goalDate: string | null;
+  goals: Record<string, number> | null;
+  events: GoalEvent[];
+  canEdit: boolean;
+  onSave: (changed: Record<string, number>, note: string) => Promise<boolean>;
+}) {
+  const [editing, setEditing] = useState(false);
   const paced = rows.filter((r) => r.statusKey !== 'uninstrumented' && r.targetNum > 0);
   const by = goalDate ? new Date(goalDate).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : 'the goal date';
   const GRID = '2fr 1fr 1fr 1.4fr 1.1fr';
   return (
     <section className="scr" style={{ padding: '20px 22px 40px' }}>
+      {editing && goals ? (
+        <GoalsEditor
+          rows={rows}
+          goals={goals}
+          onSave={onSave}
+          onClose={() => setEditing(false)}
+        />
+      ) : null}
       <div style={SECTION}>
-        <div style={{ ...HEAD, display: 'flex', justifyContent: 'space-between' }}>
+        <div style={{ ...HEAD, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
           <span>GOAL PACING</span>
-          <span style={{ fontFamily: MONO, fontSize: 9.5, fontWeight: 400, opacity: 0.85 }}>HORIZON · {by}</span>
+          <span style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+            {canEdit && goals && (
+              <button
+                onClick={() => setEditing((v) => !v)}
+                style={{
+                  cursor: 'pointer',
+                  fontFamily: MONO,
+                  fontSize: 9.5,
+                  fontWeight: 600,
+                  padding: '4px 10px',
+                  borderRadius: 2,
+                  border: '1px solid var(--paper)',
+                  background: editing ? 'var(--paper)' : 'transparent',
+                  color: editing ? 'var(--ink)' : 'var(--paper)',
+                }}
+              >
+                ✎ EDIT GOALS
+              </button>
+            )}
+            <span style={{ fontFamily: MONO, fontSize: 9.5, fontWeight: 400, opacity: 0.85 }}>HORIZON · {by}</span>
+          </span>
         </div>
         <div style={{ display: 'grid', gridTemplateColumns: GRID, fontFamily: MONO, fontSize: 9, letterSpacing: '.4px', color: 'var(--ink-3)', padding: '8px 16px', borderBottom: '1px solid var(--line-2)', fontWeight: 600 }}>
           <div>METRIC</div>
@@ -287,7 +338,124 @@ export function GoalPacingTab({ rows, goalDate }: { rows: KpiRow[]; goalDate: st
           Projection = current + recent weekly run-rate × weeks to horizon (deterministic, from the backbone).
         </div>
       </div>
+
+      {/* Change log — the append-only audit of every goal edit (leadership-set) */}
+      {events.length > 0 && (
+        <div style={SECTION}>
+          <div style={HEAD}>GOAL CHANGE LOG</div>
+          {events
+            .slice()
+            .reverse()
+            .slice(0, 8)
+            .map((e, i) => {
+              const label = rows.find((r) => r.key === e.key)?.name ?? e.key;
+              const rate = RATE_KEYS.has(e.key);
+              const fmt = (n: number) => (rate ? `${Math.round(n * 100)}%` : fmtNum(n));
+              return (
+                <div key={`${e.key}-${i}`} style={{ display: 'flex', gap: 12, alignItems: 'baseline', padding: '9px 16px', borderBottom: '1px solid var(--line)' }}>
+                  <span style={{ fontFamily: MONO, fontSize: 8.5, color: 'var(--ink-3)', whiteSpace: 'nowrap' }}>
+                    {new Date(e.changed_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
+                  </span>
+                  <span style={{ fontSize: 12, color: 'var(--ink)' }}>
+                    <b>{label}</b> {fmt(e.old_target)} → <b>{fmt(e.new_target)}</b>
+                  </span>
+                  {e.note ? <span style={{ fontFamily: MONO, fontSize: 9, color: 'var(--ink-3)' }}>“{e.note}”</span> : null}
+                </div>
+              );
+            })}
+        </div>
+      )}
     </section>
+  );
+}
+
+// Leadership goals editor (leader/admin only) — edit each KPI target, PUT to the store
+// (which logs a change event). Rate KPIs are edited as percentages, stored 0–1.
+function GoalsEditor({
+  rows,
+  goals,
+  onSave,
+  onClose,
+}: {
+  rows: KpiRow[];
+  goals: Record<string, number>;
+  onSave: (changed: Record<string, number>, note: string) => Promise<boolean>;
+  onClose: () => void;
+}) {
+  const labelOf = (key: string) => rows.find((r) => r.key === key)?.name ?? key;
+  const toField = (key: string, v: number) => (RATE_KEYS.has(key) ? String(Math.round(v * 100)) : fmtNum(v));
+  const [draft, setDraft] = useState<Record<string, string>>(
+    Object.fromEntries(Object.entries(goals).map(([k, v]) => [k, toField(k, v)])),
+  );
+  const [note, setNote] = useState('');
+  const [saving, setSaving] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  const save = async () => {
+    setSaving(true);
+    setErr(null);
+    // Only send keys whose value actually changed; convert % back to 0–1 for rates.
+    const changed: Record<string, number> = {};
+    for (const [k, raw] of Object.entries(draft)) {
+      const n = Number(raw);
+      if (Number.isNaN(n)) continue;
+      const val = RATE_KEYS.has(k) ? n / 100 : n;
+      if (val !== goals[k]) changed[k] = val;
+    }
+    if (Object.keys(changed).length === 0) {
+      onClose();
+      return;
+    }
+    const ok = await onSave(changed, note.trim());
+    setSaving(false);
+    if (ok) onClose();
+    else setErr('Save failed — check you are signed in as a leader.');
+  };
+
+  return (
+    <div style={{ ...SECTION }}>
+      <div style={{ ...HEAD, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+        <span>EDIT KPI GOALS</span>
+        <span style={{ fontFamily: MONO, fontSize: 9, fontWeight: 400, opacity: 0.85 }}>LEADERSHIP · CHANGES LOGGED</span>
+      </div>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(240px, 1fr))', gap: 12, padding: '14px 16px' }}>
+        {Object.keys(goals).map((key) => (
+          <label key={key} style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+            <span style={{ fontSize: 11, color: 'var(--ink-2)' }}>
+              {labelOf(key)} {RATE_KEYS.has(key) ? <span style={{ color: 'var(--ink-3)' }}>(%)</span> : null}
+            </span>
+            <input
+              type="number"
+              value={draft[key] ?? ''}
+              onChange={(e) => setDraft((d) => ({ ...d, [key]: e.target.value }))}
+              style={{ fontFamily: MONO, fontSize: 13, padding: '6px 8px', border: '1px solid var(--line-2)', background: 'var(--paper)', color: 'var(--ink)', borderRadius: 2 }}
+            />
+          </label>
+        ))}
+      </div>
+      <div style={{ display: 'flex', gap: 10, alignItems: 'center', padding: '0 16px 14px', flexWrap: 'wrap' }}>
+        <input
+          placeholder="Reason for change (logged)…"
+          value={note}
+          onChange={(e) => setNote(e.target.value)}
+          style={{ flex: 1, minWidth: 200, fontFamily: 'Geist', fontSize: 12, padding: '7px 10px', border: '1px solid var(--line-2)', background: 'var(--paper)', color: 'var(--ink)', borderRadius: 2 }}
+        />
+        {err && <span style={{ fontFamily: MONO, fontSize: 9.5, color: 'var(--signal)' }}>{err}</span>}
+        <button
+          onClick={onClose}
+          style={{ cursor: 'pointer', fontFamily: MONO, fontSize: 10, padding: '7px 12px', border: '1px solid var(--line-2)', background: 'transparent', color: 'var(--ink-2)', borderRadius: 2 }}
+        >
+          CANCEL
+        </button>
+        <button
+          onClick={save}
+          disabled={saving}
+          style={{ cursor: saving ? 'default' : 'pointer', fontFamily: MONO, fontSize: 10, fontWeight: 600, padding: '7px 14px', border: '1px solid var(--ink)', background: 'var(--ink)', color: 'var(--paper)', borderRadius: 2, opacity: saving ? 0.6 : 1 }}
+        >
+          {saving ? 'SAVING…' : 'SAVE GOALS'}
+        </button>
+      </div>
+    </div>
   );
 }
 
