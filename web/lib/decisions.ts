@@ -59,3 +59,105 @@ export function typeColor(t: string): string {
   if (t === 'HOT FAMILY') return 'var(--signal)';
   return 'var(--ink-2)';
 }
+
+// ---- Live backend shapes (GET/POST /decisions) ----------------------------
+// The wire shape from app/api/decisions.py (DecisionResponse). `state` is the raw
+// backbone state machine value; `/decisions/mine` adds `latest_comment`.
+
+export type ApiState = 'open' | 'decided' | 'in_flight';
+export type ApiPriority = 'urgent' | 'normal';
+export type ApiWorkstream =
+  | 'content' | 'grassroots' | 'field_events' | 'budget' | 'admissions' | 'nurture';
+
+export interface ApiDecision {
+  id: string;
+  source: string;
+  state: ApiState;
+  question: string;
+  raised_by: string;
+  workstream: string;
+  recommendation: string;
+  budget_ask: number | null;
+  due_date: string | null;       // YYYY-MM-DD
+  priority: string;              // urgent | normal
+  resolution_date: string | null; // iso
+  outcome: string | null;          // approve | reject | need_info | null (latest verdict)
+  created_at?: string;
+}
+
+// `/decisions/mine` extends the row with the leader's latest action comment.
+export interface MyApiDecision extends ApiDecision {
+  latest_comment: string | null;
+}
+
+// The raise form's payload (POST /decisions). raised_by is stamped server-side.
+export interface RaiseBody {
+  question: string;
+  recommendation: string;
+  workstream: ApiWorkstream;
+  budget_ask?: number | null;
+  due_date?: string | null;
+  priority: ApiPriority;
+}
+
+export const WORKSTREAM_OPTIONS: { value: ApiWorkstream; label: string }[] = [
+  { value: 'content', label: 'Content & Thought Leadership' },
+  { value: 'grassroots', label: 'Grassroots Engine' },
+  { value: 'field_events', label: 'Field & Events' },
+  { value: 'budget', label: 'Budget' },
+  { value: 'admissions', label: 'Admissions' },
+  { value: 'nurture', label: 'Nurture & Lifecycle' },
+];
+
+export function workstreamLabel(w: string): string {
+  return WORKSTREAM_OPTIONS.find((o) => o.value === w)?.label ?? (w || '—');
+}
+
+// The display outcome, from the API's real verdict (`outcome` = the latest action)
+// combined with `state`:
+//   • outcome approve → APPROVED, reject → REJECTED, need_info → NEED-INFO (open)
+//   • open + no verdict → PENDING
+//   • in_flight → IN FLIGHT
+// `resolved` is a defensive fallback for a decided row with no recorded verdict.
+export type Outcome = 'pending' | 'needinfo' | 'approved' | 'rejected' | 'resolved' | 'inflight';
+
+export function outcomeOf(d: { state: ApiState; outcome?: string | null; latest_comment?: string | null }): Outcome {
+  if (d.outcome === 'approve') return 'approved';
+  if (d.outcome === 'reject') return 'rejected';
+  if (d.state === 'in_flight') return 'inflight';
+  if (d.outcome === 'need_info') return 'needinfo';
+  if (d.state === 'decided') return 'resolved';
+  // open with no verdict (or a stale need-info comment without the flag)
+  if (d.latest_comment) return 'needinfo';
+  return 'pending';
+}
+
+export function outcomeMeta(o: Outcome): StatusMeta {
+  switch (o) {
+    case 'pending': return { label: 'PENDING', color: 'var(--signal)', bg: 'var(--signal-soft)' };
+    case 'needinfo': return { label: 'NEED-INFO', color: 'var(--warn)', bg: 'var(--warn-soft)' };
+    case 'approved': return { label: 'APPROVED', color: 'var(--ok)', bg: 'var(--ok-soft)' };
+    case 'rejected': return { label: 'REJECTED', color: 'var(--signal)', bg: 'var(--signal-soft)' };
+    case 'resolved': return { label: 'RESOLVED', color: 'var(--ok)', bg: 'var(--ok-soft)' };
+    case 'inflight': return { label: 'IN FLIGHT', color: 'var(--brand)', bg: 'var(--accent-soft)' };
+  }
+}
+
+// Relative age from an iso timestamp ("2h", "1d") — matches the seed's compact style.
+export function relAge(iso: string | null | undefined): string {
+  if (!iso) return '';
+  const then = new Date(iso).getTime();
+  if (Number.isNaN(then)) return '';
+  const mins = Math.max(0, Math.round((Date.now() - then) / 60000));
+  if (mins < 1) return 'just now';
+  if (mins < 60) return `${mins}m`;
+  const h = Math.round(mins / 60);
+  return h < 24 ? `${h}h` : `${Math.round(h / 24)}d`;
+}
+
+export function fmtBudget(n: number | null | undefined): string | null {
+  if (n === null || n === undefined) return null;
+  const abs = Math.abs(n);
+  const s = abs >= 1000 ? `$${(abs / 1000).toFixed(abs % 1000 === 0 ? 0 : 1)}K` : `$${abs}`;
+  return n < 0 ? `-${s}` : s;
+}

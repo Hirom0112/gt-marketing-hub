@@ -4,8 +4,12 @@
 // in a card chrome with the source tag, a size-cycle control, and a remove (×).
 // The same renderer covers all 44 library widgets.
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import type { WidgetDef, WidgetSize } from '@/lib/widgets';
+import { useSession } from '@/lib/session';
+import { canViewFullQueue } from '@/lib/registry';
+import { apiGet } from '@/lib/api';
+import { type ApiDecision, workstreamLabel } from '@/lib/decisions';
 
 const MONO = 'JetBrains Mono';
 const DISPLAY = 'Fraunces';
@@ -60,6 +64,55 @@ export function WidgetCard({
   );
 }
 
+// Decision-queue preview — leadership-only (spec Module 11). Fetches the top open
+// decisions from the live backbone; operators get an empty/locked state; a failed
+// fetch falls back to an empty line (fail-soft).
+function DecisionPreviewBody() {
+  const { session } = useSession();
+  const allowed = canViewFullQueue(session); // admin + leader
+  const [rows, setRows] = useState<ApiDecision[] | null>(null);
+  const [loaded, setLoaded] = useState(false);
+
+  useEffect(() => {
+    if (!allowed) { setLoaded(true); return; }
+    let live = true;
+    apiGet<ApiDecision[]>('/decisions?view=active', session.role).then((data) => {
+      if (!live) return;
+      if (Array.isArray(data)) setRows(data);
+      setLoaded(true);
+    });
+    return () => { live = false; };
+  }, [allowed, session.role]);
+
+  if (!allowed) {
+    return (
+      <div style={{ fontFamily: MONO, fontSize: 10.5, color: 'var(--ink-3)', display: 'flex', alignItems: 'center', gap: 7 }}>
+        <span>🔒</span> Leadership-only — the decision queue is hidden for your seat.
+      </div>
+    );
+  }
+  if (!loaded) return <div style={{ fontFamily: MONO, fontSize: 10.5, color: 'var(--ink-3)' }}>Loading…</div>;
+  const top = (rows ?? []).slice(0, 3);
+  if (top.length === 0) {
+    return <div style={{ fontFamily: MONO, fontSize: 10.5, color: 'var(--ink-3)' }}>No open decisions — the queue is clear.</div>;
+  }
+  return (
+    <ul style={{ margin: 0, padding: 0, listStyle: 'none', display: 'flex', flexDirection: 'column', gap: 6 }}>
+      {top.map((d) => (
+        <li key={d.id} style={{ fontSize: 11.5, color: 'var(--ink-2)', display: 'flex', gap: 7, alignItems: 'baseline' }}>
+          <span style={{ color: d.priority === 'urgent' ? 'var(--signal)' : 'var(--gold)' }}>·</span>
+          <span style={{ flex: 1 }}>
+            {d.question || '(untitled)'}
+            <span style={{ fontFamily: MONO, fontSize: 8.5, color: 'var(--ink-3)', marginLeft: 6 }}>
+              {workstreamLabel(d.workstream)} · awaiting leader
+            </span>
+          </span>
+        </li>
+      ))}
+    </ul>
+  );
+}
+
 function CtlButton({ onClick, title, signal, children }: { onClick: () => void; title: string; signal?: boolean; children: React.ReactNode }) {
   const [hover, setHover] = useState(false);
   return (
@@ -85,6 +138,8 @@ function CtlButton({ onClick, title, signal, children }: { onClick: () => void; 
 }
 
 function Body({ def }: { def: WidgetDef }) {
+  // The Decision-Queue preview is leadership-only and reads the live open queue.
+  if (def.id === 'decision-queue-preview') return <DecisionPreviewBody />;
   const c = def.content;
   switch (c.kind) {
     case 'stat':

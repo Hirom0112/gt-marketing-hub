@@ -7,10 +7,12 @@
 // lock on the Decision Queue.
 
 import Link from 'next/link';
-import { useState } from 'react';
-import { GROUP_ORDER, MODULES, canView } from '@/lib/registry';
+import { useEffect, useState } from 'react';
+import { GROUP_ORDER, MODULES, canView, canViewFullQueue } from '@/lib/registry';
 import type { Group, ModuleDef, Role } from '@/lib/registry';
 import { useSession } from '@/lib/session';
+import { apiGet } from '@/lib/api';
+import type { ApiDecision } from '@/lib/decisions';
 
 const MONO = 'JetBrains Mono';
 
@@ -22,6 +24,24 @@ const ROLE_BTNS: { k: Role; label: string }[] = [
 
 export function Sidebar({ activeId }: { activeId: string }) {
   const { session, setRole, theme, toggleTheme } = useSession();
+
+  // Leadership-only open-decision count for the Decision Queue nav badge. Operators
+  // never fetch it (they can't view the full queue). Refetches when the module
+  // signals a change (raise / decide) via the `decisions:changed` event. Fails soft.
+  const showBadge = canViewFullQueue(session);
+  const [openCount, setOpenCount] = useState(0);
+  useEffect(() => {
+    if (!showBadge) { setOpenCount(0); return; }
+    let live = true;
+    const load = () =>
+      apiGet<ApiDecision[]>('/decisions?view=active', session.role).then((data) => {
+        if (live && Array.isArray(data)) setOpenCount(data.length);
+      });
+    load();
+    const onChanged = () => load();
+    window.addEventListener('decisions:changed', onChanged);
+    return () => { live = false; window.removeEventListener('decisions:changed', onChanged); };
+  }, [showBadge, session.role]);
 
   return (
     <aside
@@ -80,6 +100,7 @@ export function Sidebar({ activeId }: { activeId: string }) {
                 >
                   <span style={{ fontFamily: MONO, fontSize: 10, color: active ? 'var(--chrome-accent)' : 'var(--chrome-fg)', minWidth: 16, opacity: active ? 1 : 0.65 }}>{m.idx}</span>
                   <span style={{ flex: 1, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{m.label}</span>
+                  {m.id === 'decision' && showBadge && openCount > 0 && <OpenDot count={openCount} />}
                   {owns && <Badge bg="var(--chrome-accent)" color="var(--chrome)">OWN</Badge>}
                   {locked && <Badge bg="var(--chrome-hover)" color="var(--chrome-fg-active)">LEAD</Badge>}
                 </div>
@@ -162,6 +183,23 @@ function ThemeToggle({ theme, onClick }: { theme: 'light' | 'dark'; onClick: () 
       <span>{theme === 'light' ? '☀ LIGHT' : '☾ DARK'}</span>
       <span style={{ opacity: 0.6 }}>⌥T</span>
     </button>
+  );
+}
+
+// Red-dot + count for open decisions awaiting leadership (Decision Queue nav row).
+function OpenDot({ count }: { count: number }) {
+  return (
+    <span
+      title={`${count} open decision${count === 1 ? '' : 's'} awaiting a decision`}
+      style={{
+        display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+        minWidth: 16, height: 16, padding: '0 4px', borderRadius: 8,
+        background: 'var(--signal)', color: '#fff',
+        fontFamily: MONO, fontSize: 8.5, fontWeight: 700, lineHeight: 1,
+      }}
+    >
+      {count}
+    </span>
   );
 }
 
