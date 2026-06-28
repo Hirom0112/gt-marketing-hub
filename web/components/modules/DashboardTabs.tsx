@@ -18,20 +18,30 @@ import {
 const MONO = 'JetBrains Mono';
 
 // ---- a tiny dependency-free SVG line chart (normalized per series) -----------
-function LineChart({
+// Exported so other modules (e.g. the Budget Tracker's 10b burn chart) reuse the
+// same dependency-free renderer instead of duplicating it.
+export function LineChart({
   series,
   height = 160,
+  sharedScale = false,
 }: {
   series: { label: string; color: string; points: number[] }[];
   height?: number;
+  // When true, ALL series share one y-axis (global min/max) so they're directly
+  // comparable — correct for a burn chart (actual vs plan). Default false keeps the
+  // per-series normalization the Trends compare-two view wants (shape, not scale).
+  sharedScale?: boolean;
 }) {
   const width = 720;
   const pad = 8;
   const maxLen = Math.max(...series.map((s) => s.points.length), 2);
+  const allPoints = series.flatMap((s) => s.points);
+  const globalLo = allPoints.length ? Math.min(...allPoints) : 0;
+  const globalHi = allPoints.length ? Math.max(...allPoints) : 1;
   const path = (points: number[]) => {
     if (points.length === 0) return '';
-    const lo = Math.min(...points);
-    const hi = Math.max(...points);
+    const lo = sharedScale ? globalLo : Math.min(...points);
+    const hi = sharedScale ? globalHi : Math.max(...points);
     const span = hi - lo || 1; // flat series ⇒ centre the line
     const stepX = (width - pad * 2) / (maxLen - 1);
     return points

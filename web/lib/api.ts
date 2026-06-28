@@ -86,16 +86,41 @@ export async function apiPost<T>(path: string, role: Role, body: unknown): Promi
 }
 
 // ---- typed shapes for the wired endpoints --------------------------------
+// Matches GET /budget (backend app/api/budget.py). The Budget Tracker (Module 10)
+// renders rows + flagged + rollup + per-workstream burn + the weekly burn series.
+export type BudgetHealth = 'on_track' | 'watch' | 'at_risk';
+
 export interface BudgetWorkstream {
   workstream: string;
   planned: number;
   committed: number;
   actual: number;
   remaining: number;
-  variance: number;
+  variance: number; // (actual - planned) / planned, exact ratio
   flagged: boolean;
+  health: BudgetHealth;
+}
+export interface BudgetBurnRow {
+  workstream: string;
+  planned: number;
+  actual: number;
+}
+export interface BudgetBurnPoint {
+  week_start: string; // "YYYY-MM-DD" (ISO-week Monday)
+  cumulative_actual: number;
+  cumulative_planned: number;
+}
+export interface BudgetRollup {
+  total_planned: number;
+  total_actual: number;
+  total_remaining: number;
+  total_usd: number;
+  projected_burnout: string | null; // "YYYY-MM-DD" | null
 }
 export interface BudgetResponse {
   workstreams: BudgetWorkstream[];
-  total?: { planned: number; committed: number; actual: number; remaining: number };
+  flagged: string[];
+  rollup: BudgetRollup;
+  burn: BudgetBurnRow[];
+  burn_series: BudgetBurnPoint[];
 }
