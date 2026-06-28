@@ -18,6 +18,7 @@ import {
   KPI_ROWS,
   kindOf,
   toKpiRow,
+  fmtValue,
 } from '@/lib/scorecard-view';
 import { TrendsTab, SlaOpsTab, GoalPacingTab, HubSpotMirrorTab } from '@/components/modules/DashboardTabs';
 
@@ -65,6 +66,7 @@ function ScorecardTab({ rows, isLive, asOf }: { rows: KpiRow[]; isLive: boolean;
 
   return (
     <section className="scr" style={{ padding: '20px 22px 40px' }}>
+      <CalloutCards rows={rows} />
       <div style={{ border: '1px solid var(--ink)', background: 'var(--card)', marginBottom: 16 }}>
         {/* Inverted header band */}
         <div
@@ -208,6 +210,62 @@ function ScorecardTab({ rows, isLive, asOf }: { rows: KpiRow[]; isLive: boolean;
         <span>Referenced live in the Monday meeting (agenda item 2 · the Marketing Lead).</span>
       </div>
     </section>
+  );
+}
+
+// Auto-identified callout cards (spec 6: "biggest mover" + "red flags"), derived
+// from the weekly deltas/status — no second source, just a read over the rows.
+function CalloutCards({ rows }: { rows: KpiRow[] }) {
+  // Biggest mover: largest absolute real week-over-week delta (needs a prior week).
+  const movers = rows
+    .filter((r) => r.statusKey !== 'uninstrumented' && r.sparkline.length >= 2)
+    .map((r) => ({ row: r, change: r.nowNum - r.sparkline[r.sparkline.length - 2] }))
+    .sort((a, b) => Math.abs(b.change) - Math.abs(a.change));
+  const mover = movers[0] ?? null;
+  // Red flags: anything AT RISK, or behind its pace toward target.
+  const flags = rows.filter(
+    (r) => r.statusKey === 'red' || (r.targetNum > 0 && r.statusKey !== 'uninstrumented' && r.projection < r.targetNum),
+  );
+
+  return (
+    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 16 }}>
+      <div style={{ border: '1px solid var(--line-2)', background: 'var(--card)', padding: '12px 14px' }}>
+        <div style={{ fontFamily: MONO, fontSize: 9, letterSpacing: '.5px', color: 'var(--ink-3)', fontWeight: 600 }}>
+          ▲ BIGGEST MOVER
+        </div>
+        {mover ? (
+          <>
+            <div style={{ fontFamily: 'Fraunces', fontSize: 16, fontWeight: 600, color: 'var(--ink)', marginTop: 6 }}>
+              {mover.row.name}
+            </div>
+            <div style={{ fontFamily: MONO, fontSize: 10, color: mover.change >= 0 ? 'var(--ok)' : 'var(--signal)', marginTop: 2 }}>
+              {mover.change >= 0 ? '▲' : '▼'} {fmtValue(Math.abs(mover.change), mover.row.targetNum)} week-over-week · now {mover.row.now}
+            </div>
+          </>
+        ) : (
+          <div style={{ fontFamily: MONO, fontSize: 10, color: 'var(--ink-3)', marginTop: 8 }}>
+            Accruing — week-over-week movers appear once the backbone has &gt;1 week of history.
+          </div>
+        )}
+      </div>
+      <div style={{ border: '1px solid var(--line-2)', background: 'var(--card)', padding: '12px 14px' }}>
+        <div style={{ fontFamily: MONO, fontSize: 9, letterSpacing: '.5px', color: 'var(--signal)', fontWeight: 600 }}>
+          ⚑ RED FLAGS
+        </div>
+        {flags.length ? (
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 8 }}>
+            {flags.map((f) => (
+              <span key={f.key} style={{ fontFamily: MONO, fontSize: 9.5, padding: '3px 8px', borderRadius: 2, background: 'var(--signal-soft)', color: 'var(--signal)' }}>
+                {f.name} · {f.now}
+                {f.targetNum > 0 ? ` / ${f.target}` : ''}
+              </span>
+            ))}
+          </div>
+        ) : (
+          <div style={{ fontFamily: MONO, fontSize: 10, color: 'var(--ink-3)', marginTop: 8 }}>No metric below threshold this week.</div>
+        )}
+      </div>
+    </div>
   );
 }
 
