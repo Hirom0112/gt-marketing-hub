@@ -1,4 +1,0 @@
-# Synthetic demo replica of apply.gt.school — not for indexing.
-# Disallow all crawlers so it never surfaces in search alongside the real site.
-User-agent: *
-Disallow: /

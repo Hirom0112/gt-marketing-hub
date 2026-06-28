@@ -1,9 +1,0 @@
-# Local secrets — the anon key + URL live here; never committed.
-# (The repo-root .gitignore also covers .env / .env.*, this is belt-and-suspenders.)
-.env
-.env.*
-!.env.example
-
-node_modules/
-dist/
-.vercel

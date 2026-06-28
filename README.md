@@ -1,8 +1,11 @@
 # GT Marketing Hub
 
-**A marketing operations cockpit for GT School, built on a sync engine that keeps a CRM as the
-single source of truth — payments, dual-source reconciliation, program isolation, and an
-eval-gated AI edge, all provable against synthetic data built to stress them.**
+**The marketing operations product for GT School — a 13-module web app on a sync engine that keeps a
+CRM (HubSpot) and the app's own database in agreement, with exactly one authoritative source per
+number: the database (`app_form`) owns the funnel / TEFA / income / grade truth, the CRM owns
+contacts, deals, and engagement, and the Hub itself owns budget. Payments, dual-source
+reconciliation, program isolation, and an eval-gated AI edge — all provable against synthetic data
+built to stress them.**
 
 This is the GT technical project: **Phase 1** a data backbone (a bidirectional CRM↔database sync
 engine with strict per-program isolation and idempotent payments), and **Phase 2** the product on

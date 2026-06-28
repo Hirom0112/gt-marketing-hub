@@ -45,3 +45,12 @@ gt school scrap/
 
 # Local Supabase CLI dev scaffolding (supabase init/start) — machine-specific, not committed
 supabase/
+
+# Non-deliverable directories — kept on disk, excluded from the submission repo.
+# Legacy GT Pulse (Vite) superseded by web/; a standalone mock apply SPA; agent
+# tooling; imported design assets; an empty infra placeholder.
+/frontend/
+/apply/
+/coworker/
+/design-import/
+/infra/
