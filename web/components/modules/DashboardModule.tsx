@@ -15,6 +15,8 @@ import { apiGet } from '@/lib/api';
 import {
   type KpiRow,
   type WeeklyScorecardApi,
+  type ConnectorApi,
+  type ConnectorsApi,
   KPI_ROWS,
   kindOf,
   toKpiRow,
@@ -29,6 +31,7 @@ export function DashboardModule() {
   const def = moduleById('dashboard')!;
   const { session } = useSession();
   const [live, setLive] = useState<WeeklyScorecardApi | null>(null);
+  const [connectors, setConnectors] = useState<ConnectorApi[] | null>(null);
   const [tab, setTab] = useState(0);
 
   useEffect(() => {
@@ -37,6 +40,9 @@ export function DashboardModule() {
       if (active && data && Array.isArray(data.metrics) && data.metrics.length > 0) {
         setLive(data);
       }
+    });
+    apiGet<ConnectorsApi>('/scorecard/connectors', session.role).then((data) => {
+      if (active && data && Array.isArray(data.connectors)) setConnectors(data.connectors);
     });
     return () => {
       active = false;
@@ -50,6 +56,7 @@ export function DashboardModule() {
   return (
     <>
       <TabBar tabs={def.tabs} active={tab} onChange={setTab} />
+      <FreshnessStrip connectors={connectors} />
       {tab === 0 && <ScorecardTab rows={rows} isLive={isLive} asOf={live?.as_of} />}
       {tab === 1 && <TrendsTab rows={rows} />}
       {tab === 2 && <SlaOpsTab rows={rows} />}
@@ -210,6 +217,54 @@ function ScorecardTab({ rows, isLive, asOf }: { rows: KpiRow[]; isLive: boolean;
         <span>Referenced live in the Monday meeting (agenda item 2 · the Marketing Lead).</span>
       </div>
     </section>
+  );
+}
+
+// Connector freshness strip (spec 6: "last sync per connector"). One chip per data
+// source, colored by mode, so you see at a glance which backbones are live vs
+// simulated vs stood-in — and when each last synced.
+function relTime(iso: string | null): string {
+  if (!iso) return '';
+  const then = new Date(iso).getTime();
+  if (Number.isNaN(then)) return '';
+  const mins = Math.max(0, Math.round((Date.now() - then) / 60000));
+  if (mins < 1) return 'just now';
+  if (mins < 60) return `${mins}m ago`;
+  const h = Math.round(mins / 60);
+  return h < 24 ? `${h}h ago` : `${Math.round(h / 24)}d ago`;
+}
+
+function FreshnessStrip({ connectors }: { connectors: ConnectorApi[] | null }) {
+  if (!connectors || connectors.length === 0) return null;
+  const dot = (mode: string, kind: string) =>
+    kind === 'our_db' ? 'var(--brand)' : mode === 'live' ? 'var(--ok)' : mode === 'stood_in' ? 'var(--ink-3)' : 'var(--warn)';
+  const modeLabel = (c: ConnectorApi) =>
+    c.kind === 'our_db' ? 'live' : c.mode === 'stood_in' ? 'stood-in' : c.mode;
+  return (
+    <div
+      style={{
+        display: 'flex',
+        alignItems: 'center',
+        gap: 14,
+        flexWrap: 'wrap',
+        padding: '8px 22px',
+        borderBottom: '1px solid var(--line)',
+        background: 'var(--card-2)',
+      }}
+    >
+      <span style={{ fontFamily: MONO, fontSize: 8.5, letterSpacing: '.5px', color: 'var(--ink-3)', fontWeight: 600 }}>
+        DATA FRESHNESS
+      </span>
+      {connectors.map((c) => (
+        <span key={c.name} style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+          <span aria-hidden style={{ width: 7, height: 7, borderRadius: '50%', background: dot(c.mode, c.kind) }} />
+          <span style={{ fontSize: 11, color: 'var(--ink-2)' }}>{c.name}</span>
+          <span style={{ fontFamily: MONO, fontSize: 8.5, color: 'var(--ink-3)' }}>
+            {c.last_sync ? relTime(c.last_sync) : modeLabel(c)}
+          </span>
+        </span>
+      ))}
+    </div>
   );
 }
 

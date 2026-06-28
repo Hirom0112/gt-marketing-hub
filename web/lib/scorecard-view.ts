@@ -74,6 +74,17 @@ export interface WeeklyScorecardApi {
   goal_date?: string;
 }
 
+// ---- Connector freshness (GET /scorecard/connectors) ------------------------
+export interface ConnectorApi {
+  name: string;
+  kind: string; // our_db | live | simulate | stood_in
+  mode: string; // live | simulate | stood_in
+  last_sync: string | null;
+}
+export interface ConnectorsApi {
+  connectors?: ConnectorApi[];
+}
+
 // Map the backend green/yellow/red band onto the scorecard's status pills/tokens.
 export function statusPresentation(status: string): { label: string; statusBg: string; statusColor: string } {
   if (status === 'green') return { label: 'ON TRACK', statusBg: 'var(--ok-soft)', statusColor: 'var(--ok)' };

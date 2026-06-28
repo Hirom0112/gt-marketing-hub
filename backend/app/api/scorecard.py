@@ -56,6 +56,12 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends
 
+from app.adapters.registry import (
+    effective_crm_mode,
+    effective_open_data_mode,
+    effective_payments_mode,
+    effective_sheets_mode,
+)
 from app.api.ambassadors import get_ambassador_sources
 from app.api.deps import (
     Principal,
@@ -65,6 +71,8 @@ from app.api.deps import (
     get_payments_store,
     get_principal,
     get_repository,
+    get_settings_dep,
+    get_watermark_store,
 )
 from app.core.ambassador_reconcile import reconcile_ambassadors
 from app.core.contact_log import last_contact_at
@@ -72,11 +80,13 @@ from app.core.lead_routing import is_sla_breached
 from app.core.metric_provenance import PROVENANCE, MetricProvenance
 from app.core.params import Params
 from app.core.program import Program
+from app.core.settings import Settings
 from app.core.weekly_scorecard import MetricSeries, build_weekly_scorecard
 from app.data.models import Stage
 from app.data.payments_store import InMemoryPaymentsStore, PaymentsStore
 from app.data.repository import FamilyRepository
 from app.data.synthetic_ambassadors import AmbassadorSources
+from app.data.watermark_store import WatermarkStore
 from app.observability.log_store import ObservabilityLog
 
 router = APIRouter(tags=["scorecard"])
@@ -89,8 +99,20 @@ PaymentsStoreDep = Annotated[PaymentsStore, Depends(get_payments_store)]
 LogDep = Annotated[ObservabilityLog, Depends(get_observability_log)]
 ProgramDep = Annotated[Program, Depends(get_active_program)]
 SourcesDep = Annotated[AmbassadorSources, Depends(get_ambassador_sources)]
+SettingsDep = Annotated[Settings, Depends(get_settings_dep)]
+WatermarkStoreDep = Annotated[WatermarkStore, Depends(get_watermark_store)]
 # Any authenticated principal — the scorecard is identical for everyone (no role gate).
 AnyPrincipalDep = Annotated[Principal, Depends(get_principal)]
+
+# The CRM-poll watermark object type whose last-sync stands for "HubSpot freshness"
+# (the deal stream — the pull crm_sync advances; A2). A named constant, not a tunable.
+_CRM_WATERMARK_OBJECT = "deal"
+
+# The connector freshness roster (the data-freshness strip, spec 6 "last sync per
+# connector"). Each entry: (display name, provenance kind, mode resolver). A resolver
+# of None means the connector has no live/simulate seam — it's always stood-in (a
+# source we can't reach) or our own DB. ONE home for the roster.
+_STOOD_IN_CONNECTORS: tuple[str, ...] = ("Meta Business Suite", "GA4", "X / Twitter")
 
 # The human label per KPI key (the scorecard row title). Ordered to mirror the spec.
 _LABELS: dict[str, str] = {
@@ -318,3 +340,56 @@ def get_weekly_scorecard(
     # goal_date — the pacing horizon (params.kpi.scorecard.goal_date, INV-11). The
     # Goal-pacing tab projects each metric to this date; surfaced alongside as_of.
     return {"metrics": metrics, "as_of": as_of, "goal_date": params.kpi.scorecard.goal_date}
+
+
+@router.get("/scorecard/connectors")
+def get_connector_freshness(
+    settings: SettingsDep,
+    watermarks: WatermarkStoreDep,
+    program: ProgramDep,
+    principal: AnyPrincipalDep,
+) -> dict[str, object]:
+    """Per-connector freshness for the data-freshness strip (spec 6; any seat).
+
+    Reports each data source the scorecard reads, its trust ``mode`` (``live`` when
+    its adapter is in live mode, ``simulate`` when defaulting to the offline impl,
+    ``stood_in`` for a source we can't reach), and its ``last_sync`` where one exists.
+    Only the CRM poll keeps a watermark (the ``deal`` stream, A2); the others report
+    their mode without a timestamp. Read-only — REPORTS the effective modes via the
+    registry's ``effective_*`` resolvers (the read-only status posture), never flips one.
+    """
+    crm_last_sync = watermarks.get_watermark(program, _CRM_WATERMARK_OBJECT)
+    stood_in: list[dict[str, object]] = [
+        {"name": name, "kind": "stood_in", "mode": "stood_in", "last_sync": None}
+        for name in _STOOD_IN_CONNECTORS
+    ]
+    connectors: list[dict[str, object]] = [
+        # Supabase is our own DB — the request-time source of record, always live.
+        {"name": "Supabase", "kind": "our_db", "mode": "live", "last_sync": None},
+        {
+            "name": "HubSpot",
+            "kind": "live" if effective_crm_mode(settings) == "live" else "simulate",
+            "mode": effective_crm_mode(settings),
+            "last_sync": crm_last_sync.isoformat() if crm_last_sync is not None else None,
+        },
+        {
+            "name": "Stripe",
+            "kind": "live" if effective_payments_mode(settings) == "live" else "simulate",
+            "mode": effective_payments_mode(settings),
+            "last_sync": None,
+        },
+        {
+            "name": "Open Data",
+            "kind": "live" if effective_open_data_mode(settings) == "live" else "simulate",
+            "mode": effective_open_data_mode(settings),
+            "last_sync": None,
+        },
+        {
+            "name": "Google Sheets",
+            "kind": "live" if effective_sheets_mode(settings) == "live" else "simulate",
+            "mode": effective_sheets_mode(settings),
+            "last_sync": None,
+        },
+        *stood_in,
+    ]
+    return {"connectors": connectors}

@@ -129,6 +129,30 @@ def test_provenance_map_matches_rendered_keys() -> None:
     assert set(PROVENANCE) == rendered == _EXPECTED_KEYS
 
 
+def test_weekly_carries_goal_date() -> None:
+    """The pacing horizon (params goal_date) is surfaced for the Goal-pacing tab."""
+    body = _get_weekly()
+    assert body.get("goal_date"), "goal_date must be present for goal pacing"
+
+
+def test_connector_freshness_roster() -> None:
+    """/scorecard/connectors reports every source with a mode; stood-in sources labeled."""
+    resp = client.get("/scorecard/connectors")
+    assert resp.status_code == 200, resp.text
+    connectors = resp.json()["connectors"]
+    names = {c["name"] for c in connectors}
+    # The real seams + our DB + the unreachable stood-in sources are all reported.
+    assert {"Supabase", "HubSpot", "Stripe", "Meta Business Suite"} <= names
+    for c in connectors:
+        assert set(c) == {"name", "kind", "mode", "last_sync"}
+        assert c["mode"] in {"live", "simulate", "stood_in"}
+    # Supabase is our source of record (always live); Meta is an unreachable stand-in.
+    supabase = next(c for c in connectors if c["name"] == "Supabase")
+    assert supabase["kind"] == "our_db" and supabase["mode"] == "live"
+    meta = next(c for c in connectors if c["name"] == "Meta Business Suite")
+    assert meta["mode"] == "stood_in"
+
+
 def test_no_token_unauthorized() -> None:
     """No bearer token → 401 (the S1 default-DENY; the scorecard still needs a seat)."""
     # Pop the conftest admin-on-no-token shim and run the REAL verifier with the test
