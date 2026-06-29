@@ -56,3 +56,6 @@ supabase/
 /infra/
 # Build history + planning doc suite — kept on disk, not in the submission repo.
 /archive/
+# Installed third-party agent skills (npx skills add) — tooling, not deliverable.
+/.agents/
+/skills-lock.json

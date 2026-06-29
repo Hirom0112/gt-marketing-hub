@@ -81,8 +81,9 @@ cd web && npm install && npm run dev      # http://localhost:3001
 ```
 
 The Hub runs **standalone on seed data** out of the box, so you can click through every module with
-no backend. With the API running on `:8000`, the wired modules (Budget, KPI Scorecard, CRM Ops,
-Grassroots, Summer Camp, Content) read **live** from the backbone and fall back to seed if it's
+no backend. With the API running on `:8000`, the wired modules (Budget, KPI Scorecard, Decision Queue,
+Grassroots, Content, Summer Camp, Field & Events) read **live** from the backbone — each fully fleshed
+out across its sub-view tabs with real owner-gated writes — and fall back to seed if the API is
 unreachable. Use the **"VIEWING AS"** switcher (top bar) to change roles.
 
 > **Real integrations are opt-in.** Each live source needs its own env var + credential (the full
@@ -148,8 +149,10 @@ matches for human review (never auto-merge). Summer Camp ties to Phase-1 **progr
 
 ## Where I spent depth (and what I cut)
 
-Two days is not enough for 13 modules — the judgment being scored is *which* to build deep. I built
-the **data backbone + the modules that exercise it hardest**, and deliberately stubbed the rest.
+The judgment being scored is *which* modules to build deep. I built the **data backbone** plus the
+**seven modules that exercise it hardest** — each end-to-end across every sub-view tab, persisted to
+live Supabase (migrations `0032`–`0039`, program-scoped RLS), with real owner-gated writes verified
+live — and deliberately left the breadth/viz surfaces as honest seed.
 
 **Built deep, on the real backbone:**
 
@@ -157,17 +160,24 @@ the **data backbone + the modules that exercise it hardest**, and deliberately s
   **idempotent Stripe payments** (signature verify + replay-NOOP ledger), **per-program isolation**
   (RESTRICTIVE RLS keyed on the JWT `program_id`), identity/household **merge queue** (fail-closed),
   **sync-parity** + data-quality derivers, and **Open Data** enrichment that changes a decision.
-- **CRM Ops** — parity score, UTM health (known broken), data-quality queue, field-reliability flags.
-  This is where Phase 1 surfaces as product.
-- **Budget** — the clearest "a number means the same everywhere" test ($365K, variance → Decision Queue).
-- **Decision Queue** — leadership-only role gate + cross-module auto-flags.
-- **Grassroots** + **Summer Camp** — the two **dual-source reconcilers** the spec calls for.
-- **Content** — production kanban with **real two-way Google Sheets sync**.
-- **Nurture** + **KPI Scorecard** + composable **Home**.
+- **Budget** — the clearest "a number means the same everywhere" test ($365K, variance → Decision
+  Queue); burn series, per-owner spend gating, leadership re-plan.
+- **KPI Scorecard** — per-metric provenance (where every number comes from), trends, SLA, goal pacing.
+- **Decision Queue** — leadership-only gate; first-class decision columns; cross-module auto-flags
+  (budget variance, hot families, event proposals) and a resolved-toast back to submitters.
+- **Grassroots** — ambassador roster + **dual-source reconcile** (HubSpot ⊕ community), market map,
+  referral sprints, parent community (honest stood-in for un-instrumented NPS), parent-led events.
+- **Content & Thought Leadership** — production kanban with **real two-way Google Sheets sync**,
+  editorial calendar with conflict detection, channel performance (UTM honesty), searchable library,
+  and an **advisory brand-voice auditor** (LLM-proposal → heuristic fallback, INV-2).
+- **Summer Camp** — **dual-source reconcile** + program isolation, registration funnel, sessions, and
+  **revenue collected via real Stripe** (test-mode PaymentIntents → signed webhook → camp ledger).
+- **Field Marketing & Events** — event tracker, a **month-grid calendar** that overlays Grassroots
+  ambassador events **read-only**, and priority-event proposals into the Decision Queue.
 
-**Deliberately stubbed (honest seed, labeled):** Field & Events, Website Analytics (GA4 stood-in),
-Resource Library, and the Admissions/VoC objection log. These are integration/viz surfaces that don't
-test the backbone, so they render seeded data behind the right shape rather than fake depth.
+**Left as honest seed (labeled, behind the right shape):** Nurture, Home, CRM Ops (real derivers +
+endpoints; the UI still renders seed), Admissions/VoC, Website Analytics (GA4 stood-in), Resource
+Library. These are breadth/aggregation/viz surfaces that don't further test the backbone.
 
 ---
 
@@ -228,9 +238,10 @@ The brief rewards honesty over fake green. Current limitations:
   red, per the spec, not hidden.
 - **Some HubSpot fields are unreliable** — flagged by field-reliability, not silently trusted.
 - **Stood-in sources** (Meta/GA4/X/summer.gt.school/community.gt.school) are seeded and labeled, not
-  live.
-- **Module sub-view tabs** are present but render the module's overview (deep per-tab routing wasn't
-  built for every module); stubbed modules render seeded data behind the correct shape.
+  live. Event-to-consult and parent NPS are **manual / un-instrumented**, surfaced as such — never a
+  faked auto-metric.
+- **Sub-view tabs** are fully built out for the seven deep modules (above); the remaining seed
+  modules render their data behind the correct shape rather than fake per-tab depth.
 - The Hub falls back to **seed data** when the backend isn't running — by design, so it's always
   demoable.
 
@@ -246,7 +257,7 @@ python scripts/check_dep_budget.py         # 2. runtime dependency budget
 cd backend
 uv run ruff check . && uv run ruff format --check .   # 3-4. lint + format
 uv run mypy app                            # 5. strict types
-uv run pytest -q                           # 6. tests  → 1160 passed, 6 skipped
+uv run pytest -q                           # 6. tests  → 1296 passed, 6 skipped
 cd ../web && npx tsc --noEmit              # frontend typecheck
 ```
 

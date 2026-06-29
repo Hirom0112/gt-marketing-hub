@@ -14,41 +14,42 @@ wired live but default to `simulate`.
 ## 2. Deep vs. stubbed, and why
 
 **The backbone is where I spent the depth** — it's what the brief actually tests, and every Phase-2
-claim rests on it. All of the following are real and unit-tested (1160 passing):
+claim rests on it. On top of it I built **seven modules end-to-end** — each persisted to live Supabase
+(migrations `0032`–`0039`, program-scoped RLS), wired across every sub-view tab, with real owner-gated
+writes verified live. The backbone primitives are all real and unit-tested (**1296 passing**):
 
 - **Stripe webhook** (`app/api/payments.py` → `core/payments.py:decide_payment_event`): verify HMAC
   on the raw body → dedupe on `event.id` → `FULFILL`/`NOOP`/`ACK` → record payment → advance the
   funding signal through the legal gate. *Proves idempotency and clean state propagation.*
-- **Seam + parity** (`core/seam.py:derive_seam_status` over `_TRACKED_FIELDS` = stage / funding_state
-  / owner; `core/parity.py:compute_parity`): last-write-wins with genuine conflict detection, rolled
-  up to an overall + per-field parity score. *This is Phase 1 as a number.*
-- **Program isolation** (migration `0024_program_isolation.sql`): RESTRICTIVE per-program RLS keyed on
-  the JWT `app_metadata.program_id`, app connects as `app_runtime` (`NOBYPASSRLS`). *Proves no
-  cross-program bleed even on the server path.*
-- **Dual-source reconcilers** (`core/identity.py:propose_merge`, `core/ambassador_reconcile.py`,
-  `core/summer_reconcile.py`): exact-key match, count once, fail closed to a review queue on ambiguity.
+- **Seam + parity** (`core/seam.py:derive_seam_status`; `core/parity.py:compute_parity`):
+  last-write-wins with genuine conflict detection, rolled up to overall + per-field scores.
+- **Program isolation** (RESTRICTIVE per-program RLS keyed on the JWT `app_metadata.program_id`, app
+  connects as `app_runtime`/`NOBYPASSRLS`). *No cross-program bleed even on the server path.*
+- **Dual-source reconcilers** (`core/identity.py:propose_merge`, `ambassador_reconcile`,
+  `summer_reconcile`): exact-key match, count once, fail closed to a review queue on ambiguity.
 
-**Hub modules wired live to that backbone** (each `apiGet`s a real endpoint, seed fallback when the
-API is down):
+**Modules built deep (live endpoint per tab, seed fallback when the API is down):**
 
-- **Budget** (`/budget`) — workstreams sum to the `$365K` total from `params.budget`; >10% variance
-  flags. *The "a number means the same everywhere" test.*
-- **KPI Scorecard** (`DashboardModule` → `/scorecard/weekly`) — reads, owns nothing.
-- **Grassroots** (`/ambassadors/reconcile`) and **Summer Camp** (`CampModule` → `/summer/reconcile`)
-  — the two dual-source reconciles, deduped union + conflicts, surfaced. *Single-source discipline.*
-- **Content** (`/content/kanban`) — real two-way Google Sheets read+write via `adapters/sheets`.
+- **Budget** (`/budget`) — workstreams sum to the `$365K` total from `params.budget`; burn series,
+  per-owner spend gating, leadership re-plan, >10% variance → Decision Queue.
+- **KPI Scorecard** (`/scorecard/*`) — per-metric provenance, trends, SLA, goal pacing; reads, owns nothing.
+- **Decision Queue** (`/decisions`) — leader-only gate; first-class decision columns; cross-module
+  auto-flags (budget variance, hot families, event proposals) + resolved-toast to submitters.
+- **Grassroots** (`/grassroots/*`, `/ambassadors/reconcile`) — roster + dual-source reconcile, market
+  map, referral sprints, parent community (honest stood-in for un-instrumented NPS), parent-led events.
+- **Content** (`/content/*`) — production kanban with **real two-way Google Sheets sync**, editorial
+  calendar + conflict detection, channel performance (UTM honesty), library, and an **advisory
+  brand-voice auditor** (LLM-proposal → heuristic fallback; INV-2 — never writes state).
+- **Summer Camp** (`/summer/*`) — dual-source reconcile + program isolation, funnel, sessions, and
+  **revenue collected via real Stripe** (test-mode PaymentIntents → signed webhook → `camp_payment`
+  ledger; revenue basis flips synthetic → `stripe_collected`).
+- **Field & Events** (`/field/events/*`) — event tracker, a **month-grid calendar** overlaying
+  Grassroots ambassador events **read-only**, priority-event proposals → Decision Queue.
 
-**Partial — real logic, seed UI:** **CRM Ops** — the parity / data-quality / field-reliability
-derivers (`core/data_quality.py:build_dq_queue`, kinds `conflict`/`utm_broken`/`unreliable_field`/
-`mojibake`/`missing_field`) are real and endpoint-exposed (`/crm/ops`, `/seam`), but `CrmModule.tsx`
-still renders seed — I wired the harder reconciler UIs first. **Decision Queue** — leader-only role
-gate is enforced (`web/lib/registry.ts`), queue items are seed.
-
-**Deliberately stubbed (seed UI):** **Nurture, Home, Admissions, Field & Events, Website Analytics,
-Resource Library.** Each was the right cut: Nurture and Home are breadth/aggregation surfaces that
-don't test the backbone; Website Analytics is a pure GA4 viz with no reachable source; Field & Events
-and Admissions are cross-link consumers; Resource Library is a flat shelf. Building any of them well
-would have come out of backbone depth, which is the graded part.
+**Left as honest seed (real shape, labeled):** **CRM Ops** (parity / data-quality / field-reliability
+derivers are real and endpoint-exposed at `/crm/ops`, `/seam`; `CrmModule.tsx` still renders seed),
+**Nurture, Home, Admissions, Website Analytics** (GA4 stood-in), **Resource Library.** These are
+breadth/aggregation/viz surfaces that don't further test the backbone.
 
 ## 3. Key technical trade-offs
 
@@ -89,8 +90,8 @@ would have come out of backbone depth, which is the graded part.
 
 ## 5. With another week
 
-1. Wire `CrmModule` and the Decision Queue to their live endpoints (`/crm/ops`, `/decisions`) — the
-   backend is done; it's a React data-layer pass, not new logic.
+1. Wire the remaining seed UIs (`CrmModule` → `/crm/ops`, Nurture, Admissions) to their live
+   endpoints — the backend derivers are done; it's a React data-layer pass, not new logic.
 2. Surface Open Data: the adapter and `/open-data/enrich` exist, but the specific decision a query
    *changes* isn't shown in the Hub yet.
 3. The GT Challenge end-to-end: a public quiz → lead → program store → auto-score → a CAC/CPQL KPI
@@ -100,11 +101,12 @@ would have come out of backbone depth, which is the graded part.
 
 ---
 
-**Word count: ~760.**
+**Word count: ~800.**
 
 **Verified vs. inferred:** all module/table/function names, the live-vs-seed split, the params
-values, and the 1160-test count are verified from the source this session. *Inferred:* that the
-live-wired modules render backbone data end-to-end in a fully-running stack — the `apiGet` calls and
-endpoints are verified and `/ambassadors/reconcile` was confirmed returning real reconciled data, but
-I did not screenshot every module against a live API. The stage-SoT "ratified tension" is my call,
-recorded in the decisions log, not a spec instruction.
+values, and the **1296-test count** are verified from the source this session. The seven deep modules
+were each run against a **live API + live Supabase** (migrations applied, data seeded) and verified
+end-to-end via Playwright across roles — including a real Stripe test-mode payment flow recorded
+through the signed webhook and a real two-way Google Sheets sync. The remaining modules (CRM Ops,
+Nurture, Home, Admissions, Website, Resource Library) render seed and are labeled as such. The
+stage-SoT "ratified tension" is my call, recorded in the decisions log, not a spec instruction.
