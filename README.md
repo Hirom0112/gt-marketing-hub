@@ -82,8 +82,8 @@ cd web && npm install && npm run dev      # http://localhost:3001
 
 The Hub runs **standalone on seed data** out of the box, so you can click through every module with
 no backend. With the API running on `:8000`, the wired modules (Budget, KPI Scorecard, Decision Queue,
-Grassroots, Content, Summer Camp, Field & Events) read **live** from the backbone — each fully fleshed
-out across its sub-view tabs with real owner-gated writes — and fall back to seed if the API is
+Grassroots, Content, Summer Camp, Field & Events, Nurture & Lifecycle) read **live** from the backbone
+— each fully fleshed out across its sub-view tabs with real owner-gated writes — and fall back to seed if the API is
 unreachable. Use the **"VIEWING AS"** switcher (top bar) to change roles.
 
 > **Real integrations are opt-in.** Each live source needs its own env var + credential (the full
@@ -150,8 +150,8 @@ matches for human review (never auto-merge). Summer Camp ties to Phase-1 **progr
 ## Where I spent depth (and what I cut)
 
 The judgment being scored is *which* modules to build deep. I built the **data backbone** plus the
-**seven modules that exercise it hardest** — each end-to-end across every sub-view tab, persisted to
-live Supabase (migrations `0032`–`0039`, program-scoped RLS), with real owner-gated writes verified
+**eight modules that exercise it hardest** — each end-to-end across every sub-view tab, persisted to
+live Supabase (migrations `0032`–`0040`, program-scoped RLS), with real owner-gated writes verified
 live — and deliberately left the breadth/viz surfaces as honest seed.
 
 **Built deep, on the real backbone:**
@@ -174,8 +174,16 @@ live — and deliberately left the breadth/viz surfaces as honest seed.
   **revenue collected via real Stripe** (test-mode PaymentIntents → signed webhook → camp ledger).
 - **Field Marketing & Events** — event tracker, a **month-grid calendar** that overlays Grassroots
   ambassador events **read-only**, and priority-event proposals into the Decision Queue.
+- **Nurture & Lifecycle** — the most data-rich module, and the one that reads **live from HubSpot**:
+  engagement-tier mix, deal-pipeline distribution, and marketing→onboarding handoff are **aggregate
+  reads off the real HubSpot Pro portal** (synthetic contacts/deals pushed behind the four guards,
+  read back INV-6 aggregate-only); the engagement×attribute heatmap **joins** that to the `app_form`
+  source-of-truth; sequences + SMS inbox are a labeled synthetic mirror (Sales-Hub Sequences /
+  Conversations APIs aren't exposed in the portal); SLA tracker, segment builder, and **four
+  cross-links** (hot-family→Decision Queue, SMS-objection→Content brief, pipeline+handoff→KPI,
+  conversion→Content Performance) all verified live.
 
-**Left as honest seed (labeled, behind the right shape):** Nurture, Home, CRM Ops (real derivers +
+**Left as honest seed (labeled, behind the right shape):** Home, CRM Ops (real derivers +
 endpoints; the UI still renders seed), Admissions/VoC, Website Analytics (GA4 stood-in), Resource
 Library. These are breadth/aggregation/viz surfaces that don't further test the backbone.
 
@@ -240,7 +248,7 @@ The brief rewards honesty over fake green. Current limitations:
 - **Stood-in sources** (Meta/GA4/X/summer.gt.school/community.gt.school) are seeded and labeled, not
   live. Event-to-consult and parent NPS are **manual / un-instrumented**, surfaced as such — never a
   faked auto-metric.
-- **Sub-view tabs** are fully built out for the seven deep modules (above); the remaining seed
+- **Sub-view tabs** are fully built out for the eight deep modules (above); the remaining seed
   modules render their data behind the correct shape rather than fake per-tab depth.
 - The Hub falls back to **seed data** when the backend isn't running — by design, so it's always
   demoable.
@@ -257,7 +265,7 @@ python scripts/check_dep_budget.py         # 2. runtime dependency budget
 cd backend
 uv run ruff check . && uv run ruff format --check .   # 3-4. lint + format
 uv run mypy app                            # 5. strict types
-uv run pytest -q                           # 6. tests  → 1296 passed, 6 skipped
+uv run pytest -q                           # 6. tests  → 1332 passed, 6 skipped
 cd ../web && npx tsc --noEmit              # frontend typecheck
 ```
 
