@@ -60,6 +60,11 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
 from app.adapters.hubspot.crm_adapter import CRMAdapter
+from app.api._crm_ops_cache import (
+    ParitySnapshot,
+    TtlSingleFlightCache,
+    parity_snapshot,
+)
 from app.api.decisions import DecisionResponse, _actor_token, flag_decision
 from app.api.deps import (
     Principal,
@@ -76,8 +81,8 @@ from app.api.deps import (
 from app.core.data_quality import DqKind, DqRow, build_dq_queue
 from app.core.field_reliability import field_flag
 from app.core.params import Params
-from app.core.parity import compute_parity
 from app.core.program import Program
+from app.core.seam import MirrorState
 from app.core.utm_health import check_utm
 from app.data.crm_ops_store import (
     CATEGORIES,
@@ -236,10 +241,13 @@ def get_crm_ops(
     for the authenticated-seat gate + program scoping (the cohort is already
     program-scoped at the repo layer, A1); they are otherwise unused here.
     """
-    families = list(repository.list_families())
-    # The A4 pairing (REUSED): each program-scoped family paired with its CRM mirror.
-    pairs = [(record, crm_adapter.read_mirror(record.family_id)) for record in families]
-    parity = compute_parity(pairs)
+    # The A4 pairing (REUSED): each program-scoped family paired with its CRM mirror,
+    # via the shared short-TTL single-flight cache (one live scan per TTL, shared with
+    # the GET /crm/status banner — no rate-limit storm). A cached LIVE read is still live.
+    snapshot = _parity_snapshot(repository, crm_adapter, params, program)
+    pairs = snapshot.pairs
+    parity = snapshot.parity
+    families = [record for record, _ in pairs]
     banner = parity.overall < params.crm_ops.parity_floor
 
     # The auto data-quality queue: one DqRow per family (conflict + UTM dimensions
@@ -300,11 +308,50 @@ def get_crm_ops(
 # ===========================================================================
 # Module-7 helpers (pure-ish composition; no live call in the simulated path).
 # ===========================================================================
-def _cohort_pairs(
-    repository: FamilyRepository, crm_adapter: CRMAdapter
-) -> list[tuple[FamilyRecord, object]]:
-    """The A4 (record, mirror) pairing over the active-program cohort (REUSED)."""
-    return [(r, crm_adapter.read_mirror(r.family_id)) for r in repository.list_families()]
+# ---------------------------------------------------------------------------
+# LIVE-snapshot caches (perf; INV-8). Short-TTL single-flight memo of the
+# expensive LIVE reads so a banner (GET /crm/status) + a CRM page load is ONE
+# live read, not a HubSpot rate-limit storm. Keyed by program (never serves one
+# program's data to another). Honesty unchanged — a cached LIVE read is still
+# live. The parity scan lives in app/api/_crm_ops_cache.py (shared with
+# GET /crm/status); these two memo the overview's other live aggregate reads.
+# ---------------------------------------------------------------------------
+_LEAD_SCORE_CACHE: TtlSingleFlightCache[LeadScoreDistributionOut] = TtlSingleFlightCache()
+_LAST_SYNC_CACHE: TtlSingleFlightCache[list[ConnectorSync]] = TtlSingleFlightCache()
+
+
+def _parity_snapshot(
+    repository: FamilyRepository, crm_adapter: CRMAdapter, params: Params, program: Program
+) -> ParitySnapshot:
+    """The cached LIVE parity snapshot for ``program`` (the A4 (record, mirror) cohort)."""
+    return parity_snapshot(
+        repository,
+        crm_adapter,
+        program=program,
+        ttl_seconds=params.crm_ops.snapshot_ttl_seconds,
+    )
+
+
+def _lead_distribution_cached(
+    repository: FamilyRepository, crm_adapter: CRMAdapter, params: Params, program: Program
+) -> LeadScoreDistributionOut:
+    """The LIVE aggregate lead-score distribution, memoized per program (overview + 5c)."""
+    return _LEAD_SCORE_CACHE.get_or_compute(
+        program,
+        lambda: _lead_distribution(repository, crm_adapter, params),
+        ttl_seconds=params.crm_ops.snapshot_ttl_seconds,
+    )
+
+
+def _last_sync_cached(
+    crm_adapter: CRMAdapter, repository: FamilyRepository, params: Params, program: Program
+) -> list[ConnectorSync]:
+    """The per-connector last-sync, memoized per program (the overview rollup)."""
+    return _LAST_SYNC_CACHE.get_or_compute(
+        program,
+        lambda: _last_sync(crm_adapter, repository),
+        ttl_seconds=params.crm_ops.snapshot_ttl_seconds,
+    )
 
 
 def _owner_gate_crm_ops(principal: Principal) -> None:
@@ -367,30 +414,29 @@ def _broken_utm_entities(repository: FamilyRepository, params: Params) -> list[U
 
 
 def _scan_and_upsert(
-    repository: FamilyRepository,
-    crm_adapter: CRMAdapter,
+    pairs: tuple[tuple[FamilyRecord, MirrorState], ...],
     store: CrmOpsStore,
     params: Params,
     program: Program,
 ) -> ScanResult:
     """Auto-detect over the live cohort → UPSERT one issue per detection (idempotent).
 
-    Sweeps :func:`build_dq_queue` over the SAME (record, mirror)+UTM cohort the §C1 view
-    derives, maps each :class:`DqIssue` to a category/severity, computes a deterministic
+    Sweeps :func:`build_dq_queue` over the SAME cached (record, mirror)+UTM cohort the
+    §C1 view derives (the shared :func:`_parity_snapshot` pairs — no extra live read),
+    maps each :class:`DqIssue` to a category/severity, computes a deterministic
     ``signature`` (``entity_ref:kind``), and UPSERTS it — so a rescan dedups (never dups)
     and existing acknowledged/resolved rows keep their status. "Auto-detect creates queue
     items automatically".
     """
-    families = list(repository.list_families())
     rows = [
         DqRow(
-            entity_id=str(r.family_id),
-            record=r,
-            mirror=crm_adapter.read_mirror(r.family_id),
-            utm=_record_utm(r),
+            entity_id=str(record.family_id),
+            record=record,
+            mirror=mirror,
+            utm=_record_utm(record),
             present_fields=(),
         )
-        for r in families
+        for record, mirror in pairs
     ]
     issues = build_dq_queue(rows, params=params)
     for issue in issues:
@@ -405,7 +451,7 @@ def _scan_and_upsert(
             source="auto",
         )
     return ScanResult(
-        scanned=len(families),
+        scanned=len(pairs),
         detected=len(issues),
         open_dq_count=len(store.list_issues(program, status="open")),
     )
@@ -720,9 +766,14 @@ def get_overview(
     params: ParamsDep,
     program: ProgramDep,
 ) -> OverviewResponse:
-    """5a — parity, UTM health, LIVE lead-score distribution, open DQ count, last-sync, flags."""
-    pairs = _cohort_pairs(repository, crm_adapter)
-    parity = compute_parity(pairs)  # type: ignore[arg-type]
+    """5a — parity, UTM health, LIVE lead-score distribution, open DQ count, last-sync, flags.
+
+    Every LIVE read (parity scan + lead-score distribution + last-sync) flows through
+    the shared short-TTL single-flight cache, so a banner + overview load is ONE live
+    read per TTL rather than a HubSpot rate-limit storm. Caching never changes the
+    values or the source labels (a cached LIVE read is still live).
+    """
+    parity = _parity_snapshot(repository, crm_adapter, params, program).parity
     broken = _broken_utm_entities(repository, params)
     flags = [field_flag(name, params=params) for name in params.crm_ops.unreliable_fields]
     return OverviewResponse(
@@ -730,9 +781,11 @@ def get_overview(
         data_confidence_banner=parity.overall < params.crm_ops.parity_floor,
         utm_ok=len(list(repository.list_families())) - len(broken),
         utm_broken=len(broken),
-        lead_score_distribution=_lead_distribution(repository, live_adapter, params),
+        lead_score_distribution=_lead_distribution_cached(
+            repository, live_adapter, params, program
+        ),
         open_dq_count=len(store.list_issues(program, status="open")),
-        last_sync=_last_sync(crm_adapter, repository),
+        last_sync=_last_sync_cached(crm_adapter, repository, params, program),
         field_flags=[FieldFlagOut(field=f.field, status=f.status, reason=f.reason) for f in flags],
     )
 
@@ -790,7 +843,7 @@ def get_lead_scoring(
     edges (a true per-contact→deal-stage join is not an aggregate read; INV-6) and is
     labeled ``derived_synthetic`` — never claimed live. The histogram itself IS live.
     """
-    dist = _lead_distribution(repository, live_adapter, params)
+    dist = _lead_distribution_cached(repository, live_adapter, params, program)
     top_edge = dist.bands[-1].high if dist.bands else 1
     correlation = [
         CorrelationRow(
@@ -820,8 +873,7 @@ def get_sync_parity(
     program: ProgramDep,
 ) -> SyncParityResponse:
     """5d — overall + field-level parity, unreliable-field flags, drift alerts, rule-of-truth."""
-    pairs = _cohort_pairs(repository, crm_adapter)
-    parity = compute_parity(pairs)  # type: ignore[arg-type]
+    parity = _parity_snapshot(repository, crm_adapter, params, program).parity
     floor = params.crm_ops.drift_alert_floor
     flags = [field_flag(name, params=params) for name in params.crm_ops.unreliable_fields]
     drift = [
@@ -867,9 +919,12 @@ def scan_data_quality(
     """Auto-detect over the live cohort → UPSERT queue items (any authenticated seat).
 
     Only refreshes derived state (it dedups on a deterministic signature, never dups), so
-    it needs no role gate — any authenticated seat may trigger a rescan.
+    it needs no role gate — any authenticated seat may trigger a rescan. Sweeps the SAME
+    cached (record, mirror) cohort as the parity views (≤ TTL fresh), so a scan rides the
+    shared live read rather than re-storming read_mirror per family.
     """
-    return _scan_and_upsert(repository, crm_adapter, store, params, program)
+    pairs = _parity_snapshot(repository, crm_adapter, params, program).pairs
+    return _scan_and_upsert(pairs, store, params, program)
 
 
 @router.post("/crm/ops/data-quality", response_model=IssueOut)

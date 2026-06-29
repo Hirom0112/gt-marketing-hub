@@ -423,6 +423,7 @@ crm_ops:                    # C1 — CRM/Marketing-Ops data-quality cores; share
       hot_min: 80
   drift_alert_floor: 0.90           # FIELD-level parity fraction below which a sync-parity drift alert fires (5d view); a fraction in [0,1]
   attribution_chain_steps: [app_form_submit, supabase_app_form, hubspot_contact]   # ordered attribution-chain step labels (form → Supabase source-of-truth → HubSpot mirror)
+  snapshot_ttl_seconds: 60          # how long the API may reuse ONE live CRM-Ops snapshot (parity scan + aggregate reads) before recomputing — short-TTL single-flight cache so banner+page loads share one live read, not a HubSpot rate-limit storm (a cached LIVE read is still live); seconds, > 0
 
 open_data:                  # E1 — tryopendata.ai Texas-education enrichment seam (RESEARCH_v2 §II.3; INV-1/8/9/11)
   datasets:                         # tea/* dataset slugs the live adapter queries over POST /v1/query (aggregate/district-level only — INV-1/INV-6)

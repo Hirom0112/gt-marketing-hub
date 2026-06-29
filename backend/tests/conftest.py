@@ -112,6 +112,21 @@ def _verified_principal_shim() -> Iterator[None]:
     yield
 
 
+@pytest.fixture(autouse=True)
+def _reset_crm_ops_snapshot_cache() -> Iterator[None]:
+    """Autouse: drop the LIVE CRM-Ops snapshot caches before each test (isolation).
+
+    The CRM-Ops parity/overview reads memoize the live snapshot per program for a short
+    TTL (``app.api._crm_ops_cache``); without this reset a snapshot computed against one
+    test's injected repo/adapter could leak into the next test (same program key). Mirrors
+    the ``deps.reset_crm_adapter`` pattern.
+    """
+    from app.api._crm_ops_cache import reset_crm_ops_cache
+
+    reset_crm_ops_cache()
+    yield
+
+
 @pytest.fixture(scope="session", autouse=True)
 def _isolated_temp_dir(tmp_path_factory: pytest.TempPathFactory) -> Iterator[None]:
     """Point `tempfile.gettempdir()` at a per-session temp dir for the whole suite.

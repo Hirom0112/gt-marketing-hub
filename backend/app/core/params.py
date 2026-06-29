@@ -1968,6 +1968,11 @@ class CrmOps(_StrictModel):
       sync-parity drift alert fires (the 5d view). A fraction in [0.0, 1.0].
     * ``attribution_chain_steps`` — the ordered step labels of the attribution
       chain the source-tracking view renders (form → Supabase → HubSpot).
+    * ``snapshot_ttl_seconds`` — how long the API layer may reuse a single LIVE
+      CRM-Ops snapshot (the per-family parity scan + the aggregate lead-score /
+      last-modified reads) before recomputing it, so concurrent + repeated CRM
+      page loads (banner + page) share ONE live read instead of storming the
+      HubSpot rate limit (a cached LIVE read is STILL live). Seconds, > 0.
     """
 
     utm: CrmOpsUtm
@@ -1977,6 +1982,7 @@ class CrmOps(_StrictModel):
     lead_score: CrmOpsLeadScore
     drift_alert_floor: float
     attribution_chain_steps: list[str]
+    snapshot_ttl_seconds: float
 
     @model_validator(mode="after")
     def _parity_floor_is_fraction(self) -> CrmOps:
@@ -1990,6 +1996,10 @@ class CrmOps(_StrictModel):
             )
         if not self.attribution_chain_steps:
             raise ValueError("crm_ops.attribution_chain_steps must be non-empty")
+        if self.snapshot_ttl_seconds <= 0:
+            raise ValueError(
+                f"crm_ops.snapshot_ttl_seconds must be > 0, got {self.snapshot_ttl_seconds!r}"
+            )
         return self
 
 

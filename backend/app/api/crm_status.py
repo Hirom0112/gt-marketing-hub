@@ -27,9 +27,16 @@ from pydantic import BaseModel
 
 from app.adapters.hubspot.crm_adapter import CRMAdapter
 from app.adapters.registry import effective_crm_mode
-from app.api.deps import get_params, get_repository, get_seam_crm_adapter_dep, get_settings_dep
+from app.api._crm_ops_cache import parity_snapshot
+from app.api.deps import (
+    get_active_program,
+    get_params,
+    get_repository,
+    get_seam_crm_adapter_dep,
+    get_settings_dep,
+)
 from app.core.params import Params
-from app.core.parity import compute_parity
+from app.core.program import Program
 from app.core.settings import CrmMode, Settings
 from app.data.repository import FamilyRepository
 
@@ -43,6 +50,7 @@ RepositoryDep = Annotated[FamilyRepository, Depends(get_repository)]
 # real multi-field data, so parity measures DB-vs-real-mirror agreement.
 CRMAdapterDep = Annotated[CRMAdapter, Depends(get_seam_crm_adapter_dep)]
 ParamsDep = Annotated[Params, Depends(get_params)]
+ProgramDep = Annotated[Program, Depends(get_active_program)]
 
 
 class CrmStatus(BaseModel):
@@ -71,6 +79,7 @@ def get_crm_status(
     repository: RepositoryDep,
     crm_adapter: CRMAdapterDep,
     params: ParamsDep,
+    program: ProgramDep,
 ) -> CrmStatus:
     """The effective CRM seam state + the A4 sync-parity surface, no secrets.
 
@@ -92,18 +101,28 @@ def get_crm_status(
     agreement, and ``data_confidence_banner`` is raised when overall parity drops
     below ``params.data_confidence.min_parity`` (INV-11 — the single threshold home),
     so a meaningfully out-of-sync cohort is surfaced rather than silently trusted. The
-    O(n) mirror reads are acknowledged in the PLAN — computed over the program cohort,
-    no caching (YAGNI).
+    O(n) mirror reads ride the shared short-TTL single-flight cache
+    (:func:`app.api._crm_ops_cache.parity_snapshot`, keyed by program): this banner
+    fires on every CRM page load alongside the page's own parity read, so memoizing the
+    live scan for ``params.crm_ops.snapshot_ttl_seconds`` collapses them into ONE live
+    mirror scan per TTL instead of storming the HubSpot rate limit. A cached LIVE read
+    is STILL live — only the recomputation is skipped, never the values or labels.
 
     Read-only by design: the kill switch's MECHANISM stays a server env var. This
     endpoint SURFACES state and the frontend fail-closes the live-push action on it;
     it does NOT add a browser-writable kill toggle (flipping a server secret from
     the browser would be unsafe).
     """
-    pairs = [
-        (record, crm_adapter.read_mirror(record.family_id)) for record in repository.list_families()
-    ]
-    parity = compute_parity(pairs)
+    # The A4 parity scan rides the shared short-TTL single-flight cache, so this
+    # banner read and the CRM-Ops page loads collapse to ONE live mirror scan per TTL
+    # instead of storming the HubSpot rate limit. A cached LIVE read is still live —
+    # only the recomputation is skipped, never the values or the source labels.
+    parity = parity_snapshot(
+        repository,
+        crm_adapter,
+        program=program,
+        ttl_seconds=params.crm_ops.snapshot_ttl_seconds,
+    ).parity
     return CrmStatus(
         crm_mode=settings.crm_mode,
         kill_switch=settings.hubspot_kill_switch,
