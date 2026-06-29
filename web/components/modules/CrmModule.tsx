@@ -208,7 +208,7 @@ function OverviewTab({ ov }: { ov: OverviewResponse }) {
         </div>
       </div>
 
-      {/* per-connector last sync (synthetic) */}
+      {/* per-connector last sync (live per-source) */}
       <div style={{ border: '1px solid var(--line-2)', background: 'var(--card)' }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '10px 16px', borderBottom: '2px solid var(--ink)' }}>
           <span style={{ fontFamily: MONO, fontSize: 9, letterSpacing: '.5px', color: 'var(--ink-3)', fontWeight: 600 }}>CONNECTORS · LAST SYNC</span>
@@ -224,7 +224,7 @@ function OverviewTab({ ov }: { ov: OverviewResponse }) {
         {ov.last_sync.length === 0 && <Empty>No connector watermarks.</Empty>}
       </div>
       <div style={{ fontFamily: MONO, fontSize: 9, color: 'var(--ink-3)', marginTop: 8 }}>
-        Last-sync stamps are SYNTHETIC (the real connector watermark lives behind /crm/sync/status). The lead-score histogram is a LIVE HubSpot aggregate (one CRM-Search COUNT per band) — never a per-contact read.
+        Last-sync stamps are REAL per source: the HubSpot connectors read the newest <code>lastmodifieddate</code>/<code>hs_lastmodifieddate</code> off the live portal; Supabase reads the latest <code>crm_synced_at</code> (each row carries its own source badge, synthetic only if a live read returns nothing). The lead-score histogram is a LIVE HubSpot aggregate (one CRM-Search COUNT per band) — never a per-contact read.
       </div>
     </>
   );
