@@ -1,0 +1,18 @@
+# Keep secrets and local cruft OUT of the image (keys safe — never bake .env into a layer).
+.env
+.env.*
+*.env
+.venv
+__pycache__/
+**/__pycache__/
+*.pyc
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+htmlcov/
+.coverage
+tests/
+scripts/
+*.md
+.git
+.gitignore
