@@ -127,7 +127,7 @@ export function CrmModule() {
 
         {tab === 0 && <OverviewTab ov={ov} />}
         {tab === 1 && <SourceTrackingTab trk={trk} />}
-        {tab === 2 && <LeadScoringTab sco={sco} />}
+        {tab === 2 && <LeadScoringTab sco={sco} ctx={ctx} />}
         {tab === 3 && <SyncParityTab par={par} />}
         {tab === 4 && <DataQualityTab dq={dqData} {...ctx} />}
 
@@ -325,7 +325,7 @@ function SourceTrackingTab({ trk }: { trk: SourceTrackingResponse }) {
 }
 
 // =============================== 7c · LEAD SCORING ==========================
-function LeadScoringTab({ sco }: { sco: LeadScoringResponse }) {
+function LeadScoringTab({ sco, ctx }: { sco: LeadScoringResponse; ctx: Ctx }) {
   const distBadge = sourceBadge(sco.distribution.source);
   const corrBadge = sourceBadge(sco.correlation_source);
   const dist = sco.distribution;
@@ -390,6 +390,15 @@ function LeadScoringTab({ sco }: { sco: LeadScoringResponse }) {
 
       {/* change log */}
       <FixLog title="Scoring-model change log" entries={sco.change_log} emptyMsg="No scoring-model changes logged." />
+
+      {/* leadership input — approve/propose a scoring-model change (spec 7c/leadership) */}
+      {ctx.isLeader ? (
+        <ScoringChangeForm role={ctx.role} notify={ctx.notify} refetch={ctx.refetch} />
+      ) : (
+        <div style={{ marginTop: 12, fontFamily: MONO, fontSize: 9, color: 'var(--ink-3)' }}>
+          ◌ Proposing a scoring-model change is leader-only (it opens a Decision-Queue item + a change-log entry).
+        </div>
+      )}
     </>
   );
 }
@@ -645,6 +654,36 @@ function FileIssueForm({ role, notify, refetch }: { role: Role; notify: Notify; 
         <button onClick={submit} disabled={saving} style={{ ...PRIMARY_BTN, opacity: saving ? 0.6 : 1, cursor: saving ? 'default' : 'pointer' }}>{saving ? 'FILING…' : 'FILE ISSUE'}</button>
       </div>
     </FormCard>
+  );
+}
+
+function ScoringChangeForm({ role, notify, refetch }: { role: Role; notify: Notify; refetch: () => void }) {
+  const [summary, setSummary] = useState('');
+  const [saving, setSaving] = useState(false);
+
+  const submit = async () => {
+    if (!summary.trim()) { notify('Describe the scoring-model change before proposing it.', 'err'); return; }
+    setSaving(true);
+    const res = await apiPost<{ decision?: { id?: string }; fix?: { fix_id?: string } }>(
+      '/crm/ops/scoring-change', role, { summary: summary.trim() },
+    );
+    setSaving(false);
+    if (!res || !res.decision) { notify('Could not propose the change — leader (or admin) access is required and the backbone must be up.', 'err'); return; }
+    notify('Scoring-model change proposed → Decision Queue + change log.', 'ok', '/decision');
+    setSummary('');
+    refetch();
+  };
+
+  return (
+    <div style={{ marginTop: 12 }}>
+      <FormCard title="PROPOSE SCORING-MODEL CHANGE" tag="LEADER · POST /crm/ops/scoring-change">
+        <Field label="CHANGE SUMMARY"><textarea value={summary} onChange={(e) => setSummary(e.target.value)} rows={2} placeholder="e.g. Raise the qualification threshold 60 → 65 for the fall cohort…" style={{ ...INPUT, resize: 'vertical' }} /></Field>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12 }}>
+          <span style={{ fontFamily: MONO, fontSize: 9, color: 'var(--ink-3)' }}>opens a Decision-Queue item (workstream crm) + appends the change log · scoring stays read-only in HubSpot</span>
+          <button onClick={submit} disabled={saving} style={{ ...PRIMARY_BTN, opacity: saving ? 0.6 : 1, cursor: saving ? 'default' : 'pointer' }}>{saving ? 'PROPOSING…' : 'PROPOSE CHANGE'}</button>
+        </div>
+      </FormCard>
+    </div>
   );
 }
 
