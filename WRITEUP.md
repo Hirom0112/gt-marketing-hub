@@ -55,8 +55,10 @@ writes verified live. The backbone primitives are all real and unit-tested (**13
   and **four cross-links** (hot-family→Decision Queue, SMS-objection→Content brief, pipeline+handoff→
   KPI, conversion→Content Performance).
 - **CRM / Marketing Operations** (`/crm/ops/*`, `/seam`) — data-infrastructure health on the Phase-1
-  seam: sync-parity (overall + field-level) driving the always-on **data-confidence banner**, UTM
-  health flagged **permanently broken** (never faked green), field-reliability flags (TEFA/income/source
+  seam: sync-parity (overall + field-level) driving the always-on **data-confidence banner**, a
+  **data-driven UTM health flag** with an **audited repair workflow** (deterministic + alias-map fixes
+  the losslessly-repairable, logs who/what/when, routes the ambiguous to a manual queue — never faked
+  green), field-reliability flags (TEFA/income/source
   — a documented modeling call), a **live HubSpot lead-score histogram** (aggregate `gt_lead_score`
   bands, display-only), and a **persisted data-quality queue with auto-detection** (a scan upserts
   sync-drift + UTM-breakage issues idempotently on a signature) with a leadership lifecycle
@@ -101,8 +103,11 @@ writes verified live. The backbone primitives are all real and unit-tested (**13
   shows that live number — never a hardcoded one), with a short-TTL single-flight cache so the read is
   computed once and shared, not re-stormed per page. (In `simulate` mode `deps.py` materializes the same
   conflict tail.)
-- **Known-broken, surfaced not faked:** UTM attribution is flagged `broken` by `core/utm_health`;
-  unreliable fields are flagged by `core/field_reliability`; stood-in sources (Meta/GA4/X/the two
+- **Known-broken, surfaced not faked — and now repairable:** UTM attribution is flagged `broken` by
+  `core/utm_health` (detect-only — it never silently normalizes), and the data-driven flag turns green
+  only at zero broken; an explicit owner-gated `POST /crm/ops/utm/repair` (`core/utm_repair`) fixes the
+  losslessly-repairable + alias-mapped cases with an audit log and routes the rest to a manual queue.
+  Unreliable fields are flagged by `core/field_reliability`; stood-in sources (Meta/GA4/X/the two
   `.gt.school` sites) are labeled `STOOD-IN`/`SIMULATED` in the UI.
 
 ## 5. With another week

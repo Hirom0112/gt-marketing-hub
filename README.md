@@ -183,8 +183,10 @@ live — and deliberately left the breadth/viz surfaces as honest seed.
   cross-links** (hot-family→Decision Queue, SMS-objection→Content brief, pipeline+handoff→KPI,
   conversion→Content Performance) all verified live.
 - **CRM / Marketing Operations** — the data-infrastructure health module, built on the Phase-1 seam:
-  sync-parity (overall + field-level) + the always-on data-confidence banner, UTM health flagged
-  **permanently broken** (never faked green), field-reliability flags (TEFA/income/source — a
+  sync-parity (overall + field-level) + the always-on data-confidence banner, a **data-driven UTM
+  health flag** with an **audited repair workflow** (deterministic lowercase/trim + a params alias map
+  fix the losslessly-repairable, an audit log records who/what/when, the genuinely-ambiguous route to a
+  manual queue — never faked green), field-reliability flags (TEFA/income/source — a
   documented modeling call), a **live HubSpot lead-score histogram** (aggregate `gt_lead_score` bands,
   read-only), and a **persisted data-quality queue with auto-detection** (a scan upserts sync-drift +
   UTM-breakage issues idempotently on a signature) with a leadership lifecycle (acknowledge / prioritize
@@ -250,7 +252,8 @@ re-seeding from the generators.
 The brief rewards honesty over fake green. Current limitations:
 
 - **UTM attribution is broken** and **event-to-consult is uninstrumented** — surfaced in CRM Ops as
-  red, per the spec, not hidden.
+  red, per the spec, not hidden. (CRM Ops now also offers an audited repair that fixes the
+  losslessly-repairable UTMs and queues the rest for a manual decision; the flag is data-driven.)
 - **Some HubSpot fields are unreliable** — flagged by field-reliability, not silently trusted.
 - **Stood-in sources** (Meta/GA4/X/summer.gt.school/community.gt.school) are seeded and labeled, not
   live. Event-to-consult and parent NPS are **manual / un-instrumented**, surfaced as such — never a
