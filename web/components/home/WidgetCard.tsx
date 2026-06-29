@@ -5,7 +5,8 @@
 // The same renderer covers all 44 library widgets.
 
 import { useEffect, useState } from 'react';
-import type { WidgetDef, WidgetSize } from '@/lib/widgets';
+import type { WidgetContent, WidgetDef, WidgetSize } from '@/lib/widgets';
+import type { LiveStatus } from '@/lib/home-live';
 import { useSession } from '@/lib/session';
 import { canViewFullQueue } from '@/lib/registry';
 import { apiGet } from '@/lib/api';
@@ -21,7 +22,7 @@ const SIZE_GLYPH: Record<WidgetSize, string> = { small: '▫', medium: '▭', la
 export { SPAN, NEXT_SIZE };
 
 export function WidgetCard({
-  def, size, editing, onResize, onRemove, dragHandlers,
+  def, size, editing, onResize, onRemove, dragHandlers, liveContent, status,
 }: {
   def: WidgetDef;
   size: WidgetSize;
@@ -29,8 +30,12 @@ export function WidgetCard({
   onResize: () => void;
   onRemove: () => void;
   dragHandlers?: React.HTMLAttributes<HTMLDivElement>;
+  liveContent?: WidgetContent;
+  status?: LiveStatus;
 }) {
   const [hover, setHover] = useState(false);
+  // The decision-queue preview reads the live queue in its own Body → always live.
+  const effStatus: LiveStatus = def.id === 'decision-queue-preview' ? 'live' : status ?? 'sample';
   return (
     <div
       {...(editing ? dragHandlers : {})}
@@ -56,11 +61,34 @@ export function WidgetCard({
             <CtlButton onClick={onRemove} title="Remove" signal>×</CtlButton>
           </span>
         ) : (
-          <span style={{ fontFamily: MONO, fontSize: 8, padding: '1px 5px', background: 'var(--accent-soft)', color: 'var(--ink-3)' }}>{def.source}</span>
+          <StatusChip status={effStatus} source={def.source} />
         )}
       </div>
-      <Body def={def} />
+      <Body def={def} content={liveContent ?? def.content} />
     </div>
+  );
+}
+
+// The honesty pill: tells the reader at a glance whether the number is live wire data,
+// a real round-trip over a stood-in source (GA4), or static seed.
+function StatusChip({ status, source }: { status: LiveStatus; source: string }) {
+  const meta: Record<LiveStatus, { glyph: string; label: string; bg: string; color: string }> = {
+    live: { glyph: '●', label: 'LIVE', bg: 'var(--ok-soft)', color: 'var(--ok)' },
+    simulated: { glyph: '◐', label: 'STOOD-IN', bg: 'var(--warn-soft)', color: 'var(--warn)' },
+    sample: { glyph: '○', label: 'SAMPLE', bg: 'var(--accent-soft)', color: 'var(--ink-3)' },
+  };
+  const m = meta[status];
+  return (
+    <span
+      title={
+        status === 'live' ? `Live wire data · ${source}`
+        : status === 'simulated' ? `Live API round-trip over a stood-in source · ${source}`
+        : `Static sample (no live endpoint yet) · ${source}`
+      }
+      style={{ fontFamily: MONO, fontSize: 8, fontWeight: 600, letterSpacing: '.3px', padding: '1px 6px', background: m.bg, color: m.color, whiteSpace: 'nowrap' }}
+    >
+      {m.glyph} {m.label} · {source}
+    </span>
   );
 }
 
@@ -137,10 +165,10 @@ function CtlButton({ onClick, title, signal, children }: { onClick: () => void; 
   );
 }
 
-function Body({ def }: { def: WidgetDef }) {
+function Body({ def, content }: { def: WidgetDef; content: WidgetContent }) {
   // The Decision-Queue preview is leadership-only and reads the live open queue.
   if (def.id === 'decision-queue-preview') return <DecisionPreviewBody />;
-  const c = def.content;
+  const c = content;
   switch (c.kind) {
     case 'stat':
       return (

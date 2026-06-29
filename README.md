@@ -213,6 +213,30 @@ These are breadth/aggregation/viz surfaces that don't further test the backbone.
 
 ---
 
+## The datasets behind the live numbers
+
+Every number in the Hub is **synthetic** (INV-1 — no real PII) and either lives in **live Supabase**
+(seeded via each module's `seed_demo` → PostgREST), reads back as a **live HubSpot aggregate** (300
+synthetic contacts/deals pushed behind the four guards, read INV-6 aggregate-only), or comes from a
+**stood-in adapter** (GA4) that is labeled, never implied live. The **Executive Command** Home reads
+these straight from the owning modules — each widget carries a **● LIVE / ◐ stood-in / ○ sample** pill.
+
+| Module | Where it lives | The dataset (synthetic) |
+|---|---|---|
+| **Nurture & Lifecycle** | live HubSpot aggregate + Supabase `app_form` | engagement mix **100 clicked / 100 opened / 100 cold** (300, 200 reachable); tiers **T1 128 / T2 3,100 / T3 1,124**; pipeline interest 63 · apply 62 · enroll 62 · tuition 64 · closed-lost 62; **126** handoffs; 24-hr SLA 33% |
+| **CRM / Marketing Ops** | live HubSpot + Supabase⇄HubSpot parity | lead-score bands **36 / 68 / 65 / 65 / 66** (300, mean 53.8, hot 66); sync parity **83.3%**; **3 broken UTMs**; data-quality queue |
+| **Admissions & VoC** | Supabase (migration 0042) | **7** objections (top: Cost 14 · Accreditation 11 · Gifted-enough 8) · **8** voice quotes (1 quote-of-week) · **6** feedback (75% 7-day closure) · **5** weekly admission stats · **4** content bridges |
+| **Website & Digital** | GA4 **stood-in** adapter + Supabase (0043) | **2 sites · 15 pages**; **11,530 sessions / 28,570 pageviews**; 5 channels + 3 social platforms; **6 campaigns (3 broken UTM at origin)**; 6 PDFs (523/wk); funnel 11,530 → 460; 2 page-flags + 2 analysis-requests (Hub-owned) |
+| **Budget Tracker** | the Hub (Supabase, migration 0030) | **$365K** plan / **$293K** spent (80%); workstreams Grassroots $150K · Content $80K · Guerrilla $45K · Ops $18K; >10% variance → Decision Queue |
+| **Summer Camp** | Supabase + **real Stripe** test-mode | 4 campuses (350 seats), $975/seat, $260K target; revenue collected via signed Stripe webhook |
+| **Grassroots / Field & Events / Content / Decision Queue** | Supabase (0035–0041) | ambassador roster + dual-source reconcile · month-grid event calendar · production kanban w/ **real Google Sheets sync** · leader-only first-class decision queue (auto-flags from budget/hot-families/events/website) |
+
+The full generators are `backend/app/data/synthetic*.py` and each store's `seed_demo`; the seed scripts
+that replay them into live Supabase live under `backend/scripts/` (+ session scratchpad). The exact
+HubSpot read-back figures are recorded in [WRITEUP.md](WRITEUP.md).
+
+---
+
 ## Architecture
 
 ```

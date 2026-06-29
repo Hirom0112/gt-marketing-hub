@@ -12,6 +12,7 @@ import { STARTER_IDS, widgetById, WIDGETS, type WidgetSize } from '@/lib/widgets
 import { useSession } from '@/lib/session';
 import { WidgetCard, NEXT_SIZE } from '@/components/home/WidgetCard';
 import { WidgetPicker } from '@/components/home/WidgetPicker';
+import { fetchHomeLive, type HomeLive } from '@/lib/home-live';
 
 const MONO = 'JetBrains Mono';
 
@@ -24,8 +25,17 @@ export function HomeModule() {
   const [sizes, setSizes] = useState<Record<string, WidgetSize>>({});
   const [editing, setEditing] = useState(false);
   const [pickerOpen, setPickerOpen] = useState(false);
+  const [live, setLive] = useState<HomeLive | null>(null);
   const loaded = useRef(false);
   const dragIdx = useRef<number | null>(null);
+
+  // Pull the live aggregates from every owning module once (fails soft per endpoint →
+  // those widgets just stay on their labelled SAMPLE seed).
+  useEffect(() => {
+    let on = true;
+    fetchHomeLive(session.role).then((d) => { if (on) setLive(d); });
+    return () => { on = false; };
+  }, [session.role]);
 
   // Load this user's saved layout once on mount.
   useEffect(() => {
@@ -59,6 +69,10 @@ export function HomeModule() {
 
   const greeting = `Good morning, ${session.userName.split(' ')[0]}.`;
   const placed = new Set(ids);
+  // Count placed widgets currently showing live wire data (incl. the live decision queue).
+  const liveCount = ids.filter(
+    (id) => id === 'decision-queue-preview' || (live?.status[id] && live.status[id] !== 'sample'),
+  ).length;
 
   return (
     <section className="scr" style={{ padding: '20px 22px 40px' }}>
@@ -66,7 +80,9 @@ export function HomeModule() {
         <div>
           <div style={{ fontFamily: 'Fraunces', fontWeight: 700, fontSize: 22, letterSpacing: '-.4px', lineHeight: 1.1, color: 'var(--ink)' }}>{greeting}</div>
           <div style={{ fontFamily: MONO, fontSize: 10, color: 'var(--ink-3)', marginTop: 5 }}>
-            Personal dashboard · <b style={{ color: 'var(--ink-2)' }}>{ids.length} of {WIDGETS.length}</b> widgets placed · saved to your layout · aggregates live from all 12 modules
+            Personal dashboard · <b style={{ color: 'var(--ink-2)' }}>{ids.length}</b> widgets placed ·{' '}
+            <b style={{ color: 'var(--ok)' }}>● {liveCount} live</b> from the backbone ·{' '}
+            <span style={{ color: 'var(--ink-3)' }}>each pill shows ● LIVE / ◐ stood-in / ○ sample</span>
           </div>
         </div>
         <div style={{ display: 'flex', gap: 7, position: 'relative' }}>
@@ -91,6 +107,8 @@ export function HomeModule() {
                 def={def}
                 size={sizeOf(id)}
                 editing={editing}
+                liveContent={live?.content[id]}
+                status={live?.status[id]}
                 onResize={() => resize(id)}
                 onRemove={() => remove(id)}
                 dragHandlers={{

@@ -136,11 +136,11 @@ export const WIDGETS: WidgetDef[] = [
     content: {
       kind: 'tiers',
       items: [
-        { n: '40', label: 'T1 · active messaging' },
-        { n: '3,142', label: 'T2 · ~323 per rep' },
-        { n: '1,124', label: 'T3 · waitlist' },
+        { n: '128', label: 'T1 · 90% reach' },
+        { n: '3,100', label: 'T2 · 60% reach' },
+        { n: '1,124', label: 'T3 · 17% reach' },
       ],
-      sub: 'Reachability healthy across T1/T2; T3 needs trigger',
+      sub: 'Audience size + reachability by tier',
     },
   },
   {
@@ -154,11 +154,11 @@ export const WIDGETS: WidgetDef[] = [
     content: {
       kind: 'split',
       segs: [
-        { w: 31, label: 'Clicked', value: '31%', color: 'var(--gold)' },
-        { w: 44, label: 'Opened', value: '44%', color: 'var(--gold)', textColor: 'var(--ink)' },
-        { w: 25, label: 'Cold', value: '25%', color: 'var(--broken)' },
+        { w: 33, label: 'Clicked', value: '33%', color: 'var(--gold)' },
+        { w: 33, label: 'Opened', value: '33%', color: 'var(--gold)', textColor: 'var(--ink)' },
+        { w: 34, label: 'Cold', value: '33%', color: 'var(--broken)' },
       ],
-      sub: 'Clicked→52% commit vs cold 16%',
+      sub: '200 of 300 reachable',
     },
   },
   {
@@ -258,11 +258,11 @@ export const WIDGETS: WidgetDef[] = [
     content: {
       kind: 'bars',
       rows: [
-        { name: '0–20', pct: '180', width: 60 },
-        { name: '21–40', pct: '244', width: 81 },
-        { name: '41–60', pct: '301', width: 100 },
-        { name: '61–80', pct: '198', width: 66 },
-        { name: '81–100', pct: '92', width: 31 },
+        { name: '0–20', pct: '36', width: 53 },
+        { name: '20–40', pct: '68', width: 100 },
+        { name: '40–60', pct: '65', width: 96 },
+        { name: '60–80', pct: '65', width: 96 },
+        { name: '80–100', pct: '66', width: 97 },
       ],
     },
   },
@@ -277,10 +277,11 @@ export const WIDGETS: WidgetDef[] = [
     content: {
       kind: 'bars',
       rows: [
-        { name: 'Lead', pct: '4,266', width: 100 },
-        { name: 'Applicant', pct: '1,284', width: 30 },
-        { name: 'Shadow day', pct: '341', width: 8 },
-        { name: 'Deposit', pct: '112', width: 3 },
+        { name: 'Interest', pct: '63', width: 98 },
+        { name: 'Apply', pct: '62', width: 97 },
+        { name: 'Enroll', pct: '62', width: 97 },
+        { name: 'Tuition', pct: '64', width: 100 },
+        { name: 'Closed Lost', pct: '62', width: 97 },
       ],
     },
   },
@@ -426,9 +427,9 @@ export const WIDGETS: WidgetDef[] = [
     content: {
       kind: 'list',
       items: [
-        '“Is the ESA enough to cover tuition?” — 31',
-        '“What about socialization?” — 24',
-        '“Is this accredited / college-path?” — 18',
+        '“Cost” — 14 this week',
+        '“Accreditation” — 11 this week',
+        '“Gifted Enough” — 8 this week',
       ],
     },
   },
@@ -480,7 +481,7 @@ export const WIDGETS: WidgetDef[] = [
     content: {
       kind: 'list',
       items: [
-        '“The shadow day sold us — our daughter didn’t want to leave. The ESA made it actually possible.” — Garza family, San Antonio',
+        '“I came in a skeptic about an app teaching my kid. I left realizing the app is the floor and the guides build everything on top of it.” — on curriculum',
       ],
     },
   },
@@ -619,7 +620,7 @@ export const WIDGETS: WidgetDef[] = [
     source: 'Hub (Budget)',
     homeModule: 'Budget',
     size: 'small',
-    content: { kind: 'progress', value: '$233K / $365K', pct: 64, color: 'var(--gold)', sub: '64% burned vs 58% of timeline' },
+    content: { kind: 'progress', value: '$293K / $365K', pct: 80, color: 'var(--gold)', sub: '80% of the $365K plan spent' },
   },
   {
     id: 'spend-by-workstream',
@@ -632,10 +633,10 @@ export const WIDGETS: WidgetDef[] = [
     content: {
       kind: 'bars',
       rows: [
-        { name: 'Paid social', pct: '$96K', width: 100 },
-        { name: 'Content', pct: '$58K', width: 60 },
-        { name: 'Events', pct: '$44K', width: 46 },
-        { name: 'Ambassadors', pct: '$35K', width: 36 },
+        { name: 'Grassroots', pct: '$150K', width: 100 },
+        { name: 'Content', pct: '$80K', width: 53 },
+        { name: 'Guerrilla', pct: '$45K', width: 30 },
+        { name: 'Ops', pct: '$18K', width: 12 },
       ],
     },
   },
@@ -647,7 +648,7 @@ export const WIDGETS: WidgetDef[] = [
     source: 'GA4',
     homeModule: 'Website',
     size: 'small',
-    content: { kind: 'stat', value: '18.4K', delta: '▲11% w/w', deltaColor: 'var(--ok)', sub: '4.2K from X campaign' },
+    content: { kind: 'stat', value: '11,530', delta: 'both sites', deltaColor: 'var(--ink-3)', sub: '28,570 pageviews this week' },
   },
   {
     id: 'top-landing-pages',
@@ -660,9 +661,9 @@ export const WIDGETS: WidgetDef[] = [
     content: {
       kind: 'list',
       items: [
-        '/esa-explained — 5.1K views · 3:12 avg',
-        '/shadow-day — 3.8K views · 2:44 avg',
-        '/apply — 2.9K views · 41% form start',
+        '/ — 5,200 views (▲8%)',
+        '/tuition — 3,100 views (▲19%)',
+        '/how-it-works — 2,400 views (▼4%)',
       ],
     },
   },
@@ -674,7 +675,7 @@ export const WIDGETS: WidgetDef[] = [
     source: 'GA4',
     homeModule: 'Website',
     size: 'small',
-    content: { kind: 'stat', value: '742', delta: '▲14% w/w', deltaColor: 'var(--ok)', sub: 'ESA eligibility guide leads' },
+    content: { kind: 'stat', value: '523', delta: '▲16% w/w', deltaColor: 'var(--ok)', sub: 'top: GT-School-Tuition-and-ESA-Guide.pdf' },
   },
 ];
 
@@ -684,9 +685,14 @@ export const CATEGORY_ORDER: Category[] = [
   'Narrative & sprint', 'Calendar & budget', 'Website',
 ];
 
+// The default starter pack — deliberately live-forward so a fresh Home opens onto real
+// backbone data (engagement, lead score, pipeline, objections, SLA, website, budget,
+// decisions are all live), with the two leadership-narrative surfaces as labelled seed.
 export const STARTER_IDS: string[] = [
-  'applicants-total', 'deposits-vs-goal', 'conversion-by-channel', 't1t2t3-counts',
-  'engagement-tier-mix', 'sla-24h', 'executive-narrative', 'workstream-health',
+  'engagement-tier-mix', 'lead-score-dist', 't1t2t3-counts',
+  'funnel-stages', 'top-objections', 'sla-24h',
+  'website-sessions', 'budget-burn', 'decision-queue-preview',
+  'executive-narrative', 'workstream-health',
 ];
 
 export function widgetById(id: string): WidgetDef | undefined {
