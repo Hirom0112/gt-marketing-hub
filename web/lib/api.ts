@@ -10,22 +10,32 @@
 import type { Role } from './registry';
 
 const tokenCache: Partial<Record<Role, string>> = {};
+// Single-flight: the Home fires ~10 reads at once; without this each one would mint its
+// own token (a 10× waterfall before any fetch starts). Share ONE in-flight mint per role.
+const tokenInflight: Partial<Record<Role, Promise<string | null>>> = {};
 
 async function mintToken(role: Role): Promise<string | null> {
   if (tokenCache[role]) return tokenCache[role]!;
-  try {
-    const r = await fetch('/api/auth/demo-token', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ role }),
-    });
-    if (!r.ok) return null;
-    const j = (await r.json()) as { access_token?: string };
-    if (j.access_token) { tokenCache[role] = j.access_token; return j.access_token; }
-    return null;
-  } catch {
-    return null;
-  }
+  if (tokenInflight[role]) return tokenInflight[role]!;
+  const inflight = (async (): Promise<string | null> => {
+    try {
+      const r = await fetch('/api/auth/demo-token', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ role }),
+      });
+      if (!r.ok) return null;
+      const j = (await r.json()) as { access_token?: string };
+      if (j.access_token) { tokenCache[role] = j.access_token; return j.access_token; }
+      return null;
+    } catch {
+      return null;
+    } finally {
+      delete tokenInflight[role];
+    }
+  })();
+  tokenInflight[role] = inflight;
+  return inflight;
 }
 
 export async function apiGet<T>(path: string, role: Role): Promise<T | null> {
