@@ -11,6 +11,7 @@ from datetime import UTC, datetime
 from uuid import UUID
 
 from app.adapters.hubspot.crm_adapter import SimulatedCRMAdapter
+from app.core.seam import MirrorState
 
 _NOW = datetime(2026, 6, 15, 12, 0, tzinfo=UTC)
 _STAGE_ORDER = ["interest", "apply", "enroll", "tuition", "closed_lost"]
@@ -51,6 +52,21 @@ def test_pipeline_snapshot_counts_sum_to_cohort() -> None:
     assert all(s.stuck <= s.count for s in snap.stages)
     # Weekly handoff is a subset of the monthly handoff.
     assert snap.handoff_week <= snap.handoff_month
+
+
+def test_read_last_modified_is_deterministic_max_over_mirror() -> None:
+    """read_last_modified returns the DETERMINISTIC MAX mirror_updated_at (INV-9; no I/O)."""
+    adapter = SimulatedCRMAdapter()
+    # Empty recorder ⇒ no watermark yet.
+    assert adapter.read_last_modified("contacts") is None
+    older = datetime(2026, 6, 1, 9, 0, tzinfo=UTC)
+    newer = datetime(2026, 6, 10, 18, 30, tzinfo=UTC)
+    adapter.seed_mirror(UUID(int=1), MirrorState(stage=None, mirror_updated_at=older))
+    adapter.seed_mirror(UUID(int=2), MirrorState(stage=None, mirror_updated_at=newer))
+    # The MAX over the seeded mirrors, identical for either object type (recorder keys
+    # by family) and stable across re-reads.
+    assert adapter.read_last_modified("contacts") == newer
+    assert adapter.read_last_modified("deals") == newer
 
 
 def test_pipeline_snapshot_is_deterministic() -> None:

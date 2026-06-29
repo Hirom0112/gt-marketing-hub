@@ -780,6 +780,74 @@ def test_search_modified_since_bounded_by_until() -> None:
 
 
 # ===========================================================================
+# read_last_modified — the CRM-Ops overview last-sync watermark (INV-6 aggregate)
+# ===========================================================================
+
+
+def test_read_last_modified_reads_max_descending_limit_one() -> None:
+    """read_last_modified issues ONE DESC-sorted limit-1 search reading only the timestamp.
+
+    INV-6 aggregate: a single CRM Search sorted by ``hs_lastmodifieddate`` DESCENDING,
+    ``limit=1``, requesting ONLY the timestamp property (no per-person identity field),
+    and returns the parsed MAX modification instant off the top row.
+    """
+    captured: list[dict[str, Any]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/crm/v3/objects/contacts/search"
+        captured.append(json.loads(request.content))
+        return httpx.Response(
+            200,
+            json={
+                "total": 7,
+                "results": [
+                    {"id": "c-1", "properties": {"hs_lastmodifieddate": "2026-02-03T09:30:00Z"}}
+                ],
+            },
+        )
+
+    client = httpx.Client(transport=httpx.MockTransport(handler), base_url="https://api.hubapi.com")
+    adapter = LiveHubSpotCRMAdapter(
+        client=client,
+        token=_TOKEN,
+        crm=_crm(),
+        award_amounts=_award_amounts(),
+        calls_per_run_cap=200,
+        resilience=_resilience(),
+    )
+
+    result = adapter.read_last_modified("contacts")
+
+    assert result == datetime(2026, 2, 3, 9, 30, tzinfo=UTC)
+    assert len(captured) == 1
+    body = captured[0]
+    assert body["sorts"] == [{"propertyName": "hs_lastmodifieddate", "direction": "DESCENDING"}]
+    assert body["limit"] == 1
+    # Only the timestamp scalar is requested — no per-person identity field (INV-6).
+    assert body["properties"] == ["hs_lastmodifieddate"]
+    assert "filterGroups" not in body  # portal-wide newest-modified
+
+
+def test_read_last_modified_no_records_returns_none() -> None:
+    """An object type with no records ⇒ None (⇒ an honest synthetic fallback upstream)."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"total": 0, "results": []})
+
+    client = httpx.Client(transport=httpx.MockTransport(handler), base_url="https://api.hubapi.com")
+    adapter = LiveHubSpotCRMAdapter(
+        client=client,
+        token=_TOKEN,
+        crm=_crm(),
+        award_amounts=_award_amounts(),
+        calls_per_run_cap=200,
+        resilience=_resilience(),
+    )
+
+    assert adapter.read_last_modified("deals") is None
+
+
+# ===========================================================================
 # GUARD 3 — cap + kill-switch (INV-8): passing + BLOCKING
 # ===========================================================================
 

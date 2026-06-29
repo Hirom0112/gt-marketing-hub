@@ -695,6 +695,28 @@ class LiveHubSpotCRMAdapter(CRMAdapter):
             stages=tuple(stages), handoff_week=handoff_week, handoff_month=handoff_month
         )
 
+    def read_last_modified(self, object_type: str) -> datetime | None:
+        """Live MAX ``hs_lastmodifieddate`` over one object type — aggregate (INV-6).
+
+        ONE CRM Search sorted by ``hs_lastmodifieddate`` DESCENDING with ``limit=1``,
+        reading ONLY that single timestamp scalar off the top row — never a per-person
+        identity/behavioral field (the same INV-6 firewall as the other aggregate reads).
+        No ``filterGroups`` (portal-wide) so the newest-modified record surfaces. Returns
+        ``None`` when the object type has no records (or a malformed/absent timestamp).
+        Rides the guard-3 per-run budget (INV-8) via :meth:`_request`.
+        """
+        object_path = f"/crm/v3/objects/{object_type}"
+        payload: dict[str, Any] = {
+            "sorts": [{"propertyName": _HS_LASTMODIFIED, "direction": "DESCENDING"}],
+            "properties": [_HS_LASTMODIFIED],
+            "limit": 1,
+        }
+        body = self._request("POST", f"{object_path}/search", json=payload).json()
+        results = body.get("results") or []
+        if not results:
+            return None
+        return _parse_hs_timestamp(results[0].get("properties", {}).get(_HS_LASTMODIFIED))
+
     # ----------------------------------------------------- GT Social Post mirror
     def _social_post_properties(
         self, dispatch: PlatformDispatch, request: PublishRequest

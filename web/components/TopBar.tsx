@@ -7,6 +7,7 @@
 
 import Link from 'next/link';
 import { useEffect, useState } from 'react';
+import { apiGet } from '@/lib/api';
 import type { ModuleDef } from '@/lib/registry';
 import { useSession } from '@/lib/session';
 
@@ -88,8 +89,47 @@ export function TopBar({ active }: { active?: ModuleDef }) {
   );
 }
 
+// The live shape the banner reads from GET /crm/ops/overview — only the parity figure
+// + the honest field-reliability flags (the unreliable low-trust field list). Kept to a
+// narrow subset so the banner never depends on the rest of the overview payload.
+interface CrmFieldFlag {
+  field: string;
+  status: string;
+  reason: string | null;
+}
+interface CrmOverview {
+  parity_overall: number;
+  data_confidence_banner: boolean;
+  field_flags: CrmFieldFlag[];
+}
+
 function DataConfidenceBanner() {
+  const { session } = useSession();
   const [hover, setHover] = useState(false);
+  // undefined = loading (render nothing, no flash, no fake number); null = fetch failed
+  // (show the qualitative warning only); object = the live verdict.
+  const [data, setData] = useState<CrmOverview | null | undefined>(undefined);
+
+  useEffect(() => {
+    let alive = true;
+    apiGet<CrmOverview>('/crm/ops/overview', session.role)
+      .then((d) => { if (alive) setData(d); })
+      .catch(() => { if (alive) setData(null); });
+    return () => { alive = false; };
+  }, [session.role]);
+
+  // Loading — wait for the API's verdict before rendering anything.
+  if (data === undefined) return null;
+  // The API says parity is healthy ⇒ no banner (only show when it says so).
+  if (data && !data.data_confidence_banner) return null;
+
+  // Real parity figure from the API (never hardcoded); on a failed fetch we show the
+  // qualitative warning with an honest "unavailable" instead of a fabricated number.
+  const parityPct = data ? `${(data.parity_overall * 100).toFixed(1)}%` : null;
+  const unreliable = data
+    ? data.field_flags.filter((f) => f.status === 'unreliable').map((f) => f.field)
+    : [];
+
   return (
     <Link href="/crm" style={{ display: 'block' }}>
       <div
@@ -109,7 +149,12 @@ function DataConfidenceBanner() {
       >
         <span style={{ fontFamily: MONO, fontSize: 9, fontWeight: 600, letterSpacing: '.5px', padding: '2px 7px', background: 'var(--signal)', color: 'var(--on-signal)', whiteSpace: 'nowrap' }}>⚠ DATA CONFIDENCE</span>
         <span style={{ fontSize: 12, color: 'var(--ink)', flex: 1 }}>
-          Supabase ⇄ HubSpot sync parity <b style={{ fontFamily: MONO }}>96.2%</b>, with <b>income</b>, <b>source</b> &amp; <b>TEFA</b> fields below threshold. Funnel &amp; income read from <b>Supabase app_form</b> (source of truth). UTM attribution remains broken.
+          Supabase ⇄ HubSpot sync parity{' '}
+          <b style={{ fontFamily: MONO }}>{parityPct ?? 'unavailable'}</b>
+          {unreliable.length > 0 && (
+            <>, with <b>{unreliable.join(', ')}</b> {unreliable.length === 1 ? 'field' : 'fields'} below threshold</>
+          )}
+          . Funnel &amp; income read from <b>Supabase app_form</b> (source of truth). UTM attribution remains broken.
         </span>
         <span style={{ fontFamily: MONO, fontSize: 10, color: 'var(--signal)', fontWeight: 600, whiteSpace: 'nowrap', textDecoration: hover ? 'underline' : 'none' }}>Inspect in CRM Ops →</span>
       </div>

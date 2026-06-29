@@ -378,6 +378,22 @@ class CRMAdapter(ABC):
         """
 
     @abstractmethod
+    def read_last_modified(self, object_type: str) -> datetime | None:
+        """Read the MAX ``hs_lastmodifieddate`` over one object type (aggregate; INV-6).
+
+        The aggregate "last sync" watermark behind the CRM-Ops overview's per-connector
+        last-sync row: the single most-recent modification instant across an object type
+        (``contacts`` / ``deals``), or ``None`` when the object type has no records.
+
+        Aggregate only — the live impl issues ONE CRM Search sorted by
+        ``hs_lastmodifieddate`` DESCENDING with ``limit=1``, reading ONLY that one
+        timestamp scalar (never a per-person row/identity field — the same INV-6 firewall
+        as :meth:`read_engagement_mix` / :meth:`read_pipeline_snapshot`). The simulated
+        impl reconstructs a DETERMINISTIC watermark from its in-memory recorder (INV-9 —
+        no network), so the overview shows a real timestamp offline.
+        """
+
+    @abstractmethod
     def mirror_social_post(
         self, dispatch: PlatformDispatch, *, request: PublishRequest
     ) -> str | None:
@@ -676,6 +692,23 @@ class SimulatedCRMAdapter(CRMAdapter):
                     counts[i] += 1
                     break
         return lead_score_bands_from_counts(edges, counts)
+
+    def read_last_modified(self, object_type: str) -> datetime | None:
+        """The MAX recorded ``mirror_updated_at`` across the in-memory mirror (INV-9).
+
+        A DETERMINISTIC offline watermark: the most-recent ``mirror_updated_at`` over
+        every recorded/seeded mirror entry, or ``None`` when nothing has been
+        pushed/seeded yet. The recorder keys by family (not by object type), so
+        ``object_type`` is accepted for interface parity and the same watermark answers
+        for ``contacts`` and ``deals``. No network client (INV-9); aggregate only (one
+        timestamp, never a per-person row; INV-6).
+        """
+        stamps = [
+            mirror.mirror_updated_at
+            for mirror in self._mirror.values()
+            if mirror.mirror_updated_at is not None
+        ]
+        return max(stamps) if stamps else None
 
     def mirror_social_post(
         self, dispatch: PlatformDispatch, *, request: PublishRequest

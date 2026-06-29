@@ -10,6 +10,7 @@ store are injected through dependency overrides.
 from __future__ import annotations
 
 from collections.abc import Iterator
+from datetime import UTC, datetime
 
 import pytest
 from fastapi.testclient import TestClient
@@ -86,6 +87,28 @@ def test_overview_reports_live_lead_score_and_open_count() -> None:
     assert body["open_dq_count"] == len(store.list_issues(PROGRAM, status="open"))
     assert {c["connector"] for c in body["last_sync"]}
     assert body["field_flags"]
+
+
+def test_overview_last_sync_sources_are_real_not_synthetic() -> None:
+    """5a last_sync: HubSpot connectors read REAL (max hs_lastmodifieddate); app_form real."""
+    repo, adapter, _ = _install()
+    record = next(iter(repo.list_families()))
+    ts = datetime(2026, 6, 12, 8, 0, tzinfo=UTC)
+    # Seed a mirror watermark so the aggregate read returns a genuine timestamp.
+    adapter.seed_mirror(
+        record.family_id, MirrorState(stage=record.current_stage, mirror_updated_at=ts)
+    )
+    resp = client.get("/crm/ops/overview", headers=_auth())
+    assert resp.status_code == 200, resp.text
+    rows = resp.json()["last_sync"]
+    by = {c["connector"]: c for c in rows}
+    assert by["hubspot_contacts"]["source"] == "live"
+    assert by["hubspot_deals"]["source"] == "live"
+    assert by["hubspot_contacts"]["last_sync"] == ts.isoformat()
+    # The app_form connector reads the cohort's real latest updated_at/crm_synced_at.
+    assert by["supabase_app_form"]["source"] == "supabase"
+    # Nothing is left claiming a synthetic stamp when a real read is available.
+    assert all(c["source"] != "synthetic" for c in rows)
 
 
 def test_source_tracking_resolution_chain_and_fixlog() -> None:

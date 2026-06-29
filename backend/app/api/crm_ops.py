@@ -106,14 +106,13 @@ SOURCE_LEAD_SCORE = "crm_aggregate"  # LIVE HubSpot aggregate gt_lead_score COUN
 SOURCE_PARITY = "supabase⇄hubspot"  # A4 parity over the (record, mirror) cohort.
 SOURCE_CORRELATION = "derived_synthetic"  # the score→conversion table is DERIVED, not live.
 SOURCE_UTM = "supabase_attribution_utm"  # per-param resolution from the stored UTM blob.
-SOURCE_SYNTHETIC = "synthetic"  # synthesized connector last-sync timestamps.
+# Last-sync provenance labels (so the UI never implies a read it didn't make).
+SOURCE_LIVE = "live"  # a genuine MAX hs_lastmodifieddate aggregate read (INV-6; live or seeded).
+SOURCE_SUPABASE = "supabase"  # the app_form connector's real latest updated_at/crm_synced_at.
+SOURCE_SYNTHETIC = "synthetic"  # only when a connector genuinely can't be read live.
 
 # The always-on rule-of-truth string the 5d sync-parity view surfaces.
 RULE_OF_TRUTH = "Supabase app_form is the source of truth for funnel/TEFA/income"
-
-# The connectors the overview reports a last-sync for (synthesized timestamps; INV-11
-# carve-out — fixed wire labels). The real watermark lives behind GET /crm/sync/status.
-_CONNECTORS: tuple[str, ...] = ("hubspot_contacts", "hubspot_deals", "supabase_app_form")
 
 # DqKind → persisted issue category (one of CATEGORIES). The single mapping home.
 _KIND_CATEGORY: dict[DqKind, str] = {
@@ -444,7 +443,14 @@ class LeadScoreDistributionOut(BaseModel):
 
 
 class ConnectorSync(BaseModel):
-    """One connector's last-sync timestamp (synthesized; the real one is /crm/sync/status)."""
+    """One connector's last-sync timestamp + its honest provenance.
+
+    ``source`` is ``live`` for the HubSpot connectors when the genuine MAX
+    ``hs_lastmodifieddate`` aggregate read returned a timestamp (INV-6), ``supabase``
+    for the app_form connector's real latest ``updated_at``/``crm_synced_at``, and
+    ``synthetic`` ONLY when a connector genuinely can't be read (the read returned no
+    records) — never claimed live.
+    """
 
     connector: str
     last_sync: str
@@ -639,19 +645,66 @@ def _fix_out(f: CrmFixLogEntry) -> FixLogOut:
     )
 
 
-def _synthetic_last_sync() -> list[ConnectorSync]:
-    """A synthesized per-connector last-sync (labeled honestly; real one = /crm/sync/status)."""
-    now = datetime.now(UTC)
-    out: list[ConnectorSync] = []
-    for i, connector in enumerate(_CONNECTORS):
-        out.append(
-            ConnectorSync(
-                connector=connector,
-                last_sync=(now - timedelta(minutes=(i + 1) * 5)).isoformat(),
-                source=SOURCE_SYNTHETIC,
-            )
-        )
-    return out
+def _supabase_last_sync(repository: FamilyRepository) -> datetime | None:
+    """The app_form connector's REAL last sync — the latest family watermark over the cohort.
+
+    Prefers each family's ``crm_synced_at`` (the genuine sync instant) and falls back to
+    ``updated_at``; the cohort max is the connector's last-sync. ``None`` only when the
+    cohort carries no timestamp at all (⇒ a synthetic fallback, labeled honestly).
+    """
+    stamps: list[datetime] = []
+    for record in repository.list_families():
+        stamp = record.crm_synced_at or record.updated_at
+        if stamp is not None:
+            stamps.append(stamp)
+    return max(stamps) if stamps else None
+
+
+def _connector_sync(
+    connector: str, timestamp: datetime | None, *, source: str, fallback_minutes: int
+) -> ConnectorSync:
+    """One connector's last-sync row — the REAL timestamp, or an honest synthetic fallback.
+
+    A genuine read (``timestamp is not None``) is stamped with its true ``source``; a
+    connector that genuinely can't be read (no records ⇒ ``None``) falls back to a
+    synthesized stamp labeled :data:`SOURCE_SYNTHETIC` — never claimed live.
+    """
+    if timestamp is not None:
+        return ConnectorSync(connector=connector, last_sync=timestamp.isoformat(), source=source)
+    synth = datetime.now(UTC) - timedelta(minutes=fallback_minutes)
+    return ConnectorSync(connector=connector, last_sync=synth.isoformat(), source=SOURCE_SYNTHETIC)
+
+
+def _last_sync(crm_adapter: CRMAdapter, repository: FamilyRepository) -> list[ConnectorSync]:
+    """The per-connector last-sync, read for REAL (INV-6 aggregate) where possible.
+
+    The two HubSpot connectors carry the genuine MAX ``hs_lastmodifieddate`` over their
+    object type (``crm_adapter.read_last_modified`` — the live portal read under
+    ``CRM_MODE=live``, the seeded simulated watermark offline; INV-6 aggregate, one
+    timestamp, no per-person fields). The app_form connector carries the cohort's real
+    latest ``updated_at``/``crm_synced_at``. Any connector that genuinely can't be read
+    degrades to an honest synthetic fallback (never claimed live).
+    """
+    return [
+        _connector_sync(
+            "hubspot_contacts",
+            crm_adapter.read_last_modified("contacts"),
+            source=SOURCE_LIVE,
+            fallback_minutes=5,
+        ),
+        _connector_sync(
+            "hubspot_deals",
+            crm_adapter.read_last_modified("deals"),
+            source=SOURCE_LIVE,
+            fallback_minutes=10,
+        ),
+        _connector_sync(
+            "supabase_app_form",
+            _supabase_last_sync(repository),
+            source=SOURCE_SUPABASE,
+            fallback_minutes=15,
+        ),
+    ]
 
 
 # ===========================================================================
@@ -679,7 +732,7 @@ def get_overview(
         utm_broken=len(broken),
         lead_score_distribution=_lead_distribution(repository, live_adapter, params),
         open_dq_count=len(store.list_issues(program, status="open")),
-        last_sync=_synthetic_last_sync(),
+        last_sync=_last_sync(crm_adapter, repository),
         field_flags=[FieldFlagOut(field=f.field, status=f.status, reason=f.reason) for f in flags],
     )
 

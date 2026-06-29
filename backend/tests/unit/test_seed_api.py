@@ -21,6 +21,7 @@ route calls ``push_family`` on the deterministic path.
 from __future__ import annotations
 
 from collections.abc import Iterator, Sequence
+from datetime import datetime
 from typing import Any
 from uuid import UUID, uuid4
 
@@ -134,6 +135,11 @@ class _RecordingAdapter(CRMAdapter):
         # Module-7 CRM-Ops seam — not exercised on the enrollment-seed path; present
         # only so this CRMAdapter double stays instantiable after the merge.
         return LeadScoreDistribution(bands=(), total=0, mean=0.0)
+
+    def read_last_modified(self, object_type: str) -> datetime | None:
+        # CRM-Ops overview last-sync watermark — not exercised on the enrollment-seed
+        # path; present only so this CRMAdapter double stays instantiable.
+        return None
 
     def mirror_social_post(self, dispatch: object, *, request: object) -> str | None:
         # Not exercised on the enrollment-seed path (marketing's W3 social mirror);
