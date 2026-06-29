@@ -159,6 +159,68 @@ class EngagementTierMix:
 
 
 @dataclass(frozen=True, slots=True)
+class LeadScoreBand:
+    """One histogram band of the lead-score distribution (Module 7; counts only — INV-6).
+
+    A half-open ``[low, high)`` band over the HubSpot ``gt_lead_score`` property with
+    the aggregate count of contacts whose score falls in it. ``label`` is the
+    human ``"low-high"`` band name. Never a per-person row (INV-6).
+    """
+
+    label: str
+    low: int
+    high: int
+    count: int
+
+
+@dataclass(frozen=True, slots=True)
+class LeadScoreDistribution:
+    """Aggregate lead-score histogram across contacts (Module 7; counts only — INV-6).
+
+    The read behind the lead-scoring view's LIVE histogram: a count per ``[low, high)``
+    band plus the total and a band-midpoint-weighted ``mean`` (an aggregate-only
+    approximation — never a per-contact read, INV-6). The simulated adapter synthesizes
+    a DETERMINISTIC score per contact from its family id (INV-9 — no I/O); the live
+    HubSpot adapter reads the real ``gt_lead_score`` property counts, one CRM-Search
+    COUNT per band.
+
+    Attributes:
+        bands: One :class:`LeadScoreBand` per ``[low, high)`` band (ascending).
+        total: Total contacts read across the bands (the denominator).
+        mean: The band-midpoint-weighted mean score (0.0 when no contacts).
+    """
+
+    bands: tuple[LeadScoreBand, ...]
+    total: int
+    mean: float
+
+
+def lead_score_bands_from_counts(
+    band_edges: Sequence[int], counts: Sequence[int]
+) -> LeadScoreDistribution:
+    """Assemble a :class:`LeadScoreDistribution` from band edges + per-band counts (pure).
+
+    ``band_edges`` are the ascending histogram edges (n edges ⇒ n-1 ``[low, high)``
+    bands); ``counts[i]`` is the contact count in band ``[band_edges[i], band_edges[i+1])``.
+    The ``mean`` is the band-midpoint-weighted mean (an aggregate-only approximation —
+    no per-contact score is ever read; INV-6). A shared pure helper so the simulated and
+    live adapters build the identical shape.
+    """
+    edges = list(band_edges)
+    bands: list[LeadScoreBand] = []
+    weighted_total = 0.0
+    total = 0
+    for i in range(len(edges) - 1):
+        low, high = edges[i], edges[i + 1]
+        count = int(counts[i]) if i < len(counts) else 0
+        bands.append(LeadScoreBand(label=f"{low}-{high}", low=low, high=high, count=count))
+        weighted_total += ((low + high) / 2.0) * count
+        total += count
+    mean = weighted_total / total if total else 0.0
+    return LeadScoreDistribution(bands=tuple(bands), total=total, mean=mean)
+
+
+@dataclass(frozen=True, slots=True)
 class PipelineStageCount:
     """One deal-stage's aggregate counts (Module 5; counts only — INV-6).
 
@@ -276,6 +338,22 @@ class CRMAdapter(ABC):
         """
 
     @abstractmethod
+    def read_lead_score_distribution(
+        self, family_ids: Sequence[UUID], *, band_edges: Sequence[int]
+    ) -> LeadScoreDistribution:
+        """Read the aggregate lead-score histogram over ``band_edges`` (Module 7; INV-6).
+
+        The READ-ONLY read behind the lead-scoring view's LIVE histogram. ``band_edges``
+        are the ascending histogram edges (from ``params.crm_ops.lead_score.bands``); the
+        live impl issues one CRM-Search COUNT per ``[low, high)`` band over the HubSpot
+        ``gt_lead_score`` property (``GTE low`` AND ``LT high``), reading ONLY the
+        aggregate ``total`` — never a per-person row (INV-6) — and ignores ``family_ids``
+        (portal-wide aggregate). Lead scoring is DISPLAY-only; nothing is ever written.
+        The simulated impl synthesizes a DETERMINISTIC score per contact from its family
+        id (INV-9 — no network), so the histogram is real and demoable offline.
+        """
+
+    @abstractmethod
     def read_pipeline_snapshot(
         self,
         family_ids: Sequence[UUID],
@@ -367,6 +445,13 @@ def apply_mirror_results(
 # share the offline seam reports (≈ 1/N of the cohort). The live tier comes from
 # HubSpot, never this divisor.
 _SIMULATED_CLICKED_TIER_DIVISOR = 3
+
+# Synthetic lead-score shaping (INV-11 carve-out, like the divisor above — not a tuned
+# business threshold). A contact's offline ``gt_lead_score`` is derived deterministically
+# from its family id into ``[MIN, MIN + SPAN)`` so the offline histogram mirrors the
+# verified portal range (10–99). The live score comes from HubSpot, never these.
+_SIMULATED_LEAD_SCORE_MIN = 10
+_SIMULATED_LEAD_SCORE_SPAN = 90
 
 
 class SimulatedCRMAdapter(CRMAdapter):
@@ -568,6 +653,29 @@ class SimulatedCRMAdapter(CRMAdapter):
         return PipelineSnapshot(
             stages=stages, handoff_week=handoff_week, handoff_month=handoff_month
         )
+
+    def read_lead_score_distribution(
+        self, family_ids: Sequence[UUID], *, band_edges: Sequence[int]
+    ) -> LeadScoreDistribution:
+        """A DETERMINISTIC synthetic lead-score histogram over the cohort (INV-9 — no I/O).
+
+        Each contact's synthetic ``gt_lead_score`` is derived from its family id into
+        the verified portal range (:data:`_SIMULATED_LEAD_SCORE_MIN` …) and bucketed into
+        the ``[low, high)`` band it falls in. A score at/above the top edge folds into the
+        last band so nothing is dropped. Aggregate only (counts; INV-6); the same cohort
+        always yields the same histogram (real + demoable offline).
+        """
+        edges = list(band_edges)
+        counts = [0] * max(len(edges) - 1, 0)
+        for fid in family_ids:
+            score = _SIMULATED_LEAD_SCORE_MIN + (fid.int % _SIMULATED_LEAD_SCORE_SPAN)
+            for i in range(len(edges) - 1):
+                # Last band is inclusive at the top edge so a top-of-range score is kept.
+                top_inclusive = i == len(edges) - 2
+                if edges[i] <= score < edges[i + 1] or (top_inclusive and score >= edges[i + 1]):
+                    counts[i] += 1
+                    break
+        return lead_score_bands_from_counts(edges, counts)
 
     def mirror_social_post(
         self, dispatch: PlatformDispatch, *, request: PublishRequest

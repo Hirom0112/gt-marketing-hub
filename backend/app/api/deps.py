@@ -54,6 +54,11 @@ from app.data.content_metrics_store import (
     InMemoryContentMetricsStore,
     build_supabase_content_metrics_store,
 )
+from app.data.crm_ops_store import (
+    CrmOpsStore,
+    InMemoryCrmOpsStore,
+    build_supabase_crm_ops_store,
+)
 from app.data.decisions_store import (
     DecisionsStore,
     InMemoryDecisionsStore,
@@ -599,6 +604,54 @@ def _seeded_in_memory_nurture_store(program: Program) -> InMemoryNurtureStore:
 _nurture_store: NurtureStore = _build_nurture_store()
 
 
+def _build_crm_ops_store() -> CrmOpsStore:
+    """Bind the Module-7 CRM-Ops store, MIRRORING ``_build_nurture_store``.
+
+    The same ``COCKPIT_REPO`` / ``SUPABASE_URL`` selection as the other module stores, so
+    they never disagree on which backend is live (the NFR-8 store seam):
+
+    - ``synthetic`` ⇒ FORCE the in-memory store (never Supabase), with the deterministic
+      demo issues/fix-log seeded for the active program (INV-1).
+    - ``supabase`` ⇒ REQUIRE the live store; a missing ``SUPABASE_URL`` is a misconfig
+      ⇒ raise (fail loud, the family-store posture).
+    - ``auto`` (default) ⇒ Supabase when ``SUPABASE_URL`` is configured, else the seeded
+      in-memory v1 fallback (A-3).
+    """
+    settings = Settings.from_env()
+    repo_mode = settings.cockpit_repo
+    program = resolve_program(settings.gt_program_id)
+    if repo_mode == "synthetic":
+        return _seeded_in_memory_crm_ops_store(program)
+    if repo_mode == "supabase":
+        supabase = build_supabase_crm_ops_store()
+        if supabase is None:
+            raise RuntimeError(
+                "COCKPIT_REPO=supabase requires SUPABASE_URL (+ "
+                "SUPABASE_SERVICE_ROLE_KEY) for the CRM-Ops store; none was "
+                "configured. Set them, or use COCKPIT_REPO=synthetic / auto."
+            )
+        return supabase
+    return build_supabase_crm_ops_store() or _seeded_in_memory_crm_ops_store(program)
+
+
+def _seeded_in_memory_crm_ops_store(program: Program) -> InMemoryCrmOpsStore:
+    """Build the in-memory CRM-Ops store + the deterministic demo seed (Module 7).
+
+    The demo data-quality issues + fix-log are seeded for the active program so the five
+    CRM-Ops sub-views are demonstrable on synthetic data alone (idempotent; INV-1). Tests
+    that need a CLEAN store construct :class:`InMemoryCrmOpsStore` directly.
+    """
+    store = InMemoryCrmOpsStore()
+    store.seed_demo(program)
+    return store
+
+
+# Singleton CRM-Ops store (Module 7) — the data-quality queue + fix-log state behind the
+# same NFR-8 seam as ``_repository``. Default v1 = in-memory (A-3), seeded with the
+# deterministic demo; production swaps the Supabase-backed impl over the 0041 tables.
+_crm_ops_store: CrmOpsStore = _build_crm_ops_store()
+
+
 def _build_content_metrics_store() -> ContentMetricsStore:
     """Bind the Module-3 Content-metrics store, MIRRORING ``_build_grassroots_store``.
 
@@ -1114,6 +1167,11 @@ def get_field_events_store() -> FieldEventsStore:
 def get_nurture_store() -> NurtureStore:
     """FastAPI dependency yielding the active Nurture & Lifecycle store (Module 5 seam)."""
     return _nurture_store
+
+
+def get_crm_ops_store() -> CrmOpsStore:
+    """FastAPI dependency yielding the active CRM-Ops store (Module 7 seam)."""
+    return _crm_ops_store
 
 
 def get_content_metrics_store() -> ContentMetricsStore:

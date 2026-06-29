@@ -68,6 +68,7 @@ WORKSTREAMS: tuple[str, ...] = (
     "admissions",
     "nurture",
     "camp",
+    "crm",
 )
 
 # The two priorities. ``normal`` is the default (matches the 0034 column default).

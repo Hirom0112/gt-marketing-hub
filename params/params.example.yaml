@@ -415,6 +415,14 @@ crm_ops:                    # C1 — CRM/Marketing-Ops data-quality cores; share
     severity_order: [conflict, utm_broken, unreliable_field, mojibake, missing_field]   # highest→lowest; the queue ranks each issue by its position here (mojibake/missing_field = the CRM-import edge cases)
   unreliable_fields: [tefa_amount, attribution_source, income_tier]   # fields known to be low-trust; flagged unreliable + surfaced as an unreliable_field issue
   parity_floor: 0.95                # sync-parity fraction below which the cross-module data-confidence banner activates (reuse A4); a fraction in [0,1]
+  lead_score:                       # M7 — LIVE HubSpot gt_lead_score histogram + tier cutoffs (read aggregate-only, INV-6)
+    bands: [0, 20, 40, 60, 80, 100] # ascending histogram band EDGES ⇒ five [low,high) bands; one CRM-Search COUNT per band
+    threshold: 60                   # the lead-score threshold the scoring model qualifies a lead on
+    tiers:                          # cold/warm/hot tier cutoffs: cold < warm_min, warm in [warm_min,hot_min), hot >= hot_min
+      warm_min: 40
+      hot_min: 80
+  drift_alert_floor: 0.90           # FIELD-level parity fraction below which a sync-parity drift alert fires (5d view); a fraction in [0,1]
+  attribution_chain_steps: [app_form_submit, supabase_app_form, hubspot_contact]   # ordered attribution-chain step labels (form → Supabase source-of-truth → HubSpot mirror)
 
 open_data:                  # E1 — tryopendata.ai Texas-education enrichment seam (RESEARCH_v2 §II.3; INV-1/8/9/11)
   datasets:                         # tea/* dataset slugs the live adapter queries over POST /v1/query (aggregate/district-level only — INV-1/INV-6)

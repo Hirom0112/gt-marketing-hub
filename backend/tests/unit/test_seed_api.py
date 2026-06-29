@@ -31,6 +31,7 @@ from app.adapters.hubspot.crm_adapter import (
     CRMAdapter,
     EngagementSnapshot,
     EngagementTierMix,
+    LeadScoreDistribution,
     PipelineSnapshot,
     SendResult,
     SimulatedCRMAdapter,
@@ -126,6 +127,13 @@ class _RecordingAdapter(CRMAdapter):
         # Module-5 nurture seam — not exercised on the enrollment-seed path; present
         # only so this CRMAdapter double stays instantiable after the merge.
         return PipelineSnapshot(stages=(), handoff_week=0, handoff_month=0)
+
+    def read_lead_score_distribution(
+        self, family_ids: Sequence[UUID], *, band_edges: Sequence[int]
+    ) -> LeadScoreDistribution:
+        # Module-7 CRM-Ops seam — not exercised on the enrollment-seed path; present
+        # only so this CRMAdapter double stays instantiable after the merge.
+        return LeadScoreDistribution(bands=(), total=0, mean=0.0)
 
     def mirror_social_post(self, dispatch: object, *, request: object) -> str | None:
         # Not exercised on the enrollment-seed path (marketing's W3 social mirror);

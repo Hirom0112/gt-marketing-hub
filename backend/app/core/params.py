@@ -1899,6 +1899,54 @@ class CrmOpsDataQuality(_StrictModel):
         return self
 
 
+class CrmOpsLeadScoreTiers(_StrictModel):
+    """crm_ops.lead_score.tiers — the cold/warm/hot tier cutoffs (Module 7; INV-11).
+
+    A lead score sits in a tier by its value: ``cold`` below ``warm_min``, ``warm``
+    in ``[warm_min, hot_min)``, ``hot`` at/above ``hot_min``. The single canonical
+    home for the tier breakdown the lead-scoring view derives. ``warm_min`` MUST be
+    strictly below ``hot_min`` (an inverted/equal pair is config drift, §4.1).
+    """
+
+    warm_min: int
+    hot_min: int
+
+    @model_validator(mode="after")
+    def _ordered(self) -> CrmOpsLeadScoreTiers:
+        if not self.warm_min < self.hot_min:
+            raise ValueError(
+                f"crm_ops.lead_score.tiers.warm_min must be < hot_min, got "
+                f"{self.warm_min!r} / {self.hot_min!r}"
+            )
+        return self
+
+
+class CrmOpsLeadScore(_StrictModel):
+    """crm_ops.lead_score — the lead-score histogram + tier tunables (Module 7; INV-11).
+
+    The single home for the LIVE HubSpot ``gt_lead_score`` read shape:
+
+    * ``bands`` — the ascending histogram band EDGES (e.g. ``[0, 20, 40, 60, 80,
+      100]`` ⇒ five ``[low, high)`` bands). MUST be ≥2 entries, strictly ascending.
+    * ``threshold`` — the lead-score threshold the scoring model qualifies on.
+    * ``tiers`` — the cold/warm/hot tier cutoffs.
+    """
+
+    bands: list[int]
+    threshold: int
+    tiers: CrmOpsLeadScoreTiers
+
+    @model_validator(mode="after")
+    def _bands_ascending(self) -> CrmOpsLeadScore:
+        if len(self.bands) < 2:
+            raise ValueError(f"crm_ops.lead_score.bands must have ≥2 edges, got {self.bands!r}")
+        if any(b >= a for b, a in zip(self.bands, self.bands[1:], strict=False)):
+            raise ValueError(
+                f"crm_ops.lead_score.bands must be strictly ascending, got {self.bands!r}"
+            )
+        return self
+
+
 class CrmOps(_StrictModel):
     """C1 CRM/Marketing-Operations data-quality tunables (TODO_v2 §C1; INV-11).
 
@@ -1915,12 +1963,20 @@ class CrmOps(_StrictModel):
     * ``parity_floor`` — the sync-parity fraction below which the cross-module
       data-confidence banner activates (reuses the A4 banner). A FRACTION, so it
       MUST sit in [0.0, 1.0]; an out-of-range value fails the build (§4.1).
+    * ``lead_score`` — the LIVE HubSpot lead-score histogram + tier cutoffs (M7).
+    * ``drift_alert_floor`` — the FIELD-level parity fraction below which a
+      sync-parity drift alert fires (the 5d view). A fraction in [0.0, 1.0].
+    * ``attribution_chain_steps`` — the ordered step labels of the attribution
+      chain the source-tracking view renders (form → Supabase → HubSpot).
     """
 
     utm: CrmOpsUtm
     data_quality: CrmOpsDataQuality
     unreliable_fields: list[str]
     parity_floor: float
+    lead_score: CrmOpsLeadScore
+    drift_alert_floor: float
+    attribution_chain_steps: list[str]
 
     @model_validator(mode="after")
     def _parity_floor_is_fraction(self) -> CrmOps:
@@ -1928,6 +1984,12 @@ class CrmOps(_StrictModel):
             raise ValueError(
                 f"crm_ops.parity_floor must be in [0.0, 1.0], got {self.parity_floor!r}"
             )
+        if not 0.0 <= self.drift_alert_floor <= 1.0:
+            raise ValueError(
+                f"crm_ops.drift_alert_floor must be in [0.0, 1.0], got {self.drift_alert_floor!r}"
+            )
+        if not self.attribution_chain_steps:
+            raise ValueError("crm_ops.attribution_chain_steps must be non-empty")
         return self
 
 

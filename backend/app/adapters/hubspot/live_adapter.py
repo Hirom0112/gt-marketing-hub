@@ -45,12 +45,14 @@ from app.adapters.hubspot.crm_adapter import (
     CRMAdapter,
     EngagementSnapshot,
     EngagementTierMix,
+    LeadScoreDistribution,
     PipelineSnapshot,
     PipelineStageCount,
     SendResult,
     StudentSyncResult,
     SyncResult,
     is_mirrorable,
+    lead_score_bands_from_counts,
 )
 from app.adapters.hubspot.stage_map import (
     StageMappingError,
@@ -77,6 +79,10 @@ _GT_SYNTHETIC_ID = "gt_synthetic_id"
 # carve-out like dealstage ids), not a GT tunable — read aggregate-only (INV-6).
 _GT_ENGAGEMENT_TIER = "gt_engagement_tier"
 _ENGAGEMENT_TIERS = ("clicked", "opened", "cold")
+# The lead-score custom contact property (Module 7) — read aggregate-only (INV-6) for the
+# lead-scoring histogram. DISPLAY-only; never written. A portal property name (INV-11
+# carve-out, like the engagement tier), not a GT tunable.
+_GT_LEAD_SCORE = "gt_lead_score"
 # The HubSpot version stamp the incremental poll filters/sorts on (A2; §4.7).
 _HS_LASTMODIFIED = "hs_lastmodifieddate"
 # The PII-free tracked scalars the §4.7 deriver reads — the ONLY properties the
@@ -592,6 +598,34 @@ class LiveHubSpotCRMAdapter(CRMAdapter):
         return EngagementTierMix(
             clicked=counts["clicked"], opened=counts["opened"], cold=counts["cold"]
         )
+
+    def read_lead_score_distribution(
+        self, family_ids: Sequence[UUID], *, band_edges: Sequence[int]
+    ) -> LeadScoreDistribution:
+        """Live lead-score histogram — aggregate ``gt_lead_score`` COUNTs per band (INV-6).
+
+        One CRM-Search COUNT per ``[low, high)`` band (``gt_lead_score GTE low`` AND
+        ``LT high``), reading only the aggregate ``total`` — never a per-person row. The
+        last band counts the top edge inclusively (``GTE low`` with no upper bound) so a
+        top-of-range score is kept. READ-ONLY (lead scoring is DISPLAY-only, never
+        written); ``family_ids`` is ignored (portal-wide aggregate). Each count rides the
+        guard-3 per-run budget (INV-8).
+        """
+        edges = list(band_edges)
+        counts: list[int] = []
+        for i in range(len(edges) - 1):
+            low, high = edges[i], edges[i + 1]
+            filters: list[dict[str, Any]] = [
+                {"propertyName": _GT_LEAD_SCORE, "operator": "GTE", "value": str(low)}
+            ]
+            # Every band but the last is half-open [low, high); the last is inclusive at
+            # the top edge so a top-of-range score is not dropped.
+            if i < len(edges) - 2:
+                filters.append(
+                    {"propertyName": _GT_LEAD_SCORE, "operator": "LT", "value": str(high)}
+                )
+            counts.append(self._count(_CONTACTS, filters))
+        return lead_score_bands_from_counts(edges, counts)
 
     def read_pipeline_snapshot(
         self,
