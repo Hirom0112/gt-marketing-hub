@@ -208,8 +208,14 @@ live — and deliberately left the breadth/viz surfaces as honest seed.
   the tagged campaigns at the **origin** of the tags (Module 7; detect-only — broken flagged, never
   auto-fixed).
 
-**Left as honest seed (labeled, behind the right shape):** Home, Resource Library.
-These are breadth/aggregation/viz surfaces that don't further test the backbone.
+**Executive Command (Home)** now aggregates **live** from every owning module — each of the
+composable widgets reads its module's real aggregate and carries an honest **● LIVE / ◐ stood-in
+(GA4) / ○ sample** pill, so you can see at a glance which number is live wire data. (It streams
+per-endpoint, so a slow live read never blocks the rest, and a backend cache pre-warmer keeps the
+flip fast.)
+
+**Left as honest seed (labeled, behind the right shape):** Resource Library — a
+breadth/aggregation surface that doesn't further test the backbone.
 
 ---
 

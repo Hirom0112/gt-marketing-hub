@@ -81,8 +81,11 @@ writes verified live. The backbone primitives are all real and unit-tested (**14
   traffic view runs the **same `check_utm` rule set CRM Ops uses** over the tagged campaigns at the
   **origin** of the tags — 3 broken feed the **CRM-Ops attribution chain** (Module 7; detect-only).
 
-**Left as honest seed (real shape, labeled):** **Home, Resource Library.** These are
-breadth/aggregation surfaces that don't further test the backbone.
+**Executive Command (Home)** now aggregates **live** — each composable widget reads its owning
+module's real aggregate (streamed per-endpoint, backend cache pre-warmed) and carries a **● LIVE /
+◐ stood-in / ○ sample** provenance pill. **Left as honest seed (real shape, labeled):**
+**Resource Library.** This is a
+breadth/aggregation surface that doesn't further test the backbone.
 
 ## 3. Key technical trade-offs
 
@@ -129,8 +132,8 @@ breadth/aggregation surfaces that don't further test the backbone.
 
 ## 5. With another week
 
-1. Wire the remaining seed UIs (Home, Resource Library) to live endpoints — a React
-   data-layer pass, not new logic. Also: widen the Nurture
+1. Wire the last seed UI (Resource Library) to live endpoints — a React data-layer pass, not
+   new logic (Executive Command/Home now aggregates live). Also: widen the Nurture
    engagement×attribute heatmap's source cohort (today it joins to the 24-row default `app_form`
    sample, so per-cell conversion %s are small-sample-noisy — honest, but a larger seeded cohort
    would make the heatmap read cleanly).
@@ -143,7 +146,7 @@ breadth/aggregation surfaces that don't further test the backbone.
 
 ---
 
-**Word count: ~900.**
+**Word count: ~1,000.**
 
 **Verified vs. inferred:** all module/table/function names, the live-vs-seed split, the params
 values, and the **1451-test count** are verified from the source this session. The eleven deep modules
@@ -155,6 +158,8 @@ back off the real portal: clicked 100 / opened 100 / cold 100, interest 61 / app
 60 each, 120 handoffs, lead-score bands 36/68/65/65/66). Website & Digital Analytics is deep on a
 **stood-in GA4 adapter** (no live GA4 credential in this portal — labeled `simulated`, never faked
 live); its leadership-input writes + all three cross-links were verified live. The
-remaining modules (Home, Resource Library) render seed and are labeled
-as such. The stage-SoT "ratified tension" is my call, recorded in the decisions log, not a spec
+Executive Command (Home) aggregates live from the modules (per-widget ● LIVE / ◐ stood-in /
+○ sample pills); Resource Library renders seed and is labeled
+as such. The whole stack is deployed live — Vercel (frontend) → Railway (FastAPI backend,
+holding `service_role`) → Supabase (RLS-enforced) + live HubSpot. The stage-SoT "ratified tension" is my call, recorded in the decisions log, not a spec
 instruction.
