@@ -41,8 +41,10 @@ import {
   type ScanResult,
   type FileIssueRequest,
   type UtmEntity,
+  type UtmRepairManual,
   type SourceBadgeInfo,
   type BadgeTone,
+  repairUtm,
   SEED_OVERVIEW,
   SEED_SOURCE_TRACKING,
   SEED_LEAD_SCORING,
@@ -126,13 +128,13 @@ export function CrmModule() {
         <Header idx={def.idx} title={def.title} owner={def.owner} canEdit={canEdit} live={live} />
 
         {tab === 0 && <OverviewTab ov={ov} />}
-        {tab === 1 && <SourceTrackingTab trk={trk} />}
+        {tab === 1 && <SourceTrackingTab trk={trk} ctx={ctx} />}
         {tab === 2 && <LeadScoringTab sco={sco} ctx={ctx} />}
         {tab === 3 && <SyncParityTab par={par} />}
         {tab === 4 && <DataQualityTab dq={dqData} {...ctx} />}
 
         <div style={{ marginTop: 18, fontFamily: MONO, fontSize: 9, color: 'var(--ink-3)' }}>
-          ⌖ {def.source} · read-only window onto the Phase-1 sync backbone — the Hub owns the parity dials + the data-quality queue, never the field values. UTM attribution is broken until rebuilt; we never fake green.
+          ⌖ {def.source} · read-only window onto the Phase-1 sync backbone — the Hub owns the parity dials + the data-quality queue, never the field values. UTM attribution was broken end-to-end; the flag is now driven by the live broken count + an owner-triggered repair — we never fake green.
         </div>
       </section>
     </>
@@ -165,10 +167,14 @@ function OverviewTab({ ov }: { ov: OverviewResponse }) {
   const parityTone = ov.data_confidence_banner ? 'var(--signal)' : 'var(--warn)';
   const distBadge = sourceBadge(ov.lead_score_distribution.source);
   const dist = ov.lead_score_distribution;
+  // Data-driven UTM health — RED only while the live broken count is non-zero.
+  const utmBroken = ov.utm_status === 'broken';
+  const utmColor = utmBroken ? 'var(--signal)' : 'var(--ok)';
+  const utmTotal = ov.utm_ok + ov.utm_broken;
 
   return (
     <>
-      {/* top stat row — parity, PERMANENT-RED UTM, open DQ, lead total */}
+      {/* top stat row — parity, data-driven UTM health, open DQ, lead total */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 12, marginBottom: 14 }}>
         <div style={{ border: '1px solid var(--line-2)', background: 'var(--card)', padding: 14 }}>
           <div style={{ fontFamily: MONO, fontSize: 9, letterSpacing: '.5px', color: 'var(--ink-3)' }}>SYNC PARITY · SUPABASE ⇄ HUBSPOT</div>
@@ -176,14 +182,18 @@ function OverviewTab({ ov }: { ov: OverviewResponse }) {
           <div style={{ fontSize: 10, color: 'var(--ink-2)', marginTop: 4 }}>{ov.data_confidence_banner ? 'below floor · confidence banner active' : 'above floor · field drift tracked'}</div>
         </div>
 
-        {/* UTM — permanent red, unmistakable */}
-        <div style={{ border: '2px solid var(--signal)', background: 'var(--signal-soft)', padding: 14 }}>
-          <div style={{ fontFamily: MONO, fontSize: 9, letterSpacing: '.5px', color: 'var(--signal)', fontWeight: 600, display: 'flex', alignItems: 'center', gap: 5 }}>
-            <span style={{ width: 7, height: 7, borderRadius: '50%', background: 'var(--signal)', animation: 'blink 1.6s infinite' }} />
+        {/* UTM — data-driven: red while any UTM is broken, green once resolved */}
+        <div style={{ border: `2px solid ${utmColor}`, background: utmBroken ? 'var(--signal-soft)' : 'var(--ok-soft)', padding: 14 }}>
+          <div style={{ fontFamily: MONO, fontSize: 9, letterSpacing: '.5px', color: utmColor, fontWeight: 600, display: 'flex', alignItems: 'center', gap: 5 }}>
+            <span style={{ width: 7, height: 7, borderRadius: '50%', background: utmColor, animation: utmBroken ? 'blink 1.6s infinite' : 'none' }} />
             UTM ATTRIBUTION HEALTH
           </div>
-          <div style={{ fontFamily: DISPLAY, fontWeight: 700, fontSize: 28, lineHeight: 1.05, marginTop: 7, color: 'var(--signal)' }}>BROKEN</div>
-          <div style={{ fontSize: 10, color: 'var(--ink-2)', marginTop: 4 }}>{ov.utm_broken} of {ov.utm_ok + ov.utm_broken} leads broken · permanent red until rebuilt</div>
+          <div style={{ fontFamily: DISPLAY, fontWeight: 700, fontSize: 28, lineHeight: 1.05, marginTop: 7, color: utmColor }}>{utmBroken ? 'BROKEN' : 'HEALTHY'}</div>
+          <div style={{ fontSize: 10, color: 'var(--ink-2)', marginTop: 4 }}>
+            {utmBroken
+              ? `${ov.utm_broken} of ${utmTotal} leads broken · fixable ones repair losslessly, the rest need a manual decision`
+              : `all ${utmTotal} leads resolved`}
+          </div>
         </div>
 
         <StatTile label="OPEN DATA-QUALITY ISSUES" value={String(ov.open_dq_count)} sub="auto-detected + filed · see queue" tone={ov.open_dq_count > 0 ? 'warn' : 'ok'} />
@@ -231,24 +241,80 @@ function OverviewTab({ ov }: { ov: OverviewResponse }) {
 }
 
 // =============================== 7b · SOURCE TRACKING =======================
-function SourceTrackingTab({ trk }: { trk: SourceTrackingResponse }) {
+function SourceTrackingTab({ trk, ctx }: { trk: SourceTrackingResponse; ctx: Ctx }) {
   const badge = sourceBadge(trk.source);
   const [openId, setOpenId] = useState<string | null>(null);
+  const [repairing, setRepairing] = useState(false);
+  // Manual list from the LAST repair (the unfixable ones a human must decide on).
+  const [manual, setManual] = useState<UtmRepairManual[] | null>(null);
+
+  const canRepair = ctx.canEdit || ctx.isLeader; // mirrors the other CRM-Ops write gates
+  const utmBroken = trk.utm_status === 'broken';
+  const utmColor = utmBroken ? 'var(--signal)' : 'var(--ok)';
+  const total = trk.params[0]?.total ?? trk.broken_utm.length;
+
+  const runRepair = async () => {
+    setRepairing(true);
+    const res = await repairUtm(ctx.role);
+    setRepairing(false);
+    if (!res) { ctx.notify('Could not repair — owner (leader/admin or the crm owner) access is required and the backbone must be up.', 'err'); return; }
+    setManual(res.manual);
+    ctx.notify(`Repaired ${res.repaired_count} · ${res.manual.length} need a manual decision`, 'ok');
+    ctx.refetch();
+  };
 
   return (
     <>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12, flexWrap: 'wrap', gap: 8 }}>
         <SourceBadge info={badge} />
-        <span style={{ fontFamily: MONO, fontSize: 9, color: 'var(--ink-3)' }}>{trk.broken_utm.length} broken · {trk.fix_log.length} fixes logged</span>
+        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+          <span style={{ fontFamily: MONO, fontSize: 9, color: 'var(--ink-3)' }}>{trk.broken_utm.length} broken · {trk.fix_log.length} fixes logged</span>
+          {canRepair ? (
+            <button onClick={runRepair} disabled={repairing} style={{ ...PRIMARY_BTN, opacity: repairing ? 0.6 : 1, cursor: repairing ? 'default' : 'pointer' }}>{repairing ? 'REPAIRING…' : '↻ REPAIR UTMs'}</button>
+          ) : (
+            <span style={{ fontFamily: MONO, fontSize: 8.5, fontWeight: 600, padding: '6px 9px', background: 'var(--accent-soft)', color: 'var(--ink-3)' }}>◌ REPAIR UTMs — OWNER-GATED</span>
+          )}
+        </div>
       </div>
 
-      {/* permanent red UTM banner */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '10px 14px', background: 'var(--signal-soft)', border: '2px solid var(--signal)', marginBottom: 14 }}>
-        <span style={{ fontFamily: MONO, fontSize: 9, fontWeight: 600, letterSpacing: '.5px', padding: '2px 7px', background: 'var(--signal)', color: 'var(--on-signal)', whiteSpace: 'nowrap' }}>⚠ UTM BROKEN</span>
+      {/* data-driven UTM banner — red while broken, green once resolved */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '10px 14px', background: utmBroken ? 'var(--signal-soft)' : 'var(--ok-soft)', border: `2px solid ${utmColor}`, marginBottom: 14 }}>
+        <span style={{ fontFamily: MONO, fontSize: 9, fontWeight: 600, letterSpacing: '.5px', padding: '2px 7px', background: utmColor, color: 'var(--on-signal)', whiteSpace: 'nowrap' }}>{utmBroken ? '⚠ UTM BROKEN' : '✓ UTM HEALTHY'}</span>
         <span style={{ fontSize: 12, color: 'var(--ink)', flex: 1 }}>
-          UTM attribution is broken end-to-end upstream — channel ROI is not reportable until the tagging is rebuilt. This flag is <b>permanently red</b>; the resolution % below is honest about what currently resolves.
+          {utmBroken ? (
+            <>
+              UTM attribution was broken end-to-end upstream — <b>{trk.broken_utm.length} of {total} leads broken</b>. The fixable ones repair losslessly via the action above; the rest (e.g. a missing utm_campaign) need a manual decision. The resolution % below is honest about what currently resolves.
+            </>
+          ) : (
+            <>UTM attribution is <b>resolved</b> — all {total} leads resolved. The flag is driven by the live broken count, not a hard-coded state.</>
+          )}
         </span>
       </div>
+
+      {/* needs manual decision — the unfixable ones from the last repair */}
+      {manual && manual.length > 0 && (
+        <div style={{ border: '1px solid var(--warn)', background: 'var(--card)', marginBottom: 14 }}>
+          <div style={{ padding: '10px 16px', borderBottom: '2px solid var(--warn)', fontFamily: MONO, fontSize: 9, letterSpacing: '.5px', color: 'var(--warn)', fontWeight: 600 }}>
+            ⚑ NEEDS MANUAL DECISION · {manual.length} unrepairable
+          </div>
+          {manual.map((m) => (
+            <div key={m.entity_ref} style={{ display: 'flex', alignItems: 'flex-start', gap: 10, padding: '10px 16px', borderBottom: '1px solid var(--line)' }}>
+              <span style={{ fontFamily: MONO, fontSize: 11, color: 'var(--ink)', fontWeight: 600, whiteSpace: 'nowrap' }}>{m.entity_ref}</span>
+              <ul style={{ margin: 0, padding: 0, listStyle: 'none', display: 'flex', flexDirection: 'column', gap: 4, flex: 1 }}>
+                {m.reasons.map((r, i) => (
+                  <li key={i} style={{ fontSize: 11, color: 'var(--ink-2)', display: 'flex', gap: 7 }}><span style={{ color: 'var(--warn)' }}>•</span> {r}</li>
+                ))}
+              </ul>
+            </div>
+          ))}
+        </div>
+      )}
+      {manual && manual.length === 0 && (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '10px 14px', background: 'var(--ok-soft)', border: '1px solid var(--ok)', marginBottom: 14 }}>
+          <span style={{ fontFamily: MONO, fontSize: 9, fontWeight: 600, color: 'var(--ok)' }}>✓ NO MANUAL DECISIONS</span>
+          <span style={{ fontSize: 12, color: 'var(--ink)', flex: 1 }}>Every broken UTM repaired losslessly — nothing left to decide by hand.</span>
+        </div>
+      )}
 
       {/* per-param resolution bars */}
       <div style={{ border: '1px solid var(--line-2)', background: 'var(--card)', padding: 14, marginBottom: 14 }}>

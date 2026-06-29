@@ -12,7 +12,11 @@
 //   supabase⇄hubspot       → SUPABASE ⇄ HUBSPOT         (A4 sync parity)
 //   supabase_attribution_utm → SUPABASE · attribution_utm (per-param resolution)
 //   synthetic              → SYNTHETIC                  (synthesized last-sync stamps)
-// UTM attribution reads as a PERMANENT RED flag — it is broken upstream until rebuilt.
+// UTM attribution is shown DATA-DRIVEN — red while the live broken count is non-zero,
+// green only once every fixable UTM has been repaired (see `utm_status` below).
+
+import { apiPost } from './api';
+import type { Role } from './registry';
 
 // ===========================================================================
 // READ wire shapes (GET /crm/ops/*) — match backend pydantic models exactly.
@@ -52,12 +56,18 @@ export interface ConnectorSync {
   source: string; // synthetic → SYNTHETIC
 }
 
+// Data-driven UTM-health status (backend _utm_status): "broken" iff any UTM is
+// broken, else "healthy". The UI renders the flag from THIS field — never a
+// hard-coded permanent red — so green appears ONLY when the live count is zero.
+export type UtmStatus = 'broken' | 'healthy';
+
 // GET /crm/ops/overview — the 5a rollup.
 export interface OverviewResponse {
   parity_overall: number; // fraction [0,1]
   data_confidence_banner: boolean;
   utm_ok: number;
   utm_broken: number;
+  utm_status: UtmStatus; // data-driven: "broken" iff utm_broken > 0.
   lead_score_distribution: LeadScoreDistribution;
   open_dq_count: number;
   last_sync: ConnectorSync[];
@@ -86,6 +96,7 @@ export interface FixLogEntry {
 export interface SourceTrackingResponse {
   params: UtmParamResolution[];
   broken_utm: UtmEntity[];
+  utm_status: UtmStatus; // data-driven: "broken" iff any UTM is broken.
   attribution_chain: AttributionChainStep[];
   fix_log: FixLogEntry[];
   source: string; // supabase_attribution_utm
@@ -162,6 +173,31 @@ export interface UpdateIssueRequest {
   status?: string;
   priority?: string;
   resolution?: string;
+}
+
+// POST /crm/ops/utm/repair — owner-gated, audited, lossless-or-aliased repair.
+// `fixes` are the entities repaired (with the human-readable fixes applied);
+// `manual` are the unrepairable ones (e.g. a missing utm_campaign) a human must
+// still decide on. The endpoint takes no body — the actor is stamped server-side.
+export interface UtmRepairFix {
+  entity_ref: string;
+  fixes: string[];
+}
+export interface UtmRepairManual {
+  entity_ref: string;
+  reasons: string[];
+}
+export interface RepairResult {
+  repaired_count: number;
+  fixes: UtmRepairFix[];
+  manual: UtmRepairManual[];
+}
+
+// Trigger the owner-gated UTM repair. No request body (the actor is stamped
+// server-side from the verified principal). Returns the repair outcome, or null
+// on any failure (auth/network/non-2xx) so the caller can surface a soft error.
+export function repairUtm(role: Role): Promise<RepairResult | null> {
+  return apiPost<RepairResult>('/crm/ops/utm/repair', role, {});
 }
 
 // Closed value sets (mirror backend crm_ops_store + decisions_store; 422 otherwise).
@@ -347,6 +383,7 @@ export const SEED_OVERVIEW: OverviewResponse = {
   data_confidence_banner: false,
   utm_ok: 41,
   utm_broken: 9,
+  utm_status: 'broken',
   lead_score_distribution: SEED_DISTRIBUTION,
   open_dq_count: 3,
   last_sync: [
@@ -365,6 +402,7 @@ export const SEED_SOURCE_TRACKING: SourceTrackingResponse = {
     { param: 'utm_content', resolved: 12, total: 50, resolved_pct: 24.0 },
   ],
   broken_utm: SEED_BROKEN_UTM,
+  utm_status: 'broken',
   attribution_chain: [
     { step: 1, label: 'app_form_submit', status: 'ok' },
     { step: 2, label: 'supabase_app_form', status: 'ok' },
