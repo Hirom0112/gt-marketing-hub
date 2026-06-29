@@ -1577,6 +1577,39 @@ class Grassroots(_StrictModel):
     sprint_health: GrassrootsSprintHealth
 
 
+class FieldEvents(_StrictModel):
+    """field_events — Module 8 (Field Marketing & Events) business tunables (INV-11).
+
+    The single canonical home for the Field & Events surface's surfaced configuration —
+    the deterministic core (``core/field_events.py``) reads them here, never a code
+    literal:
+
+    * ``event_types`` — the closed list of GT-organized event-type LABELS (shadow_day /
+      chess_tournament / ama / community_event / festival / webinar). Aggregate labels
+      only (INV-1/INV-6). The 0039 ``field_event`` CHECK is the DB backstop. MUST be
+      non-empty and free of duplicates.
+    * ``upcoming_window_days`` — the look-ahead window (in days) the overview's
+      ``upcoming_count`` counts events within. MUST be ``>= 1``.
+    """
+
+    event_types: list[str]
+    upcoming_window_days: int
+
+    @model_validator(mode="after")
+    def _guard(self) -> FieldEvents:
+        if not self.event_types:
+            raise ValueError("field_events.event_types must be non-empty")
+        if len(set(self.event_types)) != len(self.event_types):
+            raise ValueError(
+                f"field_events.event_types must not repeat a label, got {self.event_types!r}"
+            )
+        if self.upcoming_window_days < 1:
+            raise ValueError(
+                f"field_events.upcoming_window_days must be >= 1, got {self.upcoming_window_days!r}"
+            )
+        return self
+
+
 class ContentCalendar(_StrictModel):
     """content.calendar — the editorial-calendar conflict rule (Module 3; INV-11).
 
@@ -1942,6 +1975,7 @@ class Params(_StrictModel):
     rbac: Rbac
     budget: Budget
     grassroots: Grassroots
+    field_events: FieldEvents
     content: Content
     summer_camp: SummerCamp
 

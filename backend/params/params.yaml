@@ -449,6 +449,10 @@ grassroots:                 # Module 2 (Grassroots Engine) — goal-bar targets 
   sprint_health:                    # referral-sprint pacing band
     behind_pace_frac: 0.8           # a sprint at >= 80% of linearly-expected conversions reads on_pace; below it reads behind
 
+field_events:               # Module 8 (Field Marketing & Events) — MANUAL ENTRY; GT-organized event-type labels + the upcoming look-ahead window; single home for the surfaced config (INV-11)
+  event_types: [shadow_day, chess_tournament, ama, community_event, festival, webinar]  # the six GT-organized event-type labels (aggregate; INV-1/INV-6); the 0039 field_event CHECK is the DB backstop
+  upcoming_window_days: 30          # the look-ahead window (days) the overview's upcoming_count counts events within
+
 content:                    # Module 3 (Content & Thought Leadership) — channel labels + the 42% X conversion-engine figure + calendar conflict + ranking sizes; single home for the surfaced numbers (INV-11)
   channels: [substack, x, instagram, facebook, podcast, email, youtube]  # the seven content channel labels (aggregate; INV-1/INV-6)
   x_conversion_rate: 0.42           # the "42% conversion engine" for X/Twitter — the seed derives X conversions from this so the surfaced rate is computed, not hardcoded
