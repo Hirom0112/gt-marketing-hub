@@ -45,6 +45,7 @@ from app.api.seam import router as seam_router
 from app.api.security import SecurityEdgeMiddleware
 from app.api.security import router as security_router
 from app.api.summer import router as summer_router
+from app.api.website import router as website_router
 from app.core.settings import get_settings, posted_catalog_mount_root
 
 app = FastAPI(title="GT Pulse", version="0.1.0")
@@ -339,6 +340,21 @@ app.include_router(nurture_router)
 # 11). PATCH /admissions/feedback/{id} (action/close) is leader/admin. `owner`/`raised_by`
 # are the VERIFIED principal (never the body). No LLM, no external send. INV-1/6/11.
 app.include_router(admissions_router)
+
+
+# Website & Digital Analytics (Module 13) — the GA4 surface for gt.school +
+# anywhere.gt.school. Site/page/source/download/conversion-path METRICS are read off the
+# GA4 boundary (app.adapters.analytics — a STOOD-IN simulated adapter in v1,
+# source_mode="simulated"; no live GA4 credential in this portal, INV-6/INV-9); the pure
+# core (app.core.website) derives every rollup. The Hub OWNS only the leadership-input
+# state (page flags + analysis requests), persisted to Supabase (0043). GET /website/
+# overview|subpages|traffic|downloads|paths|inputs (any seat). LEADERSHIP-gated
+# (leader/admin) writes: POST /website/pages/flag → a Content calendar DRAFT refresh brief
+# (CROSS-LINK to Module 3) + a `website` Decision-Queue card (CROSS-LINK to Module 11);
+# POST /website/analysis → a `website` Decision card (CROSS-LINK to Module 11). The traffic
+# view runs the SAME check_utm rule set CRM Ops uses over the tagged campaigns at the ORIGIN
+# (CROSS-LINK to Module 7). `raised_by` is the VERIFIED principal (never the body). INV-1/6/11.
+app.include_router(website_router)
 
 
 # AWS Lambda + API Gateway entrypoint (ARCHITECTURE.md §12).

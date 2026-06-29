@@ -522,3 +522,11 @@ admissions:                 # Module 9 (Admissions & Voice of Customer) — obje
   sla_closure_days: 7               # the feedback-closure SLA window (days) the closure-rate deriver measures actioned items against
   top_objections_n: 3               # how many top objections the overview surfaces
   trend_weeks: 4                    # the objection-trend look-back window (weeks)
+website:                    # Module 13 (Website & Digital Analytics) — GA4 site/page-type/channel labels + ranking/threshold dials; single home for the surfaced numbers (INV-11). Metrics are read off the GA4 stood-in adapter, NOT Supabase
+  sites: [gt.school, anywhere.gt.school]                 # the two GA4-tracked properties; the 0043 page_flag.site CHECK is the DB backstop
+  page_types: [landing, blog, resource, form, about]     # the subpage-table page-type filter labels
+  traffic_channels: [organic, direct, social, email, referral]  # the acquisition-channel breakdown buckets
+  social_platforms: [x, facebook, instagram]             # the platform-level breakdown under the social channel
+  top_landing_n: 5                  # how many top landing pages the overview surfaces
+  bounce_warn_pct: 0.60             # bounce-rate threshold (0..1) above which a page reads as a content-refresh candidate (the leadership-flag hint)
+  analytics_window_weeks: 1         # the "this week" rollup look-back window (weeks)

@@ -19,6 +19,7 @@ from fastapi import Depends, Header, HTTPException
 from pydantic import BaseModel
 
 from app.adapters import registry
+from app.adapters.analytics.base import AnalyticsAdapter
 from app.adapters.brand_memory.base import BrandMemoryStore
 from app.adapters.brand_memory.sqlite_store import SqliteBrandMemoryStore
 from app.adapters.funding.base import FundingSignalAdapter
@@ -111,6 +112,11 @@ from app.data.watermark_store import (
     InMemoryWatermarkStore,
     WatermarkStore,
     build_supabase_watermark_store,
+)
+from app.data.website_store import (
+    InMemoryWebsiteStore,
+    WebsiteStore,
+    build_supabase_website_store,
 )
 from app.evals.suite import EvalSuiteResult
 from app.marketing.library import ContentLibrary, SqliteContentLibrary
@@ -657,6 +663,55 @@ def _seeded_in_memory_admissions_store(program: Program) -> InMemoryAdmissionsSt
 # in-memory (A-3), seeded with the deterministic demo; production swaps the Supabase-backed
 # impl over the 0042 tables.
 _admissions_store: AdmissionsStore = _build_admissions_store()
+
+
+def _build_website_store() -> WebsiteStore:
+    """Bind the Module-13 Website store, MIRRORING ``_build_admissions_store``.
+
+    The same ``COCKPIT_REPO`` / ``SUPABASE_URL`` selection as the other module stores, so
+    they never disagree on which backend is live (the NFR-8 store seam). Persists the
+    leadership-input state only (page flags + analysis requests); the GA4 METRICS are read
+    off the analytics adapter, never Supabase:
+
+    - ``synthetic`` ⇒ FORCE the in-memory store, seeded with the deterministic demo
+      flags/requests for the active program (INV-1).
+    - ``supabase`` ⇒ REQUIRE the live store; a missing ``SUPABASE_URL`` is a misconfig
+      ⇒ raise (fail loud, the family-store posture).
+    - ``auto`` (default) ⇒ Supabase when configured, else the seeded in-memory fallback.
+    """
+    settings = Settings.from_env()
+    repo_mode = settings.cockpit_repo
+    program = resolve_program(settings.gt_program_id)
+    if repo_mode == "synthetic":
+        return _seeded_in_memory_website_store(program)
+    if repo_mode == "supabase":
+        supabase = build_supabase_website_store()
+        if supabase is None:
+            raise RuntimeError(
+                "COCKPIT_REPO=supabase requires SUPABASE_URL (+ "
+                "SUPABASE_SERVICE_ROLE_KEY) for the Website store; none was configured. "
+                "Set them, or use COCKPIT_REPO=synthetic / auto."
+            )
+        return supabase
+    return build_supabase_website_store() or _seeded_in_memory_website_store(program)
+
+
+def _seeded_in_memory_website_store(program: Program) -> InMemoryWebsiteStore:
+    """Build the in-memory website store + the deterministic demo seed (Module 13).
+
+    The demo page-flags/analysis-requests are seeded for the active program so the surface
+    is demonstrable on synthetic data alone (idempotent; INV-1). Tests that need a CLEAN
+    store construct :class:`InMemoryWebsiteStore` directly (no seed).
+    """
+    store = InMemoryWebsiteStore()
+    store.seed_demo(program)
+    return store
+
+
+# Singleton Website & Digital-Analytics store (Module 13) — the page-flag/analysis-request
+# leadership-input state behind the same NFR-8 seam as ``_repository``. Default v1 =
+# in-memory (A-3), seeded; production swaps the Supabase-backed impl over the 0043 tables.
+_website_store: WebsiteStore = _build_website_store()
 
 
 def _build_crm_ops_store() -> CrmOpsStore:
@@ -1234,6 +1289,11 @@ def get_crm_ops_store() -> CrmOpsStore:
     return _crm_ops_store
 
 
+def get_website_store() -> WebsiteStore:
+    """FastAPI dependency yielding the active Website store (Module 13 seam)."""
+    return _website_store
+
+
 def get_content_metrics_store() -> ContentMetricsStore:
     """FastAPI dependency yielding the active Content-metrics store (Module 3 seam)."""
     return _content_metrics_store
@@ -1643,6 +1703,17 @@ def get_sentiment_adapter_dep() -> SentimentAdapter:
     feed is ever polled (INV-9). Tests override this to inject a known summary.
     """
     return registry.get_sentiment_adapter()
+
+
+def get_analytics_adapter_dep() -> AnalyticsAdapter:
+    """FastAPI dependency yielding the Module-13 website-analytics (GA4) adapter (INV-6/9).
+
+    Delegates to the §7 registry (v1 ⇒ a simulated, aggregate-only stood-in over synthetic
+    data, ``source_mode='simulated'``; live ⇒ fail-loud). The snapshot is AGGREGATE only —
+    no per-person/child-keyed field (INV-6) — and no live GA4 property is ever read (INV-9).
+    Tests override this to inject a known snapshot.
+    """
+    return registry.get_analytics_adapter()
 
 
 def get_social_adapter_dep() -> SocialAdapter:

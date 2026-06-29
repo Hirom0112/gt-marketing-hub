@@ -21,6 +21,8 @@ from pathlib import Path
 
 import httpx
 
+from app.adapters.analytics.base import AnalyticsAdapter
+from app.adapters.analytics.simulated import SimulatedAnalyticsAdapter
 from app.adapters.brand_memory.base import BrandMemoryStore
 from app.adapters.brand_memory.sqlite_store import SqliteBrandMemoryStore
 from app.adapters.funding.base import FundingSignalAdapter
@@ -611,6 +613,33 @@ def get_sentiment_adapter() -> SentimentAdapter:
         "No production SentimentAdapter in v1: SEND_MODE='live' is reserved for a "
         "supplied production sentiment-feed impl (ARCHITECTURE.md §7.5; "
         "INV-9 fail-loud, INV-6 aggregate-only). v1 is locked to SEND_MODE='simulate'."
+    )
+
+
+def get_analytics_adapter() -> AnalyticsAdapter:
+    """Return the website-analytics (GA4) adapter for the current mode (Module 13, INV-9).
+
+    The Module-13 boundary returns an **aggregate-only** analytics snapshot (no
+    per-person/child-keyed field, INV-6). No live GA4 credential is provisioned for this
+    portal, so a live read is OUT in v1; it has no dedicated mode var, so it shares the v1
+    ``SEND_MODE`` lock as its mode seam (read only through
+    :func:`app.core.settings.get_settings`), as sentiment/funding/geo do:
+
+    - ``simulate`` (v1 lock) ⇒ a fresh :class:`SimulatedAnalyticsAdapter` (aggregate over
+      synthetic data, ``source_mode='simulated'``, no live read; INV-6, INV-9).
+    - ``live`` ⇒ ``NotImplementedError`` — no GA4 Data-API impl in v1; fail loud rather
+      than silently poll a property (INV-9, INV-6).
+
+    Raises:
+        NotImplementedError: when ``SEND_MODE=live`` (no production impl in v1).
+    """
+    mode = get_settings().send_mode
+    if mode == "simulate":
+        return SimulatedAnalyticsAdapter()
+    raise NotImplementedError(
+        "No production AnalyticsAdapter in v1: SEND_MODE='live' is reserved for a "
+        "supplied GA4 Data-API impl (Module 13; INV-9 fail-loud, INV-6 aggregate-only). "
+        "v1 is locked to SEND_MODE='simulate'."
     )
 
 

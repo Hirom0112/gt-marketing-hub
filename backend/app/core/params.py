@@ -1873,6 +1873,58 @@ class Admissions(_StrictModel):
         return self
 
 
+class Website(_StrictModel):
+    """website — Module 13 (Website & Digital Analytics) business tunables (INV-11).
+
+    The single canonical home for the website-analytics surface's surfaced
+    configuration — the deterministic core (``core/website.py``), the GA4 stood-in
+    adapter (``adapters/analytics``), and the demo seed read them here, never a code
+    literal:
+
+    * ``sites`` — the two GA4-tracked properties (``gt.school`` /
+      ``anywhere.gt.school``). The 0043 ``page_flag.site`` CHECK is the DB backstop.
+      MUST be non-empty and free of duplicates.
+    * ``page_types`` — the closed list of page-type LABELS the subpage table filters
+      by (landing / blog / resource / form / about). MUST be non-empty / unique.
+    * ``traffic_channels`` — the closed list of acquisition-channel LABELS the
+      traffic-source breakdown buckets into (organic / direct / social / email /
+      referral). MUST be non-empty / unique.
+    * ``social_platforms`` — the platform-level breakdown under the ``social`` channel
+      (x / facebook / instagram). MUST be non-empty / unique.
+    * ``top_landing_n`` — how many top landing pages the overview surfaces. ``>= 1``.
+    * ``bounce_warn_pct`` — the bounce-rate threshold (0..1) above which a page reads
+      as a content-refresh candidate (the leadership-flag hint). ``0 < x <= 1``.
+    * ``analytics_window_weeks`` — the "this week" rollup look-back window (weeks).
+      ``>= 1``.
+    """
+
+    sites: list[str]
+    page_types: list[str]
+    traffic_channels: list[str]
+    social_platforms: list[str]
+    top_landing_n: int
+    bounce_warn_pct: float
+    analytics_window_weeks: int
+
+    @model_validator(mode="after")
+    def _guard(self) -> Website:
+        for name in ("sites", "page_types", "traffic_channels", "social_platforms"):
+            values = getattr(self, name)
+            if not values:
+                raise ValueError(f"website.{name} must be non-empty")
+            if len(set(values)) != len(values):
+                raise ValueError(f"website.{name} must not repeat a label, got {values!r}")
+        for name in ("top_landing_n", "analytics_window_weeks"):
+            value = getattr(self, name)
+            if value < 1:
+                raise ValueError(f"website.{name} must be >= 1, got {value!r}")
+        if not (0.0 < self.bounce_warn_pct <= 1.0):
+            raise ValueError(
+                f"website.bounce_warn_pct must be in (0, 1], got {self.bounce_warn_pct!r}"
+            )
+        return self
+
+
 class CrmOpsUtm(_StrictModel):
     """crm_ops.utm — UTM-health rule set (TODO_v2 §C1; INV-11).
 
@@ -2191,6 +2243,7 @@ class Params(_StrictModel):
     content: Content
     summer_camp: SummerCamp
     admissions: Admissions
+    website: Website
 
 
 def _resolve_path(path: Path | None) -> Path:
