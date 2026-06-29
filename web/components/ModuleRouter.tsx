@@ -14,6 +14,7 @@ import { CrmModule } from './modules/CrmModule';
 import { NurtureModule } from './modules/NurtureModule';
 import { CampModule } from './modules/CampModule';
 import { GrassrootsModule } from './modules/GrassrootsModule';
+import { EventsModule } from './modules/EventsModule';
 import { ContentModule } from './modules/ContentModule';
 import { AdmissionsModule } from './modules/AdmissionsModule';
 import { GenericModule } from './modules/GenericModule';
@@ -30,6 +31,7 @@ export function ModuleRouter({ id }: { id: ModuleId }) {
   if (id === 'nurture') return <NurtureModule />;
   if (id === 'camp') return <CampModule />;
   if (id === 'grassroots') return <GrassrootsModule />;
+  if (id === 'events') return <EventsModule />;
   if (id === 'content') return <ContentModule />;
   if (id === 'admissions') return <AdmissionsModule />;
   return <GenericModule def={def} />;

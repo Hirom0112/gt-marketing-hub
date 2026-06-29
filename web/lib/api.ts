@@ -63,6 +63,27 @@ export async function apiPut<T>(path: string, role: Role, body: unknown): Promis
   }
 }
 
+// A write (PATCH) through the same authed /api proxy. Mirrors apiPut with method
+// PATCH (partial update). Returns the parsed body on 2xx, or null on any failure.
+export async function apiPatch<T>(path: string, role: Role, body: unknown): Promise<T | null> {
+  const token = await mintToken(role);
+  try {
+    const r = await fetch(`/api${path}`, {
+      method: 'PATCH',
+      headers: {
+        'content-type': 'application/json',
+        ...(token ? { authorization: `Bearer ${token}` } : {}),
+      },
+      body: JSON.stringify(body),
+      cache: 'no-store',
+    });
+    if (!r.ok) return null;
+    return (await r.json()) as T;
+  } catch {
+    return null;
+  }
+}
+
 // A write (POST) through the same authed /api proxy. Mirrors apiPut with method
 // POST. Returns the parsed body on 2xx, or null on any failure (auth, network,
 // non-2xx) so callers can surface a soft error (raise + decide both go through here).
