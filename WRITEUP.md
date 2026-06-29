@@ -95,9 +95,12 @@ writes verified live. The backbone primitives are all real and unit-tested (**13
 - **>10% budget variance auto-flags** to the Decision Queue from `params.budget.variance_threshold`.
 - **Role gating** is real: the Decision Queue is leader-only, write affordances are owner-scoped
   (`canEditWorkstream`).
-- **Data-confidence banner** trips because seeded parity sits well under `0.95` — ~12% of families
-  carry genuinely divergent CRM mirror values (`deps.py` materializes the conflict tail), so it's real,
-  not staged.
+- **Data-confidence banner** trips because parity sits under `0.95` — and it's **real on the live path**,
+  not staged: the cockpit families are pushed to the **live HubSpot portal** as deal-mirrors with a
+  deliberate divergence tail, so `compute_parity` over `read_mirror` returns a genuine ~83% (the banner
+  shows that live number — never a hardcoded one), with a short-TTL single-flight cache so the read is
+  computed once and shared, not re-stormed per page. (In `simulate` mode `deps.py` materializes the same
+  conflict tail.)
 - **Known-broken, surfaced not faked:** UTM attribution is flagged `broken` by `core/utm_health`;
   unreliable fields are flagged by `core/field_reliability`; stood-in sources (Meta/GA4/X/the two
   `.gt.school` sites) are labeled `STOOD-IN`/`SIMULATED` in the UI.
