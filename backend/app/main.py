@@ -5,6 +5,12 @@ pipeline + Family Record GET endpoints, served over the in-memory repository
 (ASSUMPTIONS A-3). The AI edge and write paths arrive in later slices.
 """
 
+import asyncio
+import contextlib
+import os
+from collections.abc import AsyncIterator
+
+import httpx
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
@@ -48,7 +54,61 @@ from app.api.summer import router as summer_router
 from app.api.website import router as website_router
 from app.core.settings import get_settings, posted_catalog_mount_root
 
-app = FastAPI(title="GT Pulse", version="0.1.0")
+# ---------------------------------------------------------------------------
+# Cache pre-warmer (perf). The Home / Executive-Command dashboard reads these
+# endpoints live; several recompute the short-TTL Supabase⇄HubSpot snapshot against
+# the live portal (CRM_MODE=live), which is the few-second "sample → live" flip the
+# UI shows on a cold cache. A tiny in-process loop periodically self-calls them so the
+# single-flight snapshot cache (app.api._crm_ops_cache, 60s TTL) stays hot — the next
+# real request is served warm. Opt-in via CACHE_WARM_SECONDS (0/unset = OFF, the
+# default in tests/CI); production (Railway) sets it just under the snapshot TTL. A
+# warmed LIVE read is STILL live (the cache never changes the computed values).
+_WARM_PATHS = (
+    "/crm/ops/overview",
+    "/nurture/overview",
+    "/scorecard/weekly",
+    "/content/performance",
+    "/website/overview",
+)
+
+
+async def _warm_caches_forever(interval: float) -> None:
+    """Self-call the dashboard's live endpoints every ``interval`` s (fails silently)."""
+    base = f"http://127.0.0.1:{os.environ.get('PORT', '8000')}"
+    async with httpx.AsyncClient(base_url=base, timeout=30.0) as client:
+        await asyncio.sleep(5.0)  # let uvicorn finish binding before the first warm
+        while True:
+            with contextlib.suppress(Exception):
+                resp = await client.post("/auth/demo-token", json={"role": "leader"})
+                token = resp.json().get("access_token") if resp.status_code == 200 else None
+                if token:
+                    headers = {"Authorization": f"Bearer {token}"}
+                    await asyncio.gather(
+                        *(client.get(path, headers=headers) for path in _WARM_PATHS),
+                        return_exceptions=True,
+                    )
+            await asyncio.sleep(interval)
+
+
+@contextlib.asynccontextmanager
+async def _lifespan(_app: FastAPI) -> AsyncIterator[None]:
+    """Start the optional cache-warmer task for the app's lifetime (clean cancel on stop)."""
+    interval = 0
+    with contextlib.suppress(ValueError):
+        interval = int(os.environ.get("CACHE_WARM_SECONDS", "0") or 0)
+    task: asyncio.Task[None] | None = None
+    if interval > 0:
+        task = asyncio.create_task(_warm_caches_forever(interval))
+    try:
+        yield
+    finally:
+        if task is not None:
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await task
+
+
+app = FastAPI(title="GT Pulse", version="0.1.0", lifespan=_lifespan)
 
 # CORS — the React app runs on a separate origin (Vite dev server / built host),
 # so the browser sends cross-origin requests the API must explicitly allow-list

@@ -52,15 +52,23 @@ interface BudgetResponse {
   rollup: { total_planned: number; total_actual: number };
   workstreams: { workstream: string; actual: number }[];
 }
+interface ScorecardWeekly {
+  metrics: { key: string; this_week: number; delta: number; target: number }[];
+}
+interface ContentPerformance {
+  channels: { channel: string; reach: number; conversions: number; conversion_rate_pct: number }[];
+}
 
 export async function fetchHomeLive(role: Role): Promise<HomeLive> {
-  const [web, adm, voice, crm, nur, bud] = await Promise.all([
+  const [web, adm, voice, crm, nur, bud, score, contentPerf] = await Promise.all([
     apiGet<WebsiteOverview>('/website/overview', role),
     apiGet<AdmissionsOverview>('/admissions/overview', role),
     apiGet<AdmissionsVoice>('/admissions/voice', role),
     apiGet<CrmOverview>('/crm/ops/overview', role),
     apiGet<NurtureOverview>('/nurture/overview', role),
     apiGet<BudgetResponse>('/budget', role),
+    apiGet<ScorecardWeekly>('/scorecard/weekly', role),
+    apiGet<ContentPerformance>('/content/performance', role),
   ]);
 
   const content: Record<string, WidgetContent> = {};
@@ -174,6 +182,43 @@ export async function fetchHomeLive(role: Role): Promise<HomeLive> {
     put('spend-by-workstream', {
       kind: 'bars',
       rows: bud.workstreams.map((x) => ({ name: human(x.workstream), pct: usdK(x.actual), width: w(x) })),
+    }, 'live');
+  }
+
+  // ---- Scorecard (Supabase app_form funnel + Stripe ledger) ----------------
+  if (score?.metrics) {
+    const by = (k: string) => score.metrics.find((m) => m.key === k);
+    const ap = by('applicants');
+    if (ap) {
+      put('applicants-total', {
+        kind: 'stat',
+        value: num(ap.this_week),
+        delta: `${ap.delta >= 0 ? '▲' : '▼'}${num(Math.abs(ap.delta))} w/w`,
+        deltaColor: ap.delta >= 0 ? 'var(--ok)' : 'var(--warn)',
+        sub: 'Supabase app_form funnel (all stages)',
+      }, 'live');
+    }
+    const dep = by('deposits');
+    if (dep) {
+      const target = dep.target || 180;
+      const pct = target > 0 ? Math.round((100 * dep.this_week) / target) : 0;
+      put('deposits-vs-goal', {
+        kind: 'progress',
+        value: `${num(dep.this_week)} / ${num(target)}`,
+        pct,
+        color: 'var(--gold)',
+        sub: `${pct}% of the Fall goal · Stripe deposit ledger`,
+      }, 'live');
+    }
+  }
+
+  // ---- Conversion by channel (Content perf — Google Sheet + computed) -------
+  if (contentPerf?.channels?.length) {
+    const top = [...contentPerf.channels].sort((a, b) => b.conversion_rate_pct - a.conversion_rate_pct).slice(0, 5);
+    const w = barWidths(top, (c) => c.conversion_rate_pct);
+    put('conversion-by-channel', {
+      kind: 'bars',
+      rows: top.map((c) => ({ name: human(c.channel), pct: `${c.conversion_rate_pct}%`, width: w(c) })),
     }, 'live');
   }
 

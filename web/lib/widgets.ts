@@ -37,7 +37,7 @@ export const WIDGETS: WidgetDef[] = [
     source: 'Supabase app_form',
     homeModule: 'Nurture',
     size: 'small',
-    content: { kind: 'stat', value: '1,284', delta: '▲63 w/w', deltaColor: 'var(--ok)', sub: 'K–2 sweet spot: 609 apps' },
+    content: { kind: 'stat', value: '12', delta: '▲12 w/w', deltaColor: 'var(--ok)', sub: 'Supabase app_form funnel (all stages)' },
   },
   {
     id: 'deposits-vs-goal',
@@ -47,7 +47,7 @@ export const WIDGETS: WidgetDef[] = [
     source: 'Supabase',
     homeModule: 'Nurture',
     size: 'small',
-    content: { kind: 'progress', value: '112 / 180', pct: 62, color: 'var(--gold)', sub: '62% of goal · pace ~168 by Aug 17' },
+    content: { kind: 'progress', value: '0 / 180', pct: 0, color: 'var(--gold)', sub: '0% of the Fall goal · Stripe deposit ledger' },
   },
   {
     id: 'conversion-by-channel',
@@ -60,10 +60,11 @@ export const WIDGETS: WidgetDef[] = [
     content: {
       kind: 'bars',
       rows: [
-        { name: 'X/Twitter', pct: '42%', width: 100 },
-        { name: 'Ambassador', pct: '29%', width: 69 },
-        { name: 'Organic', pct: '21%', width: 50 },
-        { name: 'Facebook', pct: '9%', width: 21, muted: true },
+        { name: 'X', pct: '42%', width: 100 },
+        { name: 'Email', pct: '16%', width: 38 },
+        { name: 'Podcast', pct: '15%', width: 36 },
+        { name: 'Substack', pct: '13%', width: 31 },
+        { name: 'Instagram', pct: '11%', width: 26 },
       ],
     },
   },

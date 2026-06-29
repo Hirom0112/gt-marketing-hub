@@ -253,6 +253,36 @@ Google Sheets ◀──▶│  • idempotent payments (replay = NOOP)    │   
                         Next.js Hub (web/) — 13 modules, 3 roles
 ```
 
+### Live deployment — three tiers
+
+```
+  Browser
+     │  https://gtpulse-marketing-hub.vercel.app
+     ▼
+┌──────────────────────────┐   /api/* rewrite      ┌──────────────────────────────┐
+│  Vercel  (Next.js Hub)   │ ───(GT_API_BASE_URL)─▶ │  Railway  (FastAPI backend)   │
+│  • static + seed fallback│                        │  • holds service_role + tokens│
+│  • Home: ●LIVE/◐/○ pills │ ◀──── JSON aggregates ──│  • CRM_MODE=live, cache-warmed│
+└──────────────────────────┘                        └───────────────┬───────────────┘
+                                                                     │ service_role (RLS-bypass, server-only)
+                                                     live HubSpot ◀───┤
+                                                                     ▼
+                                                      Supabase  (Postgres · RLS ENFORCED)
+```
+
+- **Supabase = database.** RLS is enforced (RESTRICTIVE per-program policies + FORCE, deny-by-default);
+  the anon/browser key can't read app rows — only the **`service_role`** key bypasses RLS, and it lives
+  **only on the backend**.
+- **Railway = backend.** The FastAPI container holds every secret (Supabase `service_role`, HubSpot
+  token, JWT secret) as **encrypted env vars — none in git** (`backend/Dockerfile` + `.dockerignore`
+  exclude `.env*`). `CACHE_WARM_SECONDS` keeps the live Supabase⇄HubSpot snapshot cache hot so the
+  dashboard's sample→live flip is near-instant.
+- **Vercel = frontend.** `next.config.mjs` proxies `/api/*` to the Railway backend (`GT_API_BASE_URL`,
+  baked at build); when the backend is unreachable it falls back to labelled seed (○ SAMPLE) so it
+  never blanks. *Why not host the backend on Vercel or Supabase? Vercel functions are short-lived /
+  stateless (a poor fit for this app's import-time singletons + heavy deps); Supabase is the DB (Deno
+  edge functions only, no Python host). Railway runs the long-lived container cleanly.*
+
 - **Deterministic core owns all writes.** Every LLM result is a schema-validated *proposal* requiring
   human approval — the AI never writes state directly, and a red eval disables the action in the UI.
 - **Ports & adapters.** Every external service sits behind an adapter with `simulate`/`live` impls,
