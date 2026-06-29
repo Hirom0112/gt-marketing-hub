@@ -17,6 +17,7 @@ import { GrassrootsModule } from './modules/GrassrootsModule';
 import { EventsModule } from './modules/EventsModule';
 import { ContentModule } from './modules/ContentModule';
 import { AdmissionsModule } from './modules/AdmissionsModule';
+import { WebsiteModule } from './modules/WebsiteModule';
 import { GenericModule } from './modules/GenericModule';
 
 export function ModuleRouter({ id }: { id: ModuleId }) {
@@ -34,5 +35,6 @@ export function ModuleRouter({ id }: { id: ModuleId }) {
   if (id === 'events') return <EventsModule />;
   if (id === 'content') return <ContentModule />;
   if (id === 'admissions') return <AdmissionsModule />;
+  if (id === 'website') return <WebsiteModule />;
   return <GenericModule def={def} />;
 }
