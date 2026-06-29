@@ -131,6 +131,69 @@ class EngagementSnapshot:
         return self.clicked / self.total if self.total else 0.0
 
 
+@dataclass(frozen=True, slots=True)
+class EngagementTierMix:
+    """Aggregate engagement-tier mix across contacts — clicked/opened/cold (Module 5).
+
+    The fuller sibling of :class:`EngagementSnapshot` behind the Nurture 5a tier-mix
+    widget: a count in EACH of the three engagement tiers (top *clicked*, middle
+    *opened*, *cold*). Aggregate only — counts by tier, never a per-person/behavioral
+    field (INV-6). The simulated adapter synthesizes deterministic tiers from the passed
+    cohort (INV-9 — no I/O); the live HubSpot adapter reads the real ``gt_engagement_tier``
+    property counts.
+
+    Attributes:
+        clicked: Contacts in the top (clicked) tier.
+        opened: Contacts in the middle (opened) tier.
+        cold: Contacts in the cold tier.
+    """
+
+    clicked: int
+    opened: int
+    cold: int
+
+    @property
+    def total(self) -> int:
+        """Total contacts read across the three tiers (the denominator)."""
+        return self.clicked + self.opened + self.cold
+
+
+@dataclass(frozen=True, slots=True)
+class PipelineStageCount:
+    """One deal-stage's aggregate counts (Module 5; counts only — INV-6).
+
+    Attributes:
+        stage: The cockpit deal-stage label (interest/apply/enroll/tuition/closed_lost).
+        count: Deals currently in this stage.
+        stuck: Deals in this stage idle beyond the stuck-in-stage window (aggregate).
+    """
+
+    stage: str
+    count: int
+    stuck: int
+
+
+@dataclass(frozen=True, slots=True)
+class PipelineSnapshot:
+    """Aggregate pipeline-stage distribution + dated handoff counts (Module 5).
+
+    The read behind the Nurture 5c pipeline view: per-stage counts (with a stuck count)
+    plus the marketing→onboarding handoff counts in the weekly/monthly look-back windows.
+    Aggregate only — counts by stage/window, never a per-deal row (INV-6). The simulated
+    adapter synthesizes deterministic stages from the passed cohort (INV-9 — no I/O); the
+    live HubSpot adapter reads the real Deal ``dealstage`` distribution.
+
+    Attributes:
+        stages: One :class:`PipelineStageCount` per stage (caller's stage order).
+        handoff_week: Deals that entered a handoff stage within the weekly window.
+        handoff_month: Deals that entered a handoff stage within the monthly window.
+    """
+
+    stages: tuple[PipelineStageCount, ...]
+    handoff_week: int
+    handoff_month: int
+
+
 class CRMAdapter(ABC):
     """The CRM external boundary (§7.1).
 
@@ -197,9 +260,43 @@ class CRMAdapter(ABC):
 
         The simulated impl synthesizes a DETERMINISTIC tier per contact from its
         family id (INV-9 — no network client, fully demoable offline). The live
-        HubSpot impl would read the real email-engagement (click) tier; until that
-        engagement API is wired it is a documented stub (raises) — the live read is
-        out of scope here, the simulate seam is the real, default path.
+        HubSpot impl reads the real email-engagement (click) tier via
+        :meth:`read_engagement_mix` (S10 / Module 5).
+        """
+
+    @abstractmethod
+    def read_engagement_mix(self, family_ids: Sequence[UUID]) -> EngagementTierMix:
+        """Read the FULL engagement-tier mix (clicked/opened/cold) for a cohort (Module 5).
+
+        The read behind the Nurture 5a tier-mix widget. Aggregate only — a count in each
+        tier, never a per-person/behavioral field (INV-6). The simulated impl synthesizes
+        a DETERMINISTIC tier per contact from its family id (INV-9 — no network); the live
+        HubSpot impl reads the real ``gt_engagement_tier`` property counts (the live read
+        IGNORES ``family_ids`` and aggregates portal-wide over synthetic contacts).
+        """
+
+    @abstractmethod
+    def read_pipeline_snapshot(
+        self,
+        family_ids: Sequence[UUID],
+        *,
+        stage_order: Sequence[str],
+        handoff_stages: Sequence[str],
+        now: datetime,
+        stuck_days: int,
+        week_days: int,
+        month_days: int,
+    ) -> PipelineSnapshot:
+        """Read the aggregate deal-pipeline distribution + dated handoff counts (Module 5).
+
+        The read behind the Nurture 5c pipeline view: per-stage deal counts (with a stuck
+        count for deals idle beyond ``stuck_days``) over ``stage_order``, plus the
+        marketing→onboarding handoff counts (deals reaching a ``handoff_stages`` stage)
+        within the weekly/monthly look-back windows. Aggregate only — counts by
+        stage/window, never a per-deal row (INV-6). The simulated impl synthesizes a
+        DETERMINISTIC stage per contact from its family id (INV-9 — no network, ignores
+        ``now``/the day windows); the live HubSpot impl reads the real Deal ``dealstage``
+        distribution (it IGNORES ``family_ids`` and aggregates portal-wide).
         """
 
     @abstractmethod
@@ -411,6 +508,66 @@ class SimulatedCRMAdapter(CRMAdapter):
         ids = list(family_ids)
         clicked = sum(1 for fid in ids if fid.int % _SIMULATED_CLICKED_TIER_DIVISOR == 0)
         return EngagementSnapshot(total=len(ids), clicked=clicked)
+
+    def read_engagement_mix(self, family_ids: Sequence[UUID]) -> EngagementTierMix:
+        """A DETERMINISTIC synthetic clicked/opened/cold mix over the cohort (INV-9).
+
+        Each contact is bucketed into ONE of the three tiers by ``fid.int % 3`` (0 ⇒
+        clicked, 1 ⇒ opened, 2 ⇒ cold) — a stable, repeatable synthesis over the passed
+        cohort so the Nurture tier-mix widget is real and demoable offline. Aggregate
+        only (counts, never a per-contact field; INV-6). No network client.
+        """
+        clicked = opened = cold = 0
+        for fid in family_ids:
+            bucket = fid.int % 3
+            if bucket == 0:
+                clicked += 1
+            elif bucket == 1:
+                opened += 1
+            else:
+                cold += 1
+        return EngagementTierMix(clicked=clicked, opened=opened, cold=cold)
+
+    def read_pipeline_snapshot(
+        self,
+        family_ids: Sequence[UUID],
+        *,
+        stage_order: Sequence[str],
+        handoff_stages: Sequence[str],
+        now: datetime,
+        stuck_days: int,
+        week_days: int,
+        month_days: int,
+    ) -> PipelineSnapshot:
+        """A DETERMINISTIC synthetic pipeline distribution over the cohort (INV-9).
+
+        Each contact is assigned ONE stage by ``fid.int % len(stage_order)``; it is STUCK
+        when ``fid.int % 4 == 0``; a deal in a handoff stage counts toward the monthly
+        handoff when ``fid.int % 3 == 0`` and toward the weekly handoff when
+        ``fid.int % 6 == 0`` (a strict subset, so weekly <= monthly). Fully deterministic
+        over the passed cohort — the injected ``now``/day windows are unused by the offline
+        synthesis (they drive the live read). Aggregate only (counts; INV-6).
+        """
+        order = list(stage_order)
+        handoff = set(handoff_stages)
+        counts = {s: 0 for s in order}
+        stuck = {s: 0 for s in order}
+        handoff_week = 0
+        handoff_month = 0
+        if order:
+            for fid in family_ids:
+                stage = order[fid.int % len(order)]
+                counts[stage] += 1
+                if fid.int % 4 == 0:
+                    stuck[stage] += 1
+                if stage in handoff and fid.int % 3 == 0:
+                    handoff_month += 1
+                    if fid.int % 6 == 0:
+                        handoff_week += 1
+        stages = tuple(PipelineStageCount(stage=s, count=counts[s], stuck=stuck[s]) for s in order)
+        return PipelineSnapshot(
+            stages=stages, handoff_week=handoff_week, handoff_month=handoff_month
+        )
 
     def mirror_social_post(
         self, dispatch: PlatformDispatch, *, request: PublishRequest

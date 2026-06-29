@@ -30,6 +30,8 @@ from fastapi.testclient import TestClient
 from app.adapters.hubspot.crm_adapter import (
     CRMAdapter,
     EngagementSnapshot,
+    EngagementTierMix,
+    PipelineSnapshot,
     SendResult,
     SimulatedCRMAdapter,
     StudentSyncResult,
@@ -114,6 +116,16 @@ class _RecordingAdapter(CRMAdapter):
         # Module-6 engagement seam — not exercised on the enrollment-seed path;
         # present only so this CRMAdapter double stays instantiable after the merge.
         return EngagementSnapshot(total=0, clicked=0)
+
+    def read_engagement_mix(self, family_ids: Sequence[UUID]) -> EngagementTierMix:
+        # Module-5 nurture seam — not exercised on the enrollment-seed path; present
+        # only so this CRMAdapter double stays instantiable after the merge.
+        return EngagementTierMix(clicked=0, opened=0, cold=0)
+
+    def read_pipeline_snapshot(self, family_ids: Sequence[UUID], **kwargs: Any) -> PipelineSnapshot:
+        # Module-5 nurture seam — not exercised on the enrollment-seed path; present
+        # only so this CRMAdapter double stays instantiable after the merge.
+        return PipelineSnapshot(stages=(), handoff_week=0, handoff_month=0)
 
     def mirror_social_post(self, dispatch: object, *, request: object) -> str | None:
         # Not exercised on the enrollment-seed path (marketing's W3 social mirror);

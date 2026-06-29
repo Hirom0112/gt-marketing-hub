@@ -105,6 +105,27 @@ nurture:                      # later-lifecycle policy dials (rep close-loop) �
     channel_priority: [sms, email]
   escalation:                 # Module 11 — hot-family auto-escalation into the leadership Decision Queue
     recoverable_now_min: 3000.0   # recoverable_now ($ at risk × likelihood × freshness) at/above which a HOT family auto-flags as ONE open escalation decision (INV-11; reuses the work-queue deriver, not a new score)
+  lifecycle:                  # Module 5 (Nurture & Lifecycle) view dials — every value is a BUSINESS dial (INV-11)
+    sla_window_hours: 24          # first-contact SLA window (hours) a new applicant must be contacted within (5f denominator)
+    stuck_in_stage_days: 14       # a deal idle in one pipeline stage longer than this many days reads STUCK (5c alert)
+    sequence_health_min_open_pct: 35.0    # avg open-rate PERCENT floor below which a sequence flags unhealthy (5d)
+    sequence_health_min_click_pct: 8.0    # avg click-rate PERCENT floor below which a sequence flags unhealthy (5d)
+    income_master_threshold_usd: 160000   # self-reported income (whole USD) at/above which a family is the >$160K "master" band (heatmap join)
+    engagement_tiers: [clicked, opened, cold]   # ordered engagement-tier labels; clicked+opened are REACHABLE, cold is not
+    theme_keyword_rules:        # SMS theme label → keyword list v1 keyword tagging matches an inbound message against (5e)
+      tuition: [cost, price, tuition, expensive, afford, payment, scholarship]
+      accreditation: [accredit, real school, diploma, transcript, college, legit]
+      scheduling: [schedule, time, when, reschedule, calendar, date]
+      no_reply: [stop, busy, later, not now]
+      ready: [enroll, sign up, signup, ready, start, deposit, "yes"]
+    tier_planning_sizes:        # planning audience size per tier (5b tier panels)
+      T1: 40
+      T2: 3100
+      T3: 1124
+    pipeline_stage_order: [interest, apply, enroll, tuition, closed_lost]   # ordered Enrollment Sales Pipeline stage labels (5c distribution)
+    handoff_stages: [enroll, tuition]   # stages that count as a marketing→onboarding HANDOFF (subset of pipeline_stage_order)
+    week_days: 7                  # weekly look-back window (days)
+    month_days: 30                # monthly look-back window (days)
 
 sis:                        # M5 — seam reconcile bucket rules (MULTI_AGENT_COCKPIT §6); thresholds are tunables, not hardcoded
   match_confidence_cutoff: 0.9        # below this normalized GT↔SIS match score ⇒ ambiguous → merge queue

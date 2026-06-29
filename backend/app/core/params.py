@@ -1358,16 +1358,102 @@ class NurtureEscalation(_StrictModel):
         return self
 
 
+class NurtureLifecycle(_StrictModel):
+    """nurture.lifecycle — Module 5 (Nurture & Lifecycle) view dials (INV-11).
+
+    The single canonical home for the Module-5 surface's surfaced thresholds and label
+    sets — the pure core (``core/nurture.py``) reads them here, never a code literal:
+
+    * ``sla_window_hours`` — the first-contact SLA window (hours) a new applicant must
+      be contacted within (the 5f compliance denominator). MUST be ``>= 1``.
+    * ``stuck_in_stage_days`` — a deal idle in one pipeline stage longer than this many
+      days reads STUCK (the 5c stuck alert). MUST be ``>= 1``.
+    * ``sequence_health_min_open_pct`` / ``sequence_health_min_click_pct`` — a sequence
+      whose average open/click rate falls below these PERCENT floors flags unhealthy
+      (5d). Each a percent in [0, 100].
+    * ``income_master_threshold_usd`` — the self-reported income (whole USD) at/above
+      which a family is the >$160K "master" income band (the heatmap join + tiering).
+      MUST be ``>= 1``.
+    * ``engagement_tiers`` — the closed, ordered engagement-tier LABELS
+      (clicked/opened/cold). The first two (clicked + opened) are the REACHABLE tiers;
+      the last is cold. MUST be non-empty + free of duplicates.
+    * ``theme_keyword_rules`` — theme label → the keyword list that v1 keyword tagging
+      matches an inbound SMS against (5e). MUST be non-empty.
+    * ``tier_planning_sizes`` — planning audience size per tier (T1/T2/T3) — the 5b
+      tier-panel target sizes. MUST be non-empty; every size ``>= 0``.
+    * ``pipeline_stage_order`` — the ordered deal-stage labels of the Enrollment Sales
+      Pipeline (interest → … → closed_lost) the 5c distribution renders. Non-empty.
+    * ``handoff_stages`` — the stage labels that count as a marketing→onboarding HANDOFF
+      (enroll/tuition). MUST be non-empty + a subset of ``pipeline_stage_order``.
+    * ``week_days`` / ``month_days`` — the weekly/monthly look-back windows (days) the
+      handoff + SMS reply counts use. Each ``>= 1``.
+    """
+
+    sla_window_hours: int
+    stuck_in_stage_days: int
+    sequence_health_min_open_pct: float
+    sequence_health_min_click_pct: float
+    income_master_threshold_usd: int
+    engagement_tiers: list[str]
+    theme_keyword_rules: dict[str, list[str]]
+    tier_planning_sizes: dict[str, int]
+    pipeline_stage_order: list[str]
+    handoff_stages: list[str]
+    week_days: int
+    month_days: int
+
+    @model_validator(mode="after")
+    def _bounds_valid(self) -> NurtureLifecycle:
+        for name in ("sla_window_hours", "stuck_in_stage_days", "week_days", "month_days"):
+            value = getattr(self, name)
+            if value < 1:
+                raise ValueError(f"nurture.lifecycle.{name} must be >= 1, got {value!r}")
+        if self.income_master_threshold_usd < 1:
+            raise ValueError(
+                "nurture.lifecycle.income_master_threshold_usd must be >= 1, got "
+                f"{self.income_master_threshold_usd!r}"
+            )
+        for name in ("sequence_health_min_open_pct", "sequence_health_min_click_pct"):
+            value = getattr(self, name)
+            if not 0.0 <= value <= 100.0:
+                raise ValueError(f"nurture.lifecycle.{name} must be in [0, 100], got {value!r}")
+        if not self.engagement_tiers:
+            raise ValueError("nurture.lifecycle.engagement_tiers must be non-empty")
+        if len(set(self.engagement_tiers)) != len(self.engagement_tiers):
+            raise ValueError(
+                f"nurture.lifecycle.engagement_tiers must not repeat, got {self.engagement_tiers!r}"
+            )
+        if not self.theme_keyword_rules:
+            raise ValueError("nurture.lifecycle.theme_keyword_rules must be non-empty")
+        if not self.tier_planning_sizes:
+            raise ValueError("nurture.lifecycle.tier_planning_sizes must be non-empty")
+        bad = {k: v for k, v in self.tier_planning_sizes.items() if v < 0}
+        if bad:
+            raise ValueError(f"nurture.lifecycle.tier_planning_sizes must be >= 0, got {bad!r}")
+        if not self.pipeline_stage_order:
+            raise ValueError("nurture.lifecycle.pipeline_stage_order must be non-empty")
+        if not self.handoff_stages:
+            raise ValueError("nurture.lifecycle.handoff_stages must be non-empty")
+        unknown = [s for s in self.handoff_stages if s not in self.pipeline_stage_order]
+        if unknown:
+            raise ValueError(
+                "nurture.lifecycle.handoff_stages must be a subset of pipeline_stage_order; "
+                f"unknown {unknown!r}"
+            )
+        return self
+
+
 class Nurture(_StrictModel):
     """nurture — the later-lifecycle policy dials (INV-11; all BUSINESS-owned).
 
     Every value here is a team dial, not engineering: how long until COLD, when a
     silent family is PRESUMED LOST (human-confirmed), the base re-contact cadence and
     touch cap before DORMANT, the channel order, the school-year anchors that ramp
-    re-engagement, and the hot-family escalation bar (Module 11) at which a high-value
-    at-risk family auto-flags into the leadership Decision Queue. Nurture EXECUTION (the
-    actual drip sends) is HubSpot's job (the locked seam plan); the cockpit owns these
-    dials and pushes the trigger.
+    re-engagement, the hot-family escalation bar (Module 11) at which a high-value
+    at-risk family auto-flags into the leadership Decision Queue, and the Module-5
+    Nurture & Lifecycle view dials (``lifecycle``). Nurture EXECUTION (the actual drip
+    sends) is HubSpot's job (the locked seam plan); the cockpit owns these dials and
+    pushes the trigger.
     """
 
     cold_after_days: int
@@ -1378,6 +1464,7 @@ class Nurture(_StrictModel):
     anchors: list[NurtureAnchor]
     long_horizon: LongHorizon
     escalation: NurtureEscalation
+    lifecycle: NurtureLifecycle
 
 
 class Programs(_StrictModel):

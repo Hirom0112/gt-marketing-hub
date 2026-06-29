@@ -34,7 +34,7 @@ from __future__ import annotations
 import logging
 import time
 from collections.abc import Callable, Sequence
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 from uuid import UUID
 
@@ -44,6 +44,9 @@ from app.adapters._resilience import with_retry
 from app.adapters.hubspot.crm_adapter import (
     CRMAdapter,
     EngagementSnapshot,
+    EngagementTierMix,
+    PipelineSnapshot,
+    PipelineStageCount,
     SendResult,
     StudentSyncResult,
     SyncResult,
@@ -69,6 +72,11 @@ _DEALS = "/crm/v3/objects/deals"
 _NOTES = "/crm/v3/objects/notes"
 # The idempotency property — the upsert key (guard 1). NEVER email.
 _GT_SYNTHETIC_ID = "gt_synthetic_id"
+# The engagement-tier custom contact property + its fixed value vocabulary (Module 5).
+# The VALUES are the property's closed value set (a portal data shape, the INV-11
+# carve-out like dealstage ids), not a GT tunable — read aggregate-only (INV-6).
+_GT_ENGAGEMENT_TIER = "gt_engagement_tier"
+_ENGAGEMENT_TIERS = ("clicked", "opened", "cold")
 # The HubSpot version stamp the incremental poll filters/sorts on (A2; §4.7).
 _HS_LASTMODIFIED = "hs_lastmodifieddate"
 # The PII-free tracked scalars the §4.7 deriver reads — the ONLY properties the
@@ -538,27 +546,119 @@ class LiveHubSpotCRMAdapter(CRMAdapter):
         match = self._search_by_gt_id(object_path, gt_id, [_GT_SYNTHETIC_ID])
         return None if match is None else str(match["id"])
 
-    def read_engagement(self, family_ids: Sequence[UUID]) -> EngagementSnapshot:
-        """Live email-engagement (clicked tier) read — a DOCUMENTED stub (Module 6).
+    # ------------------------------------------------- Module 5 aggregate reads
+    def _count(self, object_path: str, filters: list[dict[str, Any]]) -> int:
+        """Aggregate COUNT of an object type matching ``filters`` (CRM Search ``total``).
 
-        The real read would page the HubSpot email-engagement / marketing-events API
-        for each synthetic contact's click tier behind guard 3's per-run budget (the
-        same firewall as :meth:`read_mirror` — aggregate counts only, never a
-        per-contact behavioral field; INV-6). That engagement API is not wired here:
-        the scorecard's engagement KPI runs on the REAL simulate seam by default
-        (INV-9), and the live path stays a fail-loud stub rather than fabricating a
-        share. The composition root (the scorecard builder) degrades a missing live
-        engagement read to an honest absence rather than a 500.
-
-        Raises:
-            NotImplementedError: always — the live HubSpot engagement read is not
-                wired in this slice (the simulate seam is the default, real path).
+        Reads ONLY the ``total`` off a 1-row CRM Search page (never the rows) — an
+        aggregate count behind the guard-3 budget, never a per-person/behavioral field
+        (the INV-6 firewall). The ``gt_synthetic_id`` property is requested only to keep
+        the search shape minimal; no contact identity is read.
         """
-        raise NotImplementedError(
-            "Live HubSpot email-engagement (clicked tier) read is not wired in this "
-            "slice; the scorecard engagement KPI runs on the simulate seam by default "
-            "(INV-9). Use CRM_MODE='simulate', or wire the engagement API behind the "
-            "guard-3 budget + INV-6 aggregate firewall."
+        payload = {
+            "filterGroups": [{"filters": filters}],
+            "properties": [_GT_SYNTHETIC_ID],
+            "limit": 1,
+        }
+        body = self._request("POST", f"{object_path}/search", json=payload).json()
+        return int(body.get("total") or 0)
+
+    def read_engagement(self, family_ids: Sequence[UUID]) -> EngagementSnapshot:
+        """Live email-engagement (clicked tier) read — aggregate-only (Module 6/5; INV-6).
+
+        Delegates to :meth:`read_engagement_mix` and projects onto the
+        :class:`EngagementSnapshot` (total + clicked) the weekly scorecard's engagement
+        KPI consumes. Aggregate only — counts by tier, never a per-contact behavioral
+        field (the same firewall as :meth:`read_mirror`). Every call rides the guard-3
+        budget via :meth:`_request`.
+        """
+        mix = self.read_engagement_mix(family_ids)
+        return EngagementSnapshot(total=mix.total, clicked=mix.clicked)
+
+    def read_engagement_mix(self, family_ids: Sequence[UUID]) -> EngagementTierMix:
+        """Live clicked/opened/cold mix — aggregate ``gt_engagement_tier`` counts (INV-6).
+
+        One CRM Search COUNT per tier value (clicked/opened/cold), reading only the
+        aggregate ``total`` — never a per-person row. ``family_ids`` is ignored: the live
+        read aggregates portal-wide over the synthetic contacts. Each count rides the
+        guard-3 per-run budget (INV-8).
+        """
+        counts: dict[str, int] = {}
+        for tier in _ENGAGEMENT_TIERS:
+            counts[tier] = self._count(
+                _CONTACTS,
+                [{"propertyName": _GT_ENGAGEMENT_TIER, "operator": "EQ", "value": tier}],
+            )
+        return EngagementTierMix(
+            clicked=counts["clicked"], opened=counts["opened"], cold=counts["cold"]
+        )
+
+    def read_pipeline_snapshot(
+        self,
+        family_ids: Sequence[UUID],
+        *,
+        stage_order: Sequence[str],
+        handoff_stages: Sequence[str],
+        now: datetime,
+        stuck_days: int,
+        week_days: int,
+        month_days: int,
+    ) -> PipelineSnapshot:
+        """Live Deal pipeline distribution + dated handoff counts — aggregate (INV-6).
+
+        Per cockpit stage (in ``stage_order``) one CRM Search COUNT of deals at that
+        ``dealstage`` (the HubSpot stage id comes from ``crm.stage_map``, provisioned from
+        ``/crm/v3/pipelines/deals`` — INV-11), plus a second COUNT filtered to deals idle
+        beyond ``stuck_days`` (``hs_lastmodifieddate LT`` the cutoff) for the stuck count.
+        The weekly/monthly handoff counts sum, over ``handoff_stages``, the deals modified
+        into the stage within each window (``hs_lastmodifieddate GTE`` the cutoff). Every
+        figure is an aggregate ``total`` — never a per-deal row (INV-6) — and rides the
+        guard-3 budget. ``family_ids`` is ignored (portal-wide aggregate).
+        """
+        stuck_cutoff = str(int((now - timedelta(days=stuck_days)).timestamp() * 1000))
+        week_cutoff = str(int((now - timedelta(days=week_days)).timestamp() * 1000))
+        month_cutoff = str(int((now - timedelta(days=month_days)).timestamp() * 1000))
+
+        stages: list[PipelineStageCount] = []
+        for stage in stage_order:
+            stage_id = self._crm.stage_map.get(stage)
+            if stage_id is None:
+                stages.append(PipelineStageCount(stage=stage, count=0, stuck=0))
+                continue
+            base = [{"propertyName": "dealstage", "operator": "EQ", "value": stage_id}]
+            count = self._count(_DEALS, base)
+            stuck = self._count(
+                _DEALS,
+                [
+                    *base,
+                    {"propertyName": _HS_LASTMODIFIED, "operator": "LT", "value": stuck_cutoff},
+                ],
+            )
+            stages.append(PipelineStageCount(stage=stage, count=count, stuck=stuck))
+
+        handoff_week = 0
+        handoff_month = 0
+        for stage in handoff_stages:
+            stage_id = self._crm.stage_map.get(stage)
+            if stage_id is None:
+                continue
+            base = [{"propertyName": "dealstage", "operator": "EQ", "value": stage_id}]
+            handoff_week += self._count(
+                _DEALS,
+                [
+                    *base,
+                    {"propertyName": _HS_LASTMODIFIED, "operator": "GTE", "value": week_cutoff},
+                ],
+            )
+            handoff_month += self._count(
+                _DEALS,
+                [
+                    *base,
+                    {"propertyName": _HS_LASTMODIFIED, "operator": "GTE", "value": month_cutoff},
+                ],
+            )
+        return PipelineSnapshot(
+            stages=tuple(stages), handoff_week=handoff_week, handoff_month=handoff_month
         )
 
     # ----------------------------------------------------- GT Social Post mirror

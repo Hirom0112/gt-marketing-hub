@@ -80,6 +80,11 @@ from app.data.layouts_store import (
     build_supabase_layouts_store,
 )
 from app.data.notes_repository import InMemoryNotesRepository, NotesRepository
+from app.data.nurture_store import (
+    InMemoryNurtureStore,
+    NurtureStore,
+    build_supabase_nurture_store,
+)
 from app.data.payments_store import (
     InMemoryPaymentsStore,
     PaymentsStore,
@@ -543,6 +548,55 @@ def _seeded_in_memory_field_events_store(program: Program) -> InMemoryFieldEvent
 # deterministic demo events; production swaps the Supabase-backed impl over the 0039
 # table.
 _field_events_store: FieldEventsStore = _build_field_events_store()
+
+
+def _build_nurture_store() -> NurtureStore:
+    """Bind the Module-5 Nurture & Lifecycle store, MIRRORING ``_build_field_events_store``.
+
+    The same ``COCKPIT_REPO`` / ``SUPABASE_URL`` selection as the other module stores, so
+    they never disagree on which backend is live (the NFR-8 store seam):
+
+    - ``synthetic`` ⇒ FORCE the in-memory store (never Supabase), with the deterministic
+      demo segments/sequences/threads/SLA rows seeded for the active program (INV-1).
+    - ``supabase`` ⇒ REQUIRE the live store; a missing ``SUPABASE_URL`` is a misconfig
+      ⇒ raise (fail loud, the family-store posture).
+    - ``auto`` (default) ⇒ Supabase when ``SUPABASE_URL`` is configured, else the seeded
+      in-memory v1 fallback (A-3).
+    """
+    settings = Settings.from_env()
+    repo_mode = settings.cockpit_repo
+    program = resolve_program(settings.gt_program_id)
+    if repo_mode == "synthetic":
+        return _seeded_in_memory_nurture_store(program)
+    if repo_mode == "supabase":
+        supabase = build_supabase_nurture_store()
+        if supabase is None:
+            raise RuntimeError(
+                "COCKPIT_REPO=supabase requires SUPABASE_URL (+ "
+                "SUPABASE_SERVICE_ROLE_KEY) for the Nurture & Lifecycle store; none was "
+                "configured. Set them, or use COCKPIT_REPO=synthetic / auto."
+            )
+        return supabase
+    return build_supabase_nurture_store() or _seeded_in_memory_nurture_store(program)
+
+
+def _seeded_in_memory_nurture_store(program: Program) -> InMemoryNurtureStore:
+    """Build the in-memory nurture store + the deterministic demo seed (Module 5).
+
+    The demo segments/sequences/SMS threads/SLA rows are seeded for the active program so
+    the six Nurture sub-views are demonstrable on synthetic data alone (idempotent;
+    INV-1). Tests that need a CLEAN store construct :class:`InMemoryNurtureStore` directly.
+    """
+    store = InMemoryNurtureStore()
+    store.seed_demo(program)
+    return store
+
+
+# Singleton Nurture & Lifecycle store (Module 5) — the segment/sequence-mirror/SMS-inbox/
+# SLA state behind the same NFR-8 seam as ``_repository``. Default v1 = in-memory (A-3),
+# seeded with the deterministic demo; production swaps the Supabase-backed impl over the
+# 0040 tables.
+_nurture_store: NurtureStore = _build_nurture_store()
 
 
 def _build_content_metrics_store() -> ContentMetricsStore:
@@ -1055,6 +1109,11 @@ def get_grassroots_store() -> GrassrootsStore:
 def get_field_events_store() -> FieldEventsStore:
     """FastAPI dependency yielding the active Field & Events store (Module 8 seam)."""
     return _field_events_store
+
+
+def get_nurture_store() -> NurtureStore:
+    """FastAPI dependency yielding the active Nurture & Lifecycle store (Module 5 seam)."""
+    return _nurture_store
 
 
 def get_content_metrics_store() -> ContentMetricsStore:

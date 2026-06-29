@@ -34,6 +34,7 @@ from app.api.layouts import router as layouts_router
 from app.api.marketing import router as marketing_router
 from app.api.merge import router as merge_router
 from app.api.notes import router as notes_router
+from app.api.nurture import router as nurture_router
 from app.api.open_data import router as open_data_router
 from app.api.payments import router as payments_router
 from app.api.publish import router as publish_router
@@ -314,6 +315,17 @@ app.include_router(summer_router)
 # (simulate default; live flips on SHEETS_MODE + a present key, behind a per-run cap +
 # kill switch, INV-8). Backs the Content module's real two-way Sheet sync.
 app.include_router(content_kanban_router)
+
+# Nurture & Lifecycle (Module 5) — the segment/sequence-mirror/SMS-inbox/SLA seam
+# (app.data.nurture_store, 0040) + LIVE HubSpot AGGREGATE reads (engagement-tier mix +
+# deal-pipeline distribution + handoff — INV-6, never per-person). GET /nurture/overview|
+# segments|pipeline|sequences|sms|sla (+ /kpi-feed, /attribution) any seat; owner-gated
+# POST /nurture/segments/build (operator must own 'nurture'; demo operator owns grassroots
+# ⇒ admin/leader-only). Four cross-links: POST /nurture/sms/{id}/flag-hot-family → Decision
+# Queue (flag_decision), POST /nurture/sms/objection-brief → Content calendar DRAFT, the
+# /kpi-feed for the Dashboard module, and /attribution for Content Performance. Pure core
+# (app.core.nurture); program isolation; sequences are a read-only synthetic mirror. INV-1/6/11.
+app.include_router(nurture_router)
 
 
 # AWS Lambda + API Gateway entrypoint (ARCHITECTURE.md §12).
