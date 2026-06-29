@@ -784,12 +784,13 @@ def test_search_modified_since_bounded_by_until() -> None:
 # ===========================================================================
 
 
-def test_read_last_modified_reads_max_descending_limit_one() -> None:
+def test_read_last_modified_contacts_uses_lastmodifieddate() -> None:
     """read_last_modified issues ONE DESC-sorted limit-1 search reading only the timestamp.
 
-    INV-6 aggregate: a single CRM Search sorted by ``hs_lastmodifieddate`` DESCENDING,
-    ``limit=1``, requesting ONLY the timestamp property (no per-person identity field),
-    and returns the parsed MAX modification instant off the top row.
+    INV-6 aggregate: a single CRM Search sorted DESCENDING, ``limit=1``, requesting ONLY
+    the timestamp property (no per-person identity field), returning the parsed MAX instant
+    off the top row. HubSpot quirk: CONTACTS expose ``lastmodifieddate`` (NOT
+    ``hs_lastmodifieddate`` — sorting/reading the latter on a contact yields a null).
     """
     captured: list[dict[str, Any]] = []
 
@@ -801,7 +802,7 @@ def test_read_last_modified_reads_max_descending_limit_one() -> None:
             json={
                 "total": 7,
                 "results": [
-                    {"id": "c-1", "properties": {"hs_lastmodifieddate": "2026-02-03T09:30:00Z"}}
+                    {"id": "c-1", "properties": {"lastmodifieddate": "2026-02-03T09:30:00Z"}}
                 ],
             },
         )
@@ -821,11 +822,46 @@ def test_read_last_modified_reads_max_descending_limit_one() -> None:
     assert result == datetime(2026, 2, 3, 9, 30, tzinfo=UTC)
     assert len(captured) == 1
     body = captured[0]
-    assert body["sorts"] == [{"propertyName": "hs_lastmodifieddate", "direction": "DESCENDING"}]
+    # Contacts use ``lastmodifieddate`` in BOTH the sort and the requested property.
+    assert body["sorts"] == [{"propertyName": "lastmodifieddate", "direction": "DESCENDING"}]
     assert body["limit"] == 1
-    # Only the timestamp scalar is requested — no per-person identity field (INV-6).
-    assert body["properties"] == ["hs_lastmodifieddate"]
+    assert body["properties"] == ["lastmodifieddate"]  # only the timestamp scalar (INV-6)
     assert "filterGroups" not in body  # portal-wide newest-modified
+
+
+def test_read_last_modified_deals_uses_hs_lastmodifieddate() -> None:
+    """Deals (unlike contacts) expose ``hs_lastmodifieddate`` — the read uses that name."""
+    captured: list[dict[str, Any]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/crm/v3/objects/deals/search"
+        captured.append(json.loads(request.content))
+        return httpx.Response(
+            200,
+            json={
+                "total": 3,
+                "results": [
+                    {"id": "d-1", "properties": {"hs_lastmodifieddate": "2026-02-04T10:00:00Z"}}
+                ],
+            },
+        )
+
+    client = httpx.Client(transport=httpx.MockTransport(handler), base_url="https://api.hubapi.com")
+    adapter = LiveHubSpotCRMAdapter(
+        client=client,
+        token=_TOKEN,
+        crm=_crm(),
+        award_amounts=_award_amounts(),
+        calls_per_run_cap=200,
+        resilience=_resilience(),
+    )
+
+    result = adapter.read_last_modified("deals")
+
+    assert result == datetime(2026, 2, 4, 10, 0, tzinfo=UTC)
+    body = captured[0]
+    assert body["sorts"] == [{"propertyName": "hs_lastmodifieddate", "direction": "DESCENDING"}]
+    assert body["properties"] == ["hs_lastmodifieddate"]
 
 
 def test_read_last_modified_no_records_returns_none() -> None:

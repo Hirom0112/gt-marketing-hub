@@ -85,6 +85,10 @@ _ENGAGEMENT_TIERS = ("clicked", "opened", "cold")
 _GT_LEAD_SCORE = "gt_lead_score"
 # The HubSpot version stamp the incremental poll filters/sorts on (A2; §4.7).
 _HS_LASTMODIFIED = "hs_lastmodifieddate"
+# HubSpot quirk: CONTACTS expose their last-modified instant as ``lastmodifieddate``,
+# while deals/companies/tickets use ``hs_lastmodifieddate``. read_last_modified picks the
+# right one per object type (sorting/reading the wrong name yields a null timestamp).
+_CONTACT_LASTMODIFIED = "lastmodifieddate"
 # The PII-free tracked scalars the §4.7 deriver reads — the ONLY properties the
 # inbound firewall (guard 2) requests on a mirror read/search. No contact identity.
 _TRACKED_DEAL_PROPERTIES = [
@@ -706,16 +710,18 @@ class LiveHubSpotCRMAdapter(CRMAdapter):
         Rides the guard-3 per-run budget (INV-8) via :meth:`_request`.
         """
         object_path = f"/crm/v3/objects/{object_type}"
+        # Contacts expose ``lastmodifieddate``; deals/companies use ``hs_lastmodifieddate``.
+        prop = _CONTACT_LASTMODIFIED if object_type == "contacts" else _HS_LASTMODIFIED
         payload: dict[str, Any] = {
-            "sorts": [{"propertyName": _HS_LASTMODIFIED, "direction": "DESCENDING"}],
-            "properties": [_HS_LASTMODIFIED],
+            "sorts": [{"propertyName": prop, "direction": "DESCENDING"}],
+            "properties": [prop],
             "limit": 1,
         }
         body = self._request("POST", f"{object_path}/search", json=payload).json()
         results = body.get("results") or []
         if not results:
             return None
-        return _parse_hs_timestamp(results[0].get("properties", {}).get(_HS_LASTMODIFIED))
+        return _parse_hs_timestamp(results[0].get("properties", {}).get(prop))
 
     # ----------------------------------------------------- GT Social Post mirror
     def _social_post_properties(
