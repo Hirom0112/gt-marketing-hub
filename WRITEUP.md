@@ -14,9 +14,9 @@ wired live but default to `simulate`.
 ## 2. Deep vs. stubbed, and why
 
 **The backbone is where I spent the depth** — it's what the brief actually tests, and every Phase-2
-claim rests on it. On top of it I built **nine modules end-to-end** — each persisted to live Supabase
-(migrations `0032`–`0041`, program-scoped RLS), wired across every sub-view tab, with real owner-gated
-writes verified live. The backbone primitives are all real and unit-tested (**1351 passing**):
+claim rests on it. On top of it I built **ten modules end-to-end** — each persisted to live Supabase
+(migrations `0032`–`0042`, program-scoped RLS), wired across every sub-view tab, with real owner-gated
+writes verified live. The backbone primitives are all real and unit-tested (**1415 passing**):
 
 - **Stripe webhook** (`app/api/payments.py` → `core/payments.py:decide_payment_event`): verify HMAC
   on the raw body → dedupe on `event.id` → `FULFILL`/`NOOP`/`ACK` → record payment → advance the
@@ -63,8 +63,15 @@ writes verified live. The backbone primitives are all real and unit-tested (**13
   bands, display-only), and a **persisted data-quality queue with auto-detection** (a scan upserts
   sync-drift + UTM-breakage issues idempotently on a signature) with a leadership lifecycle
   (acknowledge/prioritize/resolve) + resolution log, and a leader-only scoring-change → Decision Queue.
+- **Admissions & Voice of Customer** (`/admissions/*`) — the listening post that closes the loop to
+  marketing: an objection log (theme × frequency × 4-week trend × source × verbatim), an
+  **objection→content-brief bridge** that REUSES the Content pipeline (`upsert_calendar_entry`, tagged
+  "brief from admissions") and tracks **hit rate + whether objection frequency dropped after publish**,
+  Voice-of-Families quotes + sentiment (the §7.5 placeholder adapter, labeled aggregate), and a
+  **feedback-to-marketing loop** where actionable items `flag_decision` to the **Decision Queue** +
+  surface to the Marketing Lead, with a **7-day closure rate**. Admission numbers by week.
 
-**Left as honest seed (real shape, labeled):** **Home, Admissions, Website Analytics** (GA4 stood-in),
+**Left as honest seed (real shape, labeled):** **Home, Website Analytics** (GA4 stood-in),
 **Resource Library.** These are breadth/aggregation/viz surfaces that don't further test the backbone.
 
 ## 3. Key technical trade-offs
@@ -129,13 +136,13 @@ writes verified live. The backbone primitives are all real and unit-tested (**13
 **Word count: ~900.**
 
 **Verified vs. inferred:** all module/table/function names, the live-vs-seed split, the params
-values, and the **1351-test count** are verified from the source this session. The nine deep modules
+values, and the **1415-test count** are verified from the source this session. The ten deep modules
 were each run against a **live API + live Supabase** (migrations applied, data seeded) and verified
 end-to-end via Playwright across roles — including a real Stripe test-mode payment flow recorded
 through the signed webhook, a real two-way Google Sheets sync, and **live HubSpot aggregate reads**
 (engagement-tier mix + deal-pipeline distribution + handoff + the CRM-Ops lead-score histogram read
 back off the real portal: clicked 100 / opened 100 / cold 100, interest 61 / apply·enroll·tuition·closed
 60 each, 120 handoffs, lead-score bands 36/68/65/65/66). The
-remaining modules (Home, Admissions, Website, Resource Library) render seed and are labeled
+remaining modules (Home, Website, Resource Library) render seed and are labeled
 as such. The stage-SoT "ratified tension" is my call, recorded in the decisions log, not a spec
 instruction.
