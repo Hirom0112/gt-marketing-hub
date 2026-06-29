@@ -1,112 +1,92 @@
 'use client';
 
 // Summer Camp (Module 4) — a SEPARATE P&L workstream, not part of the $365K
-// marketing budget. Registrations reconcile two sources with no double-count:
-//   • summer.gt.school (primary) + a standalone registration form → dedup'd.
-//   • Funnel: Lead → Registered (unpaid) → Paid → Attended, sliceable by
-//     campus / age group. Four campuses (3× two-week, 1× one-week) sum to the
-//     aggregate capacity of 350 seats.
-//   • Ads are paused — there is intentionally NO paid-acquisition view.
-// Live wiring: GET /summer/reconcile drives the dedup banner, the per-campus
-// rollup, the funnel, and revenue-vs-target — the REAL reconciler output (each
-// registrant counted once; ambiguity held for review). Falls back to the inline
-// seed when the backbone is unreachable (the BudgetModule apiGet pattern).
+// marketing budget. Four controlled sub-views (TabBar):
+//   4a Overview            — reconciled stat grid (capacity sold / regs this week /
+//                            paid % / days-to-start / top channel / camp content
+//                            shipped / revenue-vs-target with an HONEST basis label /
+//                            waitlist) + the dual-source dedup banner + the
+//                            "ads paused — organic only" note.
+//   4b Registration funnel — Lead → Registered → Paid → Attended from funnel[],
+//                            with drop-off % + the pending flag rendered honestly,
+//                            SLICEABLE by campus / grade band / source (re-fetches
+//                            /summer/reconcile with the query params).
+//   4c Content + campaigns — the camp-tagged subset of the live content board
+//                            (GET /summer/content) — read-only; it LIVES in Module 3.
+//   4d Sessions            — four campus cards (per_campus ⊕ sessions[]) with a
+//                            per-campus drill-in + an OWNER-GATED "propose session/
+//                            pricing change" → POST /summer/session-change → the
+//                            Decision Queue.
+// Live wiring: GET /summer/reconcile + GET /summer/content. Each falls back to a
+// distinct seed (lib/camp-api) so the screen never blanks; the LIVE/SAMPLE pill is
+// derived honestly from whether the fetch landed.
 
-import { useEffect, useState } from 'react';
-import { moduleById } from '@/lib/registry';
+import { useCallback, useEffect, useState } from 'react';
+import Link from 'next/link';
+import { moduleById, canEditWorkstream, type Role, type Session } from '@/lib/registry';
 import { TabBar } from '@/components/TabBar';
 import { useSession } from '@/lib/session';
-import { apiGet } from '@/lib/api';
+import { apiGet, apiPost } from '@/lib/api';
+import { channelColor, channelLabel } from '@/lib/content-api';
+import {
+  SEED_RECONCILE,
+  SEED_CONTENT,
+  GRADE_BANDS,
+  SOURCE_OPTIONS,
+  CHANGE_TYPES,
+  campusCity,
+  revenueBasisLabel,
+  regChannelLabel,
+  regChannelColor,
+  fmtSessionRange,
+  fmtSessionDate,
+  type SummerReconcile,
+  type SummerContent,
+  type FunnelStageRow,
+  type SummerCampusRow,
+  type SummerSession,
+  type DecisionResponse,
+} from '@/lib/camp-api';
 
 const MONO = 'JetBrains Mono';
 const ARCHIVO = 'Fraunces';
 
-// ---- Types -----------------------------------------------------------------
-interface Stat {
-  label: string;
-  value: string;
-  valueSub?: string; // small inline qualifier (e.g. "/350")
-  valueColor: string;
-  note: string;
-  hero?: boolean;
-}
-interface FunnelStage {
-  stage: string;
-  count: number;
-  drop: string; // drop-off into this stage from the prior one
-  color: string; // bar fill token
-}
-interface Campus {
-  name: string;
-  city: string;
-  dates: string;
-  duration: '1wk' | '2wk';
-  capacity: number;
-  registered: number;
-  paid: number;
-  waitlist: number;
+interface Toast {
+  msg: string;
+  kind: 'ok' | 'err';
 }
 
-// Live GET /summer/reconcile shape (app/api/summer.py). Every field guarded.
-interface SummerCampusRow {
-  campus: string;
-  capacity: number;
-  registered: number;
-  paid: number;
-  lead: number;
-  seats_remaining: number;
-  pct_sold: number;
-}
-interface SummerReconcileResponse {
-  program_id?: string;
-  per_campus?: SummerCampusRow[];
-  totals?: { capacity: number; registered: number; paid: number; lead: number };
-  dedup?: {
-    raw_source_rows: number;
-    unique_registrations: number;
-    duplicates_merged: number;
-    sources?: { source: string; rows: number }[];
-    conflicts?: unknown[];
-  };
-  revenue?: {
-    paid_registrations: number;
-    price_per_seat_usd: number;
-    revenue_usd: number;
-    target_usd: number;
-    pct_to_target: number;
-  };
-}
-
-// ---- Seed data -------------------------------------------------------------
-// Per-campus numbers sum to the aggregate (capacity 350 / registered 288 /
-// paid 219 / waitlist 21) so the dual-source reconciliation holds. Also the
-// source of stable per-campus META (city / dates / duration) the live rollup
-// (which carries only the numbers) is decorated with.
-const CAMPUSES: Campus[] = [
-  { name: 'Austin', city: 'Mueller campus', dates: 'Jun 16 – Jun 27', duration: '2wk', capacity: 100, registered: 86, paid: 66, waitlist: 8 },
-  { name: 'Dallas', city: 'Knox–Henderson campus', dates: 'Jul 7 – Jul 18', duration: '2wk', capacity: 100, registered: 84, paid: 63, waitlist: 6 },
-  { name: 'Houston', city: 'Heights campus', dates: 'Jul 21 – Aug 1', duration: '2wk', capacity: 90, registered: 78, paid: 60, waitlist: 5 },
-  { name: 'San Antonio', city: 'Pearl campus', dates: 'Aug 4 – Aug 8', duration: '1wk', capacity: 60, registered: 40, paid: 30, waitlist: 2 },
-];
-
-// Stable per-campus presentation meta (the reconciler carries only the numbers).
-const CAMPUS_META: Record<string, { city: string; dates: string; duration: '1wk' | '2wk' }> =
-  Object.fromEntries(CAMPUSES.map((c) => [c.name, { city: c.city, dates: c.dates, duration: c.duration }]));
-
-const SEED_LEAD = 642; // top-of-funnel leads (no lead-source in the reconciler — seed)
-const SEED_REVENUE_TARGET = 260_000;
-
-// ---- Component -------------------------------------------------------------
+// =========================== the module ======================================
 export function CampModule() {
   const def = moduleById('camp')!;
   const { session } = useSession();
-  const [live, setLive] = useState<SummerReconcileResponse | null>(null);
+  const [data, setData] = useState<SummerReconcile | null>(null); // null = loading
+  const [isLive, setIsLive] = useState(false);
+  const [content, setContent] = useState<SummerContent | null>(null);
+  const [contentLive, setContentLive] = useState(false);
+  const [tab, setTab] = useState(0);
+  const [toast, setToast] = useState<Toast | null>(null);
 
   useEffect(() => {
     let active = true;
-    apiGet<SummerReconcileResponse>('/summer/reconcile', session.role).then((data) => {
-      if (active && data && Array.isArray(data.per_campus) && data.per_campus.length > 0) {
-        setLive(data);
+    apiGet<SummerReconcile>('/summer/reconcile', session.role).then((res) => {
+      if (!active) return;
+      if (res && Array.isArray(res.per_campus) && res.per_campus.length > 0) {
+        setData(res);
+        setIsLive(true);
+      } else {
+        setData(SEED_RECONCILE);
+        setIsLive(false);
+      }
+    });
+    apiGet<SummerContent>('/summer/content', session.role).then((res) => {
+      if (!active) return;
+      if (res && Array.isArray(res.columns)) {
+        setContent(res);
+        setContentLive(true);
+      } else {
+        setContent(SEED_CONTENT);
+        setContentLive(false);
       }
     });
     return () => {
@@ -114,310 +94,516 @@ export function CampModule() {
     };
   }, [session.role]);
 
-  const isLive = live !== null;
+  useEffect(() => {
+    if (!toast) return;
+    const t = setTimeout(() => setToast(null), 6000);
+    return () => clearTimeout(t);
+  }, [toast]);
 
-  // Per-campus rollup: decorate the live numbers with stable meta, else the seed.
-  const campuses: Campus[] = isLive
-    ? live!.per_campus!.map((pc) => {
-        const meta = CAMPUS_META[pc.campus] ?? { city: '—', dates: '', duration: '2wk' as const };
-        return {
-          name: pc.campus,
-          city: meta.city,
-          dates: meta.dates,
-          duration: meta.duration,
-          capacity: pc.capacity,
-          registered: pc.registered,
-          paid: pc.paid,
-          // Overflow above capacity is the waitlist (0 when under capacity).
-          waitlist: Math.max(0, pc.registered - pc.capacity),
-        };
-      })
-    : CAMPUSES;
+  const notify = useCallback((msg: string, kind: 'ok' | 'err') => setToast({ msg, kind }), []);
 
-  const agg = campuses.reduce(
-    (a, c) => ({
-      capacity: a.capacity + c.capacity,
-      registered: a.registered + c.registered,
-      paid: a.paid + c.paid,
-      waitlist: a.waitlist + c.waitlist,
-    }),
-    { capacity: 0, registered: 0, paid: 0, waitlist: 0 },
-  );
+  if (data === null) {
+    return (
+      <>
+        <TabBar tabs={def.tabs} active={tab} onChange={setTab} />
+        <section className="scr" style={{ padding: '20px 22px 40px' }}>
+          <div style={{ fontFamily: MONO, fontSize: 11, color: 'var(--ink-3)' }}>Loading summer camp…</div>
+        </section>
+      </>
+    );
+  }
 
-  // Dedup banner figures — REAL reconciler output when live.
-  const dupMerged = live?.dedup?.duplicates_merged ?? 0;
-  const conflicts = live?.dedup?.conflicts?.length ?? 0;
-  const uniqueReg = live?.dedup?.unique_registrations ?? agg.registered;
-
-  // Revenue vs target.
-  const revenueUsd = live?.revenue?.revenue_usd ?? 214_000;
-  const revenueTarget = live?.revenue?.target_usd ?? SEED_REVENUE_TARGET;
-  const revenuePct = live?.revenue?.pct_to_target ?? Math.round((revenueUsd / revenueTarget) * 100);
-
-  const stats = buildStats(agg, revenueUsd, revenueTarget, revenuePct);
-
-  // Funnel — Registered / Paid from the live totals; Lead is seed (no source).
-  const leadCount = SEED_LEAD;
-  const regCount = live?.totals?.registered ?? agg.registered;
-  const paidCount = live?.totals?.paid ?? agg.paid;
-  const funnel: FunnelStage[] = [
-    { stage: 'Lead', count: leadCount, drop: '—', color: 'var(--ink-3)' },
-    { stage: 'Registered (unpaid)', count: regCount, drop: pctDrop(leadCount, regCount), color: 'var(--gold)' },
-    { stage: 'Paid', count: paidCount, drop: pctDrop(regCount, paidCount), color: 'var(--ok)' },
-    { stage: 'Attended', count: 0, drop: 'pending', color: 'var(--gold)' },
-  ];
-  const funnelMax = Math.max(...funnel.map((s) => s.count));
+  const cnt = content ?? SEED_CONTENT;
 
   return (
     <>
-      <TabBar tabs={def.tabs} />
-      <section className="scr" style={{ padding: '20px 22px 40px' }}>
-        {/* Data-source pill */}
-        <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 10 }}>
-          <StatusPill live={isLive} />
-        </div>
-
-        {/* Dual-source reconciliation banner */}
-        <div
-          style={{
-            border: '1px solid var(--ink)',
-            background: 'var(--card)',
-            padding: '13px 16px',
-            marginBottom: 14,
-            display: 'flex',
-            alignItems: 'center',
-            gap: 16,
-            flexWrap: 'wrap',
-          }}
-        >
-          <div style={{ flex: 1, minWidth: 320 }}>
-            <div style={{ fontFamily: ARCHIVO, fontWeight: 700, fontSize: 13, color: 'var(--ink)' }}>
-              Registrations reconcile two sources — no double-counting
-            </div>
-            <div style={{ fontSize: 11, color: 'var(--ink-2)', marginTop: 3, lineHeight: 1.5, maxWidth: 640 }}>
-              <b>summer.gt.school</b> (primary) is merged with the standalone <b>registration form</b>;
-              records are deduplicated on the household identity key before any count is shown
-              {isLive && (
-                <>
-                  {' '}— <b>{dupMerged}</b> duplicate {dupMerged === 1 ? 'appearance' : 'appearances'} folded across both sources
-                  {conflicts > 0 && (
-                    <>
-                      , <b style={{ color: 'var(--warn)' }}>{conflicts}</b> held for review
-                    </>
-                  )}
-                </>
-              )}
-              . Summer Camp is a <b>separate P&amp;L</b> — it does <b>not</b> roll into the $365K marketing budget.
-            </div>
-          </div>
-          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 6 }}>
-            <span
-              style={{
-                fontFamily: MONO,
-                fontSize: 9.5,
-                fontWeight: 600,
-                padding: '4px 10px',
-                background: conflicts > 0 ? 'var(--warn-soft)' : 'var(--ok-soft)',
-                color: conflicts > 0 ? 'var(--warn)' : 'var(--ok)',
-              }}
-            >
-              {conflicts > 0
-                ? `⚑ RECONCILED · ${conflicts} TO REVIEW`
-                : `✓ RECONCILED · ${dupMerged} MERGED · 0 DUPLICATES`}
-            </span>
-            <span style={{ fontFamily: MONO, fontSize: 8.5, color: 'var(--ink-3)' }}>
-              summer.gt.school ⊕ reg form → {uniqueReg} unique
-            </span>
-          </div>
-        </div>
-
-        {/* Overview stat grid */}
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 12, marginBottom: 14 }}>
-          {stats.map((s) => (
-            <div
-              key={s.label}
-              style={{
-                border: `1px solid ${s.hero ? 'var(--ink)' : 'var(--line-2)'}`,
-                background: s.hero ? 'var(--card-2)' : 'var(--card)',
-                padding: 13,
-              }}
-            >
-              <div
-                style={{
-                  fontFamily: MONO,
-                  fontSize: 9,
-                  letterSpacing: '.4px',
-                  color: s.hero ? 'var(--ink)' : 'var(--ink-3)',
-                  fontWeight: s.hero ? 600 : 400,
-                }}
-              >
-                {s.label}
-              </div>
-              <div style={{ fontFamily: s.hero ? ARCHIVO : MONO, fontWeight: s.hero ? 700 : 600, fontSize: s.hero ? 27 : 22, color: s.valueColor, marginTop: 5, lineHeight: 1.05 }}>
-                {s.value}
-                {s.valueSub && <span style={{ fontFamily: MONO, fontSize: 11, color: 'var(--ink-3)', fontWeight: 400 }}> {s.valueSub}</span>}
-              </div>
-              <div style={{ fontSize: 10, color: 'var(--ink-2)', marginTop: 2 }}>{s.note}</div>
-            </div>
-          ))}
-          {/* No paid-acquisition note rides the trailing grid cell */}
-          <div
-            style={{
-              border: '1px dashed var(--line-2)',
-              background: 'var(--paper)',
-              padding: 13,
-              display: 'flex',
-              flexDirection: 'column',
-              justifyContent: 'center',
-            }}
-          >
-            <div style={{ fontFamily: MONO, fontSize: 9, letterSpacing: '.4px', color: 'var(--ink-3)', fontWeight: 600 }}>
-              ⏸ NO PAID-ACQUISITION VIEW
-            </div>
-            <div style={{ fontSize: 10, color: 'var(--ink-2)', marginTop: 4, lineHeight: 1.4 }}>
-              Ads are paused for camp — growth is organic + referral only.
-            </div>
-          </div>
-        </div>
-
-        {/* Registration funnel */}
-        <div style={{ border: '1px solid var(--line-2)', background: 'var(--card)', marginBottom: 14 }}>
-          <div
-            style={{
-              display: 'flex',
-              justifyContent: 'space-between',
-              alignItems: 'center',
-              padding: '10px 16px',
-              borderBottom: '2px solid var(--ink)',
-            }}
-          >
-            <div style={{ fontFamily: ARCHIVO, fontWeight: 700, fontSize: 13, color: 'var(--ink)' }}>Registration funnel</div>
-            <span style={{ fontFamily: MONO, fontSize: 8, color: 'var(--ink-3)' }}>
-              sliceable by campus / age group · Lead → Registered → Paid → Attended
-            </span>
-          </div>
-          <div style={{ padding: '14px 16px', display: 'grid', gap: 9 }}>
-            {funnel.map((s) => {
-              const pct = Math.round((s.count / funnelMax) * 100);
-              return (
-                <div key={s.stage} style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-                  <div style={{ width: 138, fontSize: 11.5, color: 'var(--ink)', fontWeight: 500 }}>{s.stage}</div>
-                  <div style={{ flex: 1, height: 22, background: 'var(--card-2)', position: 'relative', overflow: 'hidden' }}>
-                    <div style={{ width: `${Math.max(pct, 2)}%`, height: '100%', background: s.color, opacity: 0.85 }} />
-                  </div>
-                  <div style={{ width: 56, textAlign: 'right', fontFamily: MONO, fontSize: 12, fontWeight: 600, color: 'var(--ink)' }}>
-                    {s.count}
-                  </div>
-                  <div
-                    style={{
-                      width: 56,
-                      textAlign: 'right',
-                      fontFamily: MONO,
-                      fontSize: 10,
-                      color: s.drop.indexOf('−') === 0 ? 'var(--warn)' : 'var(--ink-3)',
-                    }}
-                  >
-                    {s.drop}
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-          <div style={{ padding: '0 16px 12px', fontFamily: MONO, fontSize: 8.5, color: 'var(--ink-3)' }}>
-            Drop-off shown per stage · Attended fills as sessions run.
-          </div>
-        </div>
-
-        {/* Sessions — four campus cards */}
-        <div
-          style={{
-            display: 'flex',
-            justifyContent: 'space-between',
-            alignItems: 'baseline',
-            borderBottom: '1px solid var(--line)',
-            paddingBottom: 8,
-            marginBottom: 12,
-          }}
-        >
-          <div style={{ fontFamily: ARCHIVO, fontWeight: 700, fontSize: 14, color: 'var(--ink)' }}>Sessions</div>
-          <span style={{ fontFamily: MONO, fontSize: 9, color: 'var(--ink-3)' }}>
-            3 campuses · 2-week · 1 campus · 1-week — sums to {agg.registered} reg / {agg.capacity} seats
-          </span>
-        </div>
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 12 }}>
-          {campuses.map((c) => (
-            <CampusCard key={c.name} c={c} />
-          ))}
-        </div>
-      </section>
+      <TabBar tabs={def.tabs} active={tab} onChange={setTab} />
+      {toast && <ToastBar toast={toast} onClose={() => setToast(null)} />}
+      {tab === 0 && <OverviewTab data={data} isLive={isLive} content={cnt} />}
+      {tab === 1 && <FunnelTab base={data} role={session.role} baseLive={isLive} />}
+      {tab === 2 && <ContentTab content={cnt} live={contentLive} />}
+      {tab === 3 && (
+        <SessionsTab data={data} isLive={isLive} role={session.role} session={session} notify={notify} />
+      )}
     </>
   );
 }
 
-// ---- Stat builder ----------------------------------------------------------
-// Dynamic stats are SUMMED from the reconciled per-campus rollup (live or seed) so
-// they can never disagree with the campus cards; the rest are static demo context.
-function buildStats(
-  agg: { capacity: number; registered: number; paid: number; waitlist: number },
-  revenueUsd: number,
-  revenueTarget: number,
-  revenuePct: number,
-): Stat[] {
-  const capPct = agg.capacity > 0 ? Math.round((agg.registered / agg.capacity) * 100) : 0;
-  const paidPct = agg.registered > 0 ? Math.round((agg.paid / agg.registered) * 100) : 0;
-  return [
+// ============================ 4a Overview ====================================
+function OverviewTab({ data, isLive, content }: { data: SummerReconcile; isLive: boolean; content: SummerContent }) {
+  const t = data.totals;
+  const capPct = t.capacity > 0 ? Math.round((t.registered / t.capacity) * 100) : 0;
+  const paidPct = t.registered > 0 ? Math.round((t.paid / t.registered) * 100) : 0;
+
+  const dupMerged = data.dedup?.duplicates_merged ?? 0;
+  const conflicts = data.dedup?.conflicts?.length ?? 0;
+  const uniqueReg = data.dedup?.unique_registrations ?? t.registered;
+
+  // Top signup channel — live top of registration_channels (never hardcoded).
+  const topCh = (data.registration_channels ?? [])[0];
+
+  // Earliest scheduled session → the "days to camp start" context line.
+  const firstSession = [...(data.sessions ?? [])].sort((a, b) => a.starts_on.localeCompare(b.starts_on))[0];
+  const firstCampuses = (data.sessions ?? [])
+    .filter((s) => firstSession && s.starts_on === firstSession.starts_on)
+    .map((s) => s.campus)
+    .join(' & ');
+
+  // Camp content shipped this week — Scheduled + Live camp-tagged rows.
+  const shipped = (content.rows ?? []).filter((r) => r.stage === 'Scheduled' || r.stage === 'Live').length;
+
+  // Revenue + honest basis label.
+  const rev = data.revenue;
+  const basis = revenueBasisLabel(rev?.basis ?? '');
+
+  // Waitlist / overflow across sessions.
+  const waitTotal = (data.waitlist ?? []).reduce((a, w) => a + (w.waitlisted ?? 0), 0);
+
+  const stats: Stat[] = [
     {
       label: 'CAPACITY SOLD',
       value: `${capPct}%`,
-      valueSub: `${agg.registered} / ${agg.capacity} seats`,
+      valueSub: `${t.registered} / ${t.capacity} seats`,
       valueColor: 'var(--ink)',
       note: 'across 4 campuses · reconciled',
       hero: true,
+      bar: capPct,
     },
-    { label: 'REGISTRATIONS THIS WEEK', value: '34', valueColor: 'var(--ink)', note: '+11 vs prior week' },
-    { label: 'REGISTERED → PAID', value: `${paidPct}%`, valueColor: 'var(--ok)', note: `${agg.paid} paid of ${agg.registered} registered` },
-    { label: 'DAYS TO CAMP START', value: '38', valueColor: 'var(--ink)', note: 'first session · Austin' },
-    { label: 'TOP SIGNUP CHANNEL', value: 'Organic', valueColor: 'var(--ink)', note: 'summer.gt.school direct · 41%' },
+    {
+      label: 'REGISTRATIONS THIS WEEK',
+      value: String(data.registrations_this_week ?? 0),
+      valueColor: 'var(--ink)',
+      note: 'new registrations · last 7 days',
+    },
+    {
+      label: 'REGISTERED → PAID',
+      value: `${paidPct}%`,
+      valueColor: 'var(--ok)',
+      note: `${t.paid} paid of ${t.registered} registered`,
+    },
+    {
+      label: 'DAYS TO CAMP START',
+      value: String(data.days_to_camp_start ?? 0),
+      valueColor: 'var(--ink)',
+      note: firstSession ? `first session ${fmtSessionDate(firstSession.starts_on)} · ${firstCampuses}` : 'first session',
+    },
+    {
+      label: 'TOP SIGNUP CHANNEL',
+      value: topCh ? regChannelLabel(topCh.channel) : '—',
+      valueColor: topCh ? regChannelColor(topCh.channel) : 'var(--ink-3)',
+      note: topCh ? `${topCh.pct}% of registrations · organic` : 'no channel data',
+    },
+    {
+      label: 'CAMP CONTENT SHIPPED',
+      value: String(shipped),
+      valueColor: 'var(--ink)',
+      note: 'scheduled / live · camp-tagged → Module 3',
+    },
     {
       label: 'REVENUE',
-      value: `$${Math.round(revenueUsd / 1000)}K`,
-      valueSub: `/ $${Math.round(revenueTarget / 1000)}K target`,
+      value: `$${Math.round((rev?.revenue_usd ?? 0) / 1000)}K`,
+      valueSub: `/ $${Math.round((rev?.target_usd ?? 0) / 1000)}K target`,
       valueColor: 'var(--ink)',
-      note: `${revenuePct}% to target · separate P&L`,
+      note: `${rev?.pct_to_target ?? 0}% to target · ${basis.label}`,
     },
-    { label: 'WAITLIST / OVERFLOW', value: `${agg.waitlist}`, valueColor: agg.waitlist > 0 ? 'var(--warn)' : 'var(--ink-3)', note: 'across full sessions' },
+    {
+      label: 'WAITLIST / OVERFLOW',
+      value: String(waitTotal),
+      valueColor: waitTotal > 0 ? 'var(--warn)' : 'var(--ink-3)',
+      note: waitTotal > 0 ? 'across full sessions' : 'no overflow yet · seats remain',
+    },
   ];
-}
 
-function pctDrop(prev: number, next: number): string {
-  if (prev <= 0) return '—';
-  return `−${Math.round((1 - next / prev) * 100)}%`;
-}
-
-// ---- Subcomponents ---------------------------------------------------------
-function CampusCard({ c }: { c: Campus }) {
-  const sold = c.capacity > 0 ? Math.round((c.registered / c.capacity) * 100) : 0;
-  const twoWeek = c.duration === '2wk';
   return (
-    <div style={{ border: '1px solid var(--line-2)', background: 'var(--card)' }}>
-      <div style={{ padding: '12px 13px 10px', borderBottom: '1px solid var(--line)' }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}>
-          <span style={{ fontFamily: ARCHIVO, fontWeight: 700, fontSize: 14, color: 'var(--ink)' }}>{c.name}</span>
-          <span
-            style={{
-              fontFamily: MONO,
-              fontSize: 8.5,
-              fontWeight: 600,
-              padding: '2px 7px',
-              background: twoWeek ? 'var(--gold-soft)' : 'var(--accent-soft)',
-              color: twoWeek ? 'var(--gold)' : 'var(--ink-2)',
-            }}
-          >
-            {twoWeek ? '2-WEEK' : '1-WEEK'}
+    <section className="scr" style={{ padding: '20px 22px 40px' }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
+        <span style={{ fontFamily: MONO, fontSize: 9, letterSpacing: '.5px', color: 'var(--ink-3)', fontWeight: 600 }}>
+          SUMMER CAMP · SEPARATE P&amp;L
+        </span>
+        <StatusPill live={isLive} />
+      </div>
+
+      {/* Dual-source reconciliation banner */}
+      <div style={{ border: '1px solid var(--ink)', background: 'var(--card)', padding: '13px 16px', marginBottom: 14, display: 'flex', alignItems: 'center', gap: 16, flexWrap: 'wrap' }}>
+        <div style={{ flex: 1, minWidth: 320 }}>
+          <div style={{ fontFamily: ARCHIVO, fontWeight: 700, fontSize: 13, color: 'var(--ink)' }}>
+            Registrations reconcile two sources — no double-counting
+          </div>
+          <div style={{ fontSize: 11, color: 'var(--ink-2)', marginTop: 3, lineHeight: 1.5, maxWidth: 660 }}>
+            <b>summer.gt.school</b> (primary) is merged with the standalone <b>registration form</b>; records are
+            deduplicated on the household identity key before any count is shown
+            {isLive && (
+              <>
+                {' '}— <b>{dupMerged}</b> duplicate {dupMerged === 1 ? 'appearance' : 'appearances'} folded across both sources
+                {conflicts > 0 && (
+                  <>
+                    , <b style={{ color: 'var(--warn)' }}>{conflicts}</b> held for review
+                  </>
+                )}
+              </>
+            )}
+            . Summer Camp is a <b>separate P&amp;L</b> — it does <b>not</b> roll into the $365K marketing budget.
+          </div>
+        </div>
+        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 6 }}>
+          <span style={{ fontFamily: MONO, fontSize: 9.5, fontWeight: 600, padding: '4px 10px', background: conflicts > 0 ? 'var(--warn-soft)' : 'var(--ok-soft)', color: conflicts > 0 ? 'var(--warn)' : 'var(--ok)' }}>
+            {conflicts > 0 ? `⚑ RECONCILED · ${conflicts} TO REVIEW` : `✓ RECONCILED · ${dupMerged} MERGED · 0 DUPLICATES`}
+          </span>
+          <span style={{ fontFamily: MONO, fontSize: 8.5, color: 'var(--ink-3)' }}>
+            summer.gt.school ⊕ reg form → {uniqueReg} unique
           </span>
         </div>
-        <div style={{ fontSize: 10, color: 'var(--ink-3)', marginTop: 2 }}>{c.city}</div>
-        <div style={{ fontFamily: MONO, fontSize: 9.5, color: 'var(--ink-2)', marginTop: 4 }}>{c.dates}</div>
+      </div>
+
+      {/* Stat grid (all live) */}
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 12, marginBottom: 14 }}>
+        {stats.map((s) => (
+          <StatCard key={s.label} s={s} />
+        ))}
+        {/* No paid-acquisition note rides the trailing grid cell */}
+        <div style={{ border: '1px dashed var(--line-2)', background: 'var(--paper)', padding: 13, display: 'flex', flexDirection: 'column', justifyContent: 'center' }}>
+          <div style={{ fontFamily: MONO, fontSize: 9, letterSpacing: '.4px', color: 'var(--ink-3)', fontWeight: 600 }}>
+            ⏸ NO PAID-ACQUISITION VIEW
+          </div>
+          <div style={{ fontSize: 10, color: 'var(--ink-2)', marginTop: 4, lineHeight: 1.4 }}>
+            Ads are paused for camp — growth is organic + referral only.
+          </div>
+        </div>
+      </div>
+
+      <div style={{ fontFamily: MONO, fontSize: 9, color: 'var(--ink-3)', lineHeight: 1.6 }}>
+        ⌖ Every number above is summed from the live dual-source reconcile (each registrant counted once). Revenue
+        basis is surfaced honestly — <b>{basis.label}</b>{basis.live ? '' : ' (not yet Stripe-collected)'}. The funnel,
+        sessions and camp content live in the tabs above.
+      </div>
+    </section>
+  );
+}
+
+interface Stat {
+  label: string;
+  value: string;
+  valueSub?: string;
+  valueColor: string;
+  note: string;
+  hero?: boolean;
+  bar?: number; // optional 0..100 capacity bar
+}
+function StatCard({ s }: { s: Stat }) {
+  return (
+    <div style={{ border: `1px solid ${s.hero ? 'var(--ink)' : 'var(--line-2)'}`, background: s.hero ? 'var(--card-2)' : 'var(--card)', padding: 13 }}>
+      <div style={{ fontFamily: MONO, fontSize: 9, letterSpacing: '.4px', color: s.hero ? 'var(--ink)' : 'var(--ink-3)', fontWeight: s.hero ? 600 : 400 }}>
+        {s.label}
+      </div>
+      <div style={{ fontFamily: s.hero ? ARCHIVO : MONO, fontWeight: s.hero ? 700 : 600, fontSize: s.hero ? 27 : 22, color: s.valueColor, marginTop: 5, lineHeight: 1.05 }}>
+        {s.value}
+        {s.valueSub && <span style={{ fontFamily: MONO, fontSize: 11, color: 'var(--ink-3)', fontWeight: 400 }}> {s.valueSub}</span>}
+      </div>
+      {typeof s.bar === 'number' && (
+        <div style={{ height: 5, background: 'var(--card)', border: '1px solid var(--line)', marginTop: 7, overflow: 'hidden' }}>
+          <div style={{ width: `${Math.min(s.bar, 100)}%`, height: '100%', background: 'var(--gold)', opacity: 0.9 }} />
+        </div>
+      )}
+      <div style={{ fontSize: 10, color: 'var(--ink-2)', marginTop: s.bar !== undefined ? 5 : 2 }}>{s.note}</div>
+    </div>
+  );
+}
+
+// ====================== 4b Registration funnel ===============================
+const STAGE_COLOR: Record<string, string> = {
+  Lead: 'var(--ink-3)',
+  Registered: 'var(--gold)',
+  Paid: 'var(--ok)',
+  Attended: 'var(--signal)',
+};
+
+function FunnelTab({ base, role, baseLive }: { base: SummerReconcile; role: Role; baseLive: boolean }) {
+  const [campus, setCampus] = useState('');
+  const [gradeBand, setGradeBand] = useState('');
+  const [source, setSource] = useState('');
+  const [data, setData] = useState<SummerReconcile>(base);
+  const [loading, setLoading] = useState(false);
+
+  const campusOptions = (base.per_campus ?? []).map((c) => c.campus);
+  const sliced = !!(campus || gradeBand || source);
+
+  // Re-fetch /summer/reconcile with the active slice (each param ANDs the previous).
+  useEffect(() => {
+    let active = true;
+    const params = new URLSearchParams();
+    if (campus) params.set('campus', campus);
+    if (gradeBand) params.set('grade_band', gradeBand);
+    if (source) params.set('source', source);
+    const qs = params.toString();
+    if (!qs) {
+      setData(base);
+      return;
+    }
+    setLoading(true);
+    apiGet<SummerReconcile>(`/summer/reconcile?${qs}`, role).then((res) => {
+      if (!active) return;
+      if (res && Array.isArray(res.funnel)) setData(res);
+      setLoading(false);
+    });
+    return () => {
+      active = false;
+    };
+  }, [campus, gradeBand, source, role, base]);
+
+  const funnel: FunnelStageRow[] = data.funnel ?? [];
+  const funnelMax = Math.max(1, ...funnel.map((s) => s.count));
+  const t = data.totals;
+  const reset = () => {
+    setCampus('');
+    setGradeBand('');
+    setSource('');
+  };
+
+  return (
+    <section className="scr" style={{ padding: '20px 22px 40px' }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
+        <span style={{ fontFamily: MONO, fontSize: 9, letterSpacing: '.5px', color: 'var(--ink-3)', fontWeight: 600 }}>
+          LEAD → REGISTERED → PAID → ATTENDED
+        </span>
+        <StatusPill live={baseLive} />
+      </div>
+
+      {/* Slicers */}
+      <div style={{ border: '1px solid var(--line-2)', background: 'var(--card)', padding: '12px 16px', marginBottom: 14, display: 'flex', alignItems: 'flex-end', gap: 14, flexWrap: 'wrap' }}>
+        <Slicer label="CAMPUS" value={campus} onChange={setCampus} options={[{ value: '', label: 'All campuses' }, ...campusOptions.map((c) => ({ value: c, label: c }))]} />
+        <Slicer label="GRADE BAND" value={gradeBand} onChange={setGradeBand} options={[{ value: '', label: 'All grades' }, ...GRADE_BANDS.map((g) => ({ value: g, label: `Grades ${g}` }))]} />
+        <Slicer label="SOURCE" value={source} onChange={setSource} options={[{ value: '', label: 'Both sources' }, ...SOURCE_OPTIONS]} />
+        {sliced && (
+          <button onClick={reset} style={{ fontFamily: MONO, fontSize: 9.5, fontWeight: 600, cursor: 'pointer', border: '1px solid var(--line-2)', background: 'var(--card-2)', color: 'var(--ink-2)', padding: '7px 12px' }}>
+            ✕ CLEAR SLICE
+          </button>
+        )}
+        <span style={{ marginLeft: 'auto', fontFamily: MONO, fontSize: 9, color: loading ? 'var(--gold)' : 'var(--ink-3)' }}>
+          {loading ? 'slicing…' : sliced ? 're-fetched /summer/reconcile' : 'showing all registrations'}
+        </span>
+      </div>
+
+      {/* Funnel */}
+      <div style={{ border: '1px solid var(--line-2)', background: 'var(--card)', marginBottom: 14 }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '10px 16px', borderBottom: '2px solid var(--ink)' }}>
+          <div style={{ fontFamily: ARCHIVO, fontWeight: 700, fontSize: 13, color: 'var(--ink)' }}>Registration funnel</div>
+          <span style={{ fontFamily: MONO, fontSize: 8.5, color: 'var(--ink-3)' }}>
+            {sliced ? `slice: ${[campus, gradeBand && `grades ${gradeBand}`, source && SOURCE_OPTIONS.find((o) => o.value === source)?.label].filter(Boolean).join(' · ')}` : 'all registrations'} · {t.registered} reg / {t.paid} paid
+          </span>
+        </div>
+        <div style={{ padding: '16px', display: 'grid', gap: 10 }}>
+          {funnel.map((s) => {
+            const pct = Math.round((s.count / funnelMax) * 100);
+            return (
+              <div key={s.stage}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                  <div style={{ width: 96, fontSize: 12, color: 'var(--ink)', fontWeight: 500 }}>{s.stage}</div>
+                  <div style={{ flex: 1, height: 22, background: 'var(--card-2)', position: 'relative', overflow: 'hidden' }}>
+                    <div style={{ width: `${Math.max(pct, 2)}%`, height: '100%', background: STAGE_COLOR[s.stage] ?? 'var(--gold)', opacity: 0.85 }} />
+                  </div>
+                  <div style={{ width: 50, textAlign: 'right', fontFamily: MONO, fontSize: 13, fontWeight: 600, color: 'var(--ink)' }}>{s.count}</div>
+                  <div style={{ width: 56, textAlign: 'right', fontFamily: MONO, fontSize: 10, color: s.drop_off_pct > 0 ? 'var(--warn)' : 'var(--ink-3)' }}>
+                    {s.drop_off_pct > 0 ? `−${s.drop_off_pct}%` : '—'}
+                  </div>
+                </div>
+                {s.pending && (
+                  <div style={{ marginLeft: 108, marginTop: 3, fontFamily: MONO, fontSize: 8.5, color: 'var(--ink-3)' }}>
+                    {s.stage === 'Lead'
+                      ? '⚑ pending · count ≥ registered (pre-registration is not instrumented yet)'
+                      : s.stage === 'Attended'
+                        ? '⚑ pending · camp runs in August — attendance fills as sessions run'
+                        : '⚑ pending'}
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+        <div style={{ padding: '0 16px 12px', fontFamily: MONO, fontSize: 8.5, color: 'var(--ink-3)', lineHeight: 1.5 }}>
+          Drop-off shown per stage (the % lost entering that stage). Pending stages are labeled honestly — nothing fabricated.
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function Slicer({ label, value, onChange, options }: { label: string; value: string; onChange: (v: string) => void; options: { value: string; label: string }[] }) {
+  return (
+    <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontFamily: MONO, fontSize: 9, letterSpacing: '.4px', color: 'var(--ink-3)', fontWeight: 600 }}>
+      {label}
+      <select value={value} onChange={(e) => onChange(e.target.value)} style={{ fontFamily: 'Geist', fontSize: 12, padding: '7px 8px', border: '1px solid var(--line-2)', background: 'var(--card)', color: 'var(--ink)', borderRadius: 2, minWidth: 150 }}>
+        {options.map((o) => (
+          <option key={o.value} value={o.value}>{o.label}</option>
+        ))}
+      </select>
+    </label>
+  );
+}
+
+// ====================== 4c Content + campaigns ===============================
+function ContentTab({ content, live }: { content: SummerContent; live: boolean }) {
+  const cols = content.columns ?? [];
+  const total = (content.rows ?? []).length;
+  const sync = content.sync;
+
+  return (
+    <section className="scr" style={{ padding: '20px 22px 40px' }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
+        <span style={{ fontFamily: MONO, fontSize: 9, letterSpacing: '.5px', color: 'var(--ink-3)', fontWeight: 600 }}>
+          CAMP-TAGGED CONTENT (utm ^= camp_)
+        </span>
+        <StatusPill live={live} />
+      </div>
+
+      {/* Cross-link note — this content LIVES in Module 3 */}
+      <div style={{ border: '1px dashed var(--line-2)', background: 'var(--card)', padding: '11px 14px', marginBottom: 14, display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+        <span style={{ fontFamily: MONO, fontSize: 9, fontWeight: 600, letterSpacing: '.4px', color: 'var(--ink-3)' }}>↪ CROSS-MODULE</span>
+        <span style={{ flex: 1, fontSize: 11, color: 'var(--ink-2)', lineHeight: 1.5 }}>
+          Camp content lives in <Link href="/content" style={{ color: 'var(--ink)', fontWeight: 600 }}>Module 3 · Content</Link> — this board is a{' '}
+          <b>read-only</b> filter to the {total} camp-tagged piece{total === 1 ? '' : 's'}. Edits happen in the content owner&apos;s pipeline.
+        </span>
+        <span style={{ fontFamily: MONO, fontSize: 8.5, fontWeight: 600, padding: '3px 9px', background: sync?.mode === 'live' ? 'var(--ok-soft)' : 'var(--warn-soft)', color: sync?.mode === 'live' ? 'var(--ok)' : 'var(--warn)' }}>
+          {sync?.mode === 'live' ? '● GOOGLE SHEET · SYNCED' : '○ SIMULATED SEAM'}
+        </span>
+      </div>
+
+      {/* Camp content board (by stage) */}
+      <div style={{ display: 'grid', gridTemplateColumns: `repeat(${cols.length || 1}, 1fr)`, gap: 1, background: 'var(--line)', border: '1px solid var(--line-2)' }}>
+        {cols.map((col) => (
+          <div key={col.stage} style={{ background: 'var(--card-2)', padding: '10px 9px', minHeight: 220 }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 9 }}>
+              <span style={{ fontFamily: MONO, fontSize: 9, fontWeight: 600, letterSpacing: '.3px', color: 'var(--ink-2)' }}>{col.stage}</span>
+              <span style={{ fontFamily: MONO, fontSize: 9, color: 'var(--ink-3)' }}>{col.cards.length}</span>
+            </div>
+            {col.cards.map((c) => {
+              const col2 = channelColor(c.channel);
+              return (
+                <div key={c.title} style={{ border: '1px solid var(--line-2)', background: 'var(--card)', padding: '8px 9px', marginBottom: 7 }}>
+                  <div style={{ fontSize: 10.5, color: 'var(--ink)', fontWeight: 500, lineHeight: 1.3 }}>{c.title}</div>
+                  <div style={{ fontFamily: MONO, fontSize: 8, color: 'var(--ink-3)', marginTop: 5 }}>{c.owner}</div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 5, marginTop: 6, flexWrap: 'wrap' }}>
+                    <span style={{ fontFamily: MONO, fontSize: 8, fontWeight: 600, padding: '2px 6px', background: col2.bg, color: col2.fg }}>{channelLabel(c.channel)}</span>
+                    <span style={{ fontFamily: MONO, fontSize: 8, color: 'var(--ink-2)' }}>{c.type} · {c.target_date}</span>
+                  </div>
+                  {c.utm && (
+                    <div style={{ fontFamily: MONO, fontSize: 7.5, color: 'var(--gold)', marginTop: 5 }}>⛓ {c.utm}</div>
+                  )}
+                </div>
+              );
+            })}
+            {col.cards.length === 0 && (
+              <div style={{ fontFamily: MONO, fontSize: 8.5, color: 'var(--ink-3)', padding: '4px 2px' }}>—</div>
+            )}
+          </div>
+        ))}
+      </div>
+    </section>
+  );
+}
+
+// ============================ 4d Sessions ====================================
+function SessionsTab({
+  data,
+  isLive,
+  role,
+  session,
+  notify,
+}: {
+  data: SummerReconcile;
+  isLive: boolean;
+  role: Role;
+  session: Session;
+  notify: (msg: string, kind: 'ok' | 'err') => void;
+}) {
+  const canEdit = canEditWorkstream(session, 'camp'); // admin always; operator only if owns 'camp' (demo: admin only)
+  const campuses = data.per_campus ?? [];
+  const sessionByCampus: Record<string, SummerSession> = {};
+  for (const s of data.sessions ?? []) sessionByCampus[s.campus] = s;
+  const waitByCampus: Record<string, number> = {};
+  for (const w of data.waitlist ?? []) waitByCampus[w.campus] = w.waitlisted ?? 0;
+
+  const [open, setOpen] = useState<string | null>(null);
+  const agg = campuses.reduce((a, c) => ({ registered: a.registered + c.registered, capacity: a.capacity + c.capacity }), { registered: 0, capacity: 0 });
+
+  return (
+    <section className="scr" style={{ padding: '20px 22px 40px' }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
+        <span style={{ fontFamily: MONO, fontSize: 9, letterSpacing: '.5px', color: 'var(--ink-3)', fontWeight: 600 }}>
+          3× TWO-WEEK · 1× ONE-WEEK — {agg.registered} REG / {agg.capacity} SEATS
+        </span>
+        <StatusPill live={isLive} />
+      </div>
+
+      {/* Owner-gating note */}
+      <div style={{ border: '1px dashed var(--line-2)', background: 'var(--card)', padding: '10px 14px', marginBottom: 14, fontSize: 10.5, color: 'var(--ink-2)', lineHeight: 1.5 }}>
+        {canEdit ? (
+          <>
+            <b style={{ color: 'var(--ink)' }}>You can propose changes.</b> Expand a campus to propose a session/pricing change — it
+            posts to the leadership <Link href="/decision" style={{ color: 'var(--ink)', fontWeight: 600 }}>Decision Queue</Link> (owner-gated).
+          </>
+        ) : (
+          <>
+            Expand a campus for the per-campus rollup. <b>Read-only</b> — only the camp owner (admin) proposes session/pricing
+            changes; leadership decides them in the <Link href="/decision" style={{ color: 'var(--ink)', fontWeight: 600 }}>Decision Queue</Link>.
+          </>
+        )}
+      </div>
+
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 12 }}>
+        {campuses.map((c) => (
+          <CampusCard
+            key={c.campus}
+            c={c}
+            session={sessionByCampus[c.campus]}
+            waitlist={waitByCampus[c.campus] ?? 0}
+            open={open === c.campus}
+            onToggle={() => setOpen(open === c.campus ? null : c.campus)}
+            canEdit={canEdit}
+            role={role}
+            notify={notify}
+          />
+        ))}
+      </div>
+    </section>
+  );
+}
+
+function CampusCard({
+  c,
+  session,
+  waitlist,
+  open,
+  onToggle,
+  canEdit,
+  role,
+  notify,
+}: {
+  c: SummerCampusRow;
+  session?: SummerSession;
+  waitlist: number;
+  open: boolean;
+  onToggle: () => void;
+  canEdit: boolean;
+  role: Role;
+  notify: (msg: string, kind: 'ok' | 'err') => void;
+}) {
+  const sold = c.capacity > 0 ? Math.round((c.registered / c.capacity) * 100) : 0;
+  const twoWeek = session?.duration === '2wk';
+  return (
+    <div style={{ border: '1px solid var(--line-2)', background: 'var(--card)', gridColumn: open ? '1 / -1' : undefined }}>
+      <div style={{ padding: '12px 13px 10px', borderBottom: '1px solid var(--line)' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}>
+          <span style={{ fontFamily: ARCHIVO, fontWeight: 700, fontSize: 14, color: 'var(--ink)' }}>{c.campus}</span>
+          {session && (
+            <span style={{ fontFamily: MONO, fontSize: 8.5, fontWeight: 600, padding: '2px 7px', background: twoWeek ? 'var(--gold-soft)' : 'var(--accent-soft)', color: twoWeek ? 'var(--gold)' : 'var(--ink-2)' }}>
+              {twoWeek ? '2-WEEK' : '1-WEEK'}
+            </span>
+          )}
+        </div>
+        <div style={{ fontSize: 10, color: 'var(--ink-3)', marginTop: 2 }}>{campusCity(c.campus)}</div>
+        <div style={{ fontFamily: MONO, fontSize: 9.5, color: 'var(--ink-2)', marginTop: 4 }}>
+          {session ? fmtSessionRange(session.starts_on, session.ends_on) : '—'}
+        </div>
       </div>
 
       {/* capacity bar */}
@@ -427,57 +613,143 @@ function CampusCard({ c }: { c: Campus }) {
           <span style={{ fontFamily: MONO, fontSize: 11, fontWeight: 600, color: 'var(--ink)' }}>{sold}%</span>
         </div>
         <div style={{ height: 6, background: 'var(--card-2)', overflow: 'hidden' }}>
-          <div style={{ width: `${sold}%`, height: '100%', background: 'var(--gold)', opacity: 0.9 }} />
+          <div style={{ width: `${Math.min(sold, 100)}%`, height: '100%', background: 'var(--gold)', opacity: 0.9 }} />
         </div>
       </div>
 
-      {/* per-campus numbers */}
-      <div style={{ padding: '4px 13px 13px', display: 'grid', gap: 6 }}>
+      <div style={{ padding: '4px 13px 10px', display: 'grid', gap: 6 }}>
         <CardRow label="Capacity" value={c.capacity} />
         <CardRow label="Registered" value={c.registered} valueColor="var(--ink)" strong />
         <CardRow label="Paid" value={c.paid} valueColor="var(--ok)" />
-        <CardRow label="Waitlist" value={c.waitlist} valueColor={c.waitlist > 0 ? 'var(--warn)' : 'var(--ink-3)'} />
+        <CardRow label="Seats remaining" value={c.seats_remaining} valueColor={c.seats_remaining <= 0 ? 'var(--warn)' : 'var(--ink-2)'} />
+        <CardRow label="Waitlist" value={waitlist} valueColor={waitlist > 0 ? 'var(--warn)' : 'var(--ink-3)'} />
       </div>
+
+      {/* drill-in toggle */}
+      <button onClick={onToggle} style={{ width: '100%', fontFamily: MONO, fontSize: 9, fontWeight: 600, letterSpacing: '.4px', cursor: 'pointer', border: 'none', borderTop: '1px solid var(--line)', background: open ? 'var(--card-2)' : 'transparent', color: 'var(--ink-2)', padding: '8px 0' }}>
+        {open ? '▲ CLOSE' : '▼ DRILL IN'}
+      </button>
+
+      {open && (
+        <div style={{ borderTop: '1px solid var(--line)', padding: '14px 16px', display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 18 }}>
+          {/* per-campus rollup + roster placeholder */}
+          <div>
+            <div style={{ fontFamily: MONO, fontSize: 9, fontWeight: 600, letterSpacing: '.4px', color: 'var(--ink-3)', marginBottom: 8 }}>PER-CAMPUS ROLLUP</div>
+            <div style={{ display: 'grid', gap: 6, maxWidth: 320 }}>
+              <CardRow label="Lead (pending instrumentation)" value={c.lead} />
+              <CardRow label="Registered" value={c.registered} valueColor="var(--ink)" strong />
+              <CardRow label="Paid" value={c.paid} valueColor="var(--ok)" />
+              <CardRow label="Pct sold" value={c.pct_sold} suffix="%" />
+            </div>
+            <div style={{ marginTop: 12, border: '1px dashed var(--line-2)', background: 'var(--paper)', padding: '10px 12px' }}>
+              <div style={{ fontFamily: MONO, fontSize: 8.5, fontWeight: 600, letterSpacing: '.3px', color: 'var(--ink-3)' }}>ROSTER · ATTENDANCE</div>
+              <div style={{ fontSize: 10, color: 'var(--ink-2)', marginTop: 4, lineHeight: 1.5 }}>
+                Pending — camp runs in August. No roster or attendance is shown (and <b>no child PII</b> ever lands in the Hub); the
+                attendance funnel fills as sessions run.
+              </div>
+            </div>
+          </div>
+
+          {/* owner-gated propose-change */}
+          <ProposeChange campus={c.campus} canEdit={canEdit} role={role} notify={notify} />
+        </div>
+      )}
     </div>
   );
 }
 
-function CardRow({
-  label,
-  value,
-  valueColor = 'var(--ink-2)',
-  strong = false,
-}: {
-  label: string;
-  value: number;
-  valueColor?: string;
-  strong?: boolean;
-}) {
+function ProposeChange({ campus, canEdit, role, notify }: { campus: string; canEdit: boolean; role: Role; notify: (msg: string, kind: 'ok' | 'err') => void }) {
+  const [changeType, setChangeType] = useState(CHANGE_TYPES[0].value);
+  const [detail, setDetail] = useState('');
+  const [saving, setSaving] = useState(false);
+
+  const submit = async () => {
+    setSaving(true);
+    const res = await apiPost<DecisionResponse>('/summer/session-change', role, {
+      campus,
+      change_type: changeType,
+      detail: detail.trim(),
+    });
+    setSaving(false);
+    if (!res || !res.id) {
+      notify('Could not propose the change — camp-owner (admin) access is required and the backbone must be up.', 'err');
+      return;
+    }
+    notify(`Proposed a ${changeType.replace(/_/g, ' ')} change at ${campus} → open in the Decision Queue.`, 'ok');
+    setDetail('');
+  };
+
   return (
-    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}>
-      <span style={{ fontSize: 11, color: 'var(--ink-2)' }}>{label}</span>
-      <span style={{ fontFamily: MONO, fontSize: 12, fontWeight: strong ? 700 : 600, color: valueColor }}>{value}</span>
+    <div>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+        <span style={{ fontFamily: MONO, fontSize: 9, fontWeight: 600, letterSpacing: '.4px', color: 'var(--ink-3)' }}>PROPOSE SESSION / PRICING CHANGE</span>
+        <span style={{ fontFamily: MONO, fontSize: 8, fontWeight: 600, padding: '2px 7px', background: canEdit ? 'var(--ok-soft)' : 'var(--accent-soft)', color: canEdit ? 'var(--ok)' : 'var(--ink-3)' }}>
+          {canEdit ? 'OWNER · ENABLED' : 'READ-ONLY'}
+        </span>
+      </div>
+      {canEdit ? (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 10, maxWidth: 360 }}>
+          <label style={FIELD_LABEL}>
+            CHANGE TYPE
+            <select value={changeType} onChange={(e) => setChangeType(e.target.value)} style={SELECT}>
+              {CHANGE_TYPES.map((o) => (
+                <option key={o.value} value={o.value}>{o.label}</option>
+              ))}
+            </select>
+          </label>
+          <label style={FIELD_LABEL}>
+            DETAIL (optional)
+            <input value={detail} onChange={(e) => setDetail(e.target.value)} placeholder={`e.g. add a 3rd ${campus} week`} style={INPUT} />
+          </label>
+          <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 10, alignItems: 'center' }}>
+            <Link href="/decision" style={{ fontFamily: MONO, fontSize: 9, color: 'var(--ink-3)' }}>view queue →</Link>
+            <button onClick={submit} disabled={saving} style={{ ...PRIMARY_BTN, opacity: saving ? 0.6 : 1, cursor: saving ? 'default' : 'pointer' }}>
+              {saving ? 'PROPOSING…' : 'PROPOSE CHANGE'}
+            </button>
+          </div>
+        </div>
+      ) : (
+        <div style={{ border: '1px dashed var(--line-2)', background: 'var(--paper)', padding: '12px 14px', fontSize: 10.5, color: 'var(--ink-2)', lineHeight: 1.5, maxWidth: 360 }}>
+          Only the <b>camp owner (admin)</b> can propose a session or pricing change. Leadership reviews and decides any proposal in the{' '}
+          <Link href="/decision" style={{ color: 'var(--ink)', fontWeight: 600 }}>Decision Queue</Link>.
+        </div>
+      )}
     </div>
   );
 }
 
-// Green "● LIVE" when the reconciler responded; muted "○ SAMPLE" on seed fallback.
+// ============================ shared bits ====================================
+function CardRow({ label, value, valueColor = 'var(--ink-2)', strong = false, suffix = '' }: { label: string; value: number; valueColor?: string; strong?: boolean; suffix?: string }) {
+  return (
+    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: 10 }}>
+      <span style={{ fontSize: 11, color: 'var(--ink-2)' }}>{label}</span>
+      <span style={{ fontFamily: MONO, fontSize: 12, fontWeight: strong ? 700 : 600, color: valueColor }}>{value}{suffix}</span>
+    </div>
+  );
+}
+
+function ToastBar({ toast, onClose }: { toast: Toast; onClose: () => void }) {
+  const ok = toast.kind === 'ok';
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 12, margin: '12px 22px 0', padding: '10px 14px', background: ok ? 'var(--ok-soft)' : 'var(--signal-soft)', border: `1px solid ${ok ? 'var(--ok)' : 'var(--signal)'}` }}>
+      <span style={{ fontFamily: MONO, fontSize: 9, fontWeight: 600, color: ok ? 'var(--ok)' : 'var(--signal)' }}>{ok ? '✓ DONE' : '⚠ ERROR'}</span>
+      <span style={{ flex: 1, fontSize: 12, color: 'var(--ink)' }}>{toast.msg}</span>
+      {ok && <Link href="/decision" style={{ fontFamily: MONO, fontSize: 10, fontWeight: 600, color: 'var(--ok)' }}>open →</Link>}
+      <button onClick={onClose} aria-label="Dismiss" style={{ border: 'none', background: 'transparent', cursor: 'pointer', fontFamily: MONO, fontSize: 12, color: 'var(--ink-3)' }}>✕</button>
+    </div>
+  );
+}
+
 function StatusPill({ live }: { live: boolean }) {
   return (
-    <span
-      style={{
-        fontFamily: MONO,
-        fontSize: 9,
-        fontWeight: 600,
-        letterSpacing: '.4px',
-        padding: '3px 8px',
-        borderRadius: 2,
-        whiteSpace: 'nowrap',
-        color: live ? 'var(--ok)' : 'var(--ink-3)',
-        background: live ? 'var(--ok-soft)' : 'var(--accent-soft)',
-      }}
-    >
+    <span style={{ fontFamily: MONO, fontSize: 9, fontWeight: 600, letterSpacing: '.4px', padding: '3px 8px', borderRadius: 2, whiteSpace: 'nowrap', color: live ? 'var(--ok)' : 'var(--ink-3)', background: live ? 'var(--ok-soft)' : 'var(--accent-soft)' }}>
       {live ? '● LIVE' : '○ SAMPLE'}
     </span>
   );
 }
+
+// ---- shared style objects ---------------------------------------------------
+const FIELD_LABEL: React.CSSProperties = { display: 'flex', flexDirection: 'column', gap: 4, fontFamily: MONO, fontSize: 9, letterSpacing: '.4px', color: 'var(--ink-3)', fontWeight: 600 };
+const INPUT: React.CSSProperties = { fontFamily: 'Geist', fontSize: 12.5, padding: '7px 10px', border: '1px solid var(--line-2)', background: 'var(--paper)', color: 'var(--ink)', borderRadius: 2 };
+const SELECT: React.CSSProperties = { fontFamily: 'Geist', fontSize: 12.5, padding: '7px 8px', border: '1px solid var(--line-2)', background: 'var(--card)', color: 'var(--ink)', borderRadius: 2 };
+const PRIMARY_BTN: React.CSSProperties = { fontFamily: MONO, fontSize: 10, fontWeight: 600, letterSpacing: '.4px', padding: '8px 16px', border: '1px solid var(--ink)', background: 'var(--ink)', color: 'var(--paper)', borderRadius: 2 };
