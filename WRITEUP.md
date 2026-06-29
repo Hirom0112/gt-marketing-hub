@@ -14,9 +14,9 @@ wired live but default to `simulate`.
 ## 2. Deep vs. stubbed, and why
 
 **The backbone is where I spent the depth** — it's what the brief actually tests, and every Phase-2
-claim rests on it. On top of it I built **eight modules end-to-end** — each persisted to live Supabase
-(migrations `0032`–`0040`, program-scoped RLS), wired across every sub-view tab, with real owner-gated
-writes verified live. The backbone primitives are all real and unit-tested (**1332 passing**):
+claim rests on it. On top of it I built **nine modules end-to-end** — each persisted to live Supabase
+(migrations `0032`–`0041`, program-scoped RLS), wired across every sub-view tab, with real owner-gated
+writes verified live. The backbone primitives are all real and unit-tested (**1351 passing**):
 
 - **Stripe webhook** (`app/api/payments.py` → `core/payments.py:decide_payment_event`): verify HMAC
   on the raw body → dedupe on `event.id` → `FULFILL`/`NOOP`/`ACK` → record payment → advance the
@@ -54,11 +54,16 @@ writes verified live. The backbone primitives are all real and unit-tested (**13
   this portal — surfaced honestly, not faked live); plus SLA tracker, an owner-gated segment builder,
   and **four cross-links** (hot-family→Decision Queue, SMS-objection→Content brief, pipeline+handoff→
   KPI, conversion→Content Performance).
+- **CRM / Marketing Operations** (`/crm/ops/*`, `/seam`) — data-infrastructure health on the Phase-1
+  seam: sync-parity (overall + field-level) driving the always-on **data-confidence banner**, UTM
+  health flagged **permanently broken** (never faked green), field-reliability flags (TEFA/income/source
+  — a documented modeling call), a **live HubSpot lead-score histogram** (aggregate `gt_lead_score`
+  bands, display-only), and a **persisted data-quality queue with auto-detection** (a scan upserts
+  sync-drift + UTM-breakage issues idempotently on a signature) with a leadership lifecycle
+  (acknowledge/prioritize/resolve) + resolution log, and a leader-only scoring-change → Decision Queue.
 
-**Left as honest seed (real shape, labeled):** **CRM Ops** (parity / data-quality / field-reliability
-derivers are real and endpoint-exposed at `/crm/ops`, `/seam`; `CrmModule.tsx` still renders seed),
-**Home, Admissions, Website Analytics** (GA4 stood-in), **Resource Library.** These are
-breadth/aggregation/viz surfaces that don't further test the backbone.
+**Left as honest seed (real shape, labeled):** **Home, Admissions, Website Analytics** (GA4 stood-in),
+**Resource Library.** These are breadth/aggregation/viz surfaces that don't further test the backbone.
 
 ## 3. Key technical trade-offs
 
@@ -99,8 +104,8 @@ breadth/aggregation/viz surfaces that don't further test the backbone.
 
 ## 5. With another week
 
-1. Wire the remaining seed UIs (`CrmModule` → `/crm/ops`, Admissions) to their live endpoints — the
-   backend derivers are done; it's a React data-layer pass, not new logic. Also: widen the Nurture
+1. Wire the remaining seed UIs (Admissions/VoC, Home, Website Analytics) to live endpoints — a React
+   data-layer pass, not new logic. Also: widen the Nurture
    engagement×attribute heatmap's source cohort (today it joins to the 24-row default `app_form`
    sample, so per-cell conversion %s are small-sample-noisy — honest, but a larger seeded cohort
    would make the heatmap read cleanly).
@@ -116,12 +121,13 @@ breadth/aggregation/viz surfaces that don't further test the backbone.
 **Word count: ~900.**
 
 **Verified vs. inferred:** all module/table/function names, the live-vs-seed split, the params
-values, and the **1332-test count** are verified from the source this session. The eight deep modules
+values, and the **1351-test count** are verified from the source this session. The nine deep modules
 were each run against a **live API + live Supabase** (migrations applied, data seeded) and verified
 end-to-end via Playwright across roles — including a real Stripe test-mode payment flow recorded
 through the signed webhook, a real two-way Google Sheets sync, and **live HubSpot aggregate reads**
-(engagement-tier mix + deal-pipeline distribution + handoff read back off the real portal: clicked
-100 / opened 100 / cold 100, interest 61 / apply·enroll·tuition·closed 60 each, 120 handoffs). The
-remaining modules (CRM Ops, Home, Admissions, Website, Resource Library) render seed and are labeled
+(engagement-tier mix + deal-pipeline distribution + handoff + the CRM-Ops lead-score histogram read
+back off the real portal: clicked 100 / opened 100 / cold 100, interest 61 / apply·enroll·tuition·closed
+60 each, 120 handoffs, lead-score bands 36/68/65/65/66). The
+remaining modules (Home, Admissions, Website, Resource Library) render seed and are labeled
 as such. The stage-SoT "ratified tension" is my call, recorded in the decisions log, not a spec
 instruction.
