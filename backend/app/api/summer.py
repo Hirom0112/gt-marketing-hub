@@ -25,14 +25,15 @@ human review, never silently merged (INV-4).
       via the SAME ``flag_decision`` feeder grassroots/budget use.
 
 This module is a composition root (it may import ``app.core`` / ``app.data`` /
-``app.api``); the core stays pure (INV-2). Revenue stays the synthetic ``paid × price``
-model for this phase — Stripe/payments are a SEPARATE later slice.
+``app.api``); the core stays pure (INV-2). Revenue reads the Stripe camp-payment ledger
+(0038) when it has succeeded charges (``basis == "stripe_collected"``), falling back to
+the honest synthetic ``paid × price`` estimate otherwise.
 """
 
 from __future__ import annotations
 
 from datetime import UTC, date, datetime
-from typing import Annotated
+from typing import Annotated, Any
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -181,15 +182,30 @@ class DedupSummary(BaseModel):
 
 
 class RevenueSummary(BaseModel):
-    """Paid-registration revenue against the season target (synthetic for this phase)."""
+    """Camp revenue against the season target.
+
+    When the Stripe camp-payment ledger has ≥1 succeeded charge, ``revenue_usd`` is the
+    REAL collected revenue (``basis == "stripe_collected"``, ``collected_count`` charges,
+    ``revenue_by_campus`` the per-campus split); otherwise it falls back to the honest
+    synthetic ``paid × price`` estimate (``basis == "synthetic_paid_times_price"``).
+    ``revenue_per_registered_usd`` is ``revenue_usd / registered`` (the yield per
+    registered family).
+    """
 
     paid_registrations: int
     price_per_seat_usd: int
     revenue_usd: int
     target_usd: int
     pct_to_target: float
-    # Honesty: this phase models revenue as paid × price (no Stripe yet — a later slice).
+    # Either "stripe_collected" (the camp ledger has succeeded charges) or the honest
+    # "synthetic_paid_times_price" fallback (no Stripe charges collected yet).
     basis: str = "synthetic_paid_times_price"
+    # Number of succeeded camp charges behind ``revenue_usd`` (0 in the synthetic fallback).
+    collected_count: int = 0
+    # Per-campus revenue (USD) — the collected split when stripe_collected, else paid×price.
+    revenue_by_campus: dict[str, int] = {}
+    # Revenue per registered family (USD) = revenue_usd / total registered.
+    revenue_per_registered_usd: float = 0.0
 
 
 class ChannelRow(BaseModel):
@@ -284,12 +300,32 @@ def _to_response(
     *,
     price_per_seat_usd: int,
     revenue_target_usd: int,
+    collected: dict[str, Any],
     now: datetime,
     window_days: int,
     applied: AppliedFilters,
 ) -> SummerReconcileResponse:
-    """Project the pure reconcile result + Phase-1 dimensions onto the wire shape."""
-    revenue_usd = result.total_paid * price_per_seat_usd
+    """Project the pure reconcile result + Phase-1 dimensions onto the wire shape.
+
+    Revenue reads the Stripe camp-payment ledger (``collected``): with ≥1 succeeded
+    charge it reports REAL collected revenue (``basis == "stripe_collected"``); else it
+    falls back to the honest synthetic ``paid × price`` estimate.
+    """
+    if collected["count"] > 0:
+        revenue_usd = collected["total_cents"] // 100
+        revenue_basis = "stripe_collected"
+        revenue_by_campus = {
+            campus: cents // 100 for campus, cents in collected["by_campus"].items()
+        }
+        collected_count = int(collected["count"])
+    else:
+        revenue_usd = result.total_paid * price_per_seat_usd
+        revenue_basis = "synthetic_paid_times_price"
+        revenue_by_campus = {c.campus: c.paid * price_per_seat_usd for c in result.per_campus}
+        collected_count = 0
+    revenue_per_registered_usd = (
+        round(revenue_usd / result.total_registered, 2) if result.total_registered else 0.0
+    )
     attended = sum(1 for r in core_rows if r.attended)  # 0 in this phase (camp is future)
     earliest_start = min((s.starts_on for s in sessions), default=None)
     countdown = days_until(earliest_start, now=now.date()) if earliest_start is not None else None
@@ -336,6 +372,10 @@ def _to_response(
             pct_to_target=round(revenue_usd / revenue_target_usd * 100, 1)
             if revenue_target_usd
             else 0.0,
+            basis=revenue_basis,
+            collected_count=collected_count,
+            revenue_by_campus=revenue_by_campus,
+            revenue_per_registered_usd=revenue_per_registered_usd,
         ),
         registration_channels=[
             ChannelRow(channel=c.channel, count=c.count, pct=c.pct)
@@ -409,6 +449,11 @@ def get_summer_reconcile(
     if campus:
         sessions = [s for s in sessions if s.campus == campus]
 
+    # Real collected camp revenue from the Stripe camp-payment ledger (0038). Empty ⇒
+    # the synthetic paid × price fallback (handled in _to_response). This is the SEASON
+    # collected total (program-scoped); it is not narrowed by the campus VIEW filter.
+    collected = store.collected_revenue(CAMP_PROGRAM)
+
     now = datetime.now(UTC)
     return _to_response(
         reconcile(core_rows, capacities),
@@ -416,6 +461,7 @@ def get_summer_reconcile(
         sessions,
         price_per_seat_usd=params.summer_camp.price_per_seat_usd,
         revenue_target_usd=params.summer_camp.revenue_target_usd,
+        collected=collected,
         now=now,
         window_days=params.summer_camp.registration_window_days,
         applied=AppliedFilters(campus=campus, grade_band=grade_band, source=source),

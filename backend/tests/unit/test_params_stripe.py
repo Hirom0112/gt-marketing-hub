@@ -28,7 +28,10 @@ def test_stripe_block_loads() -> None:
     assert isinstance(stripe, Stripe)
     assert stripe.calls_per_run_cap == 50
     assert stripe.tolerance_seconds == 300  # Stripe default 5-min signature tolerance
-    assert stripe.fulfill_event_types == ["checkout.session.completed"]
+    assert stripe.fulfill_event_types == [
+        "checkout.session.completed",
+        "payment_intent.succeeded",
+    ]
 
     # Drift guard: a non-positive call cap is rejected.
     with pytest.raises(ValidationError):

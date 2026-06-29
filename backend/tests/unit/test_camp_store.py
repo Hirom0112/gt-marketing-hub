@@ -218,3 +218,55 @@ def test_grade_band_slice_filters_rows(store: InMemoryCampStore, params: Params)
     result = reconcile(core, _capacities(params))
     # The K-2 slice is a strict, non-empty subset of the full 288.
     assert 0 < result.total_registered < 288
+
+
+# ----------------------------------------------------------------- camp payments (0038)
+def test_record_camp_payment_is_idempotent_and_rolls_up_collected_revenue() -> None:
+    """The camp payment ledger upserts on payment_id and sums succeeded charges."""
+    s = InMemoryCampStore()  # a clean store needs no params (no seed for the ledger)
+    s.record_camp_payment(
+        _PROGRAM,
+        payment_id="pi_1",
+        campus="Austin",
+        amount_cents=97500,
+        currency="usd",
+        status="succeeded",
+        stripe_event_id="evt_1",
+    )
+    # Re-recording the SAME PaymentIntent merges (no double-count) — at-least-once safe.
+    s.record_camp_payment(
+        _PROGRAM,
+        payment_id="pi_1",
+        campus="Austin",
+        amount_cents=97500,
+        currency="usd",
+        status="succeeded",
+        stripe_event_id="evt_1",
+    )
+    s.record_camp_payment(
+        _PROGRAM,
+        payment_id="pi_2",
+        campus="Dallas",
+        amount_cents=97500,
+        currency="usd",
+        status="succeeded",
+        stripe_event_id="evt_2",
+    )
+    # A non-succeeded charge is excluded from collected revenue.
+    s.record_camp_payment(
+        _PROGRAM,
+        payment_id="pi_3",
+        campus="Austin",
+        amount_cents=97500,
+        currency="usd",
+        status="requires_payment_method",
+        stripe_event_id="evt_3",
+    )
+
+    assert len(s.list_camp_payments(_PROGRAM)) == 3  # pi_1 stored once, pi_2, pi_3
+    collected = s.collected_revenue(_PROGRAM)
+    assert collected == {
+        "total_cents": 195000,
+        "by_campus": {"Austin": 97500, "Dallas": 97500},
+        "count": 2,
+    }

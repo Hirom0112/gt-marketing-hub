@@ -413,6 +413,7 @@ stripe:                     # A3 — Stripe payments seam tunables (RESEARCH_v2 
   tolerance_seconds: 300            # Stripe default 5-min signature tolerance (RESEARCH_v2 II.2)
   fulfill_event_types:              # Stripe event types that trigger fulfillment
     - checkout.session.completed
+    - payment_intent.succeeded      # Summer Camp charges fulfill on the succeeded PaymentIntent (camp-revenue slice)
 
 security:                   # M7 — detection thresholds for the edge middleware (MULTI_AGENT_COCKPIT §7; INV-11). DETECTION, not inline blocking.
   oversized_result_rows: 200        # a list response at/above this many rows ⇒ oversized_result (API4:2023 Unrestricted Resource Consumption)

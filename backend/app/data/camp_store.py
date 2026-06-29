@@ -48,6 +48,11 @@ _REST = "/rest/v1"
 _REGISTRATION_TABLE = f"{_REST}/camp_registration"
 _CAMPUS_TABLE = f"{_REST}/campus"
 _SESSION_TABLE = f"{_REST}/camp_session"
+_PAYMENT_TABLE = f"{_REST}/camp_payment"
+
+# The Stripe PI status a CHARGE that actually collected revenue carries. Only succeeded
+# payments roll into collected revenue (a fixed Stripe wire token, INV-11 carve-out).
+_SUCCEEDED_STATUS = "succeeded"
 
 # ----------------------------------------------------------------------------- #
 # Deterministic demo seed (Module 4). PII-free (INV-1) + clock/random-free: ids are
@@ -177,6 +182,33 @@ class CampSession:
     status: str
 
 
+@dataclass(frozen=True)
+class CampPayment:
+    """One fulfilled camp PaymentIntent — the collected-revenue grain (0038).
+
+    The Stripe webhook appends one of these per camp PaymentIntent it fulfills
+    (``metadata.program == 'summer_camp'``). IDEMPOTENT on ``payment_id`` (the Stripe
+    PI id): the same PI recorded twice (Stripe's at-least-once redelivery) merges, never
+    double-counts. INV-1/INV-6: NO PII — the PI id, an aggregate campus label, the amount
+    (minor units), currency, status, and the source Stripe event id only.
+
+    Attributes:
+        payment_id: The Stripe PaymentIntent id (``pi_…``) — the idempotency key.
+        campus: The aggregate campus label (from the PI's ``metadata.campus``).
+        amount_cents: The charge amount in the currency's minor unit.
+        currency: The ISO currency code (e.g. ``"usd"``).
+        status: The PI status (``"succeeded"`` for a collected charge).
+        stripe_event_id: The source Stripe ``event.id`` (``evt_…``) for the audit trail.
+    """
+
+    payment_id: str
+    campus: str
+    amount_cents: int
+    currency: str
+    status: str
+    stripe_event_id: str
+
+
 class CampStore(ABC):
     """Read/write seam over the Module-4 Summer Camp state (0032 + 0037).
 
@@ -253,6 +285,52 @@ class CampStore(ABC):
         """Insert or update one camp session (keyed by ``session_id``); return it."""
         raise NotImplementedError
 
+    # ----------------------------------------------------------------- payments
+    @abstractmethod
+    def record_camp_payment(
+        self,
+        program: Program,
+        *,
+        payment_id: str,
+        campus: str,
+        amount_cents: int,
+        currency: str,
+        status: str,
+        stripe_event_id: str,
+    ) -> CampPayment:
+        """IDEMPOTENT upsert of one fulfilled camp PaymentIntent (keyed by ``payment_id``).
+
+        Recording the SAME PaymentIntent twice (Stripe's at-least-once redelivery) must
+        NOT double-count — the upsert merges on ``payment_id``. Returns the stored row.
+        """
+        raise NotImplementedError
+
+    @abstractmethod
+    def list_camp_payments(self, program: Program) -> list[CampPayment]:
+        """ALL camp payment rows for ``program`` (the collected-revenue ledger)."""
+        raise NotImplementedError
+
+    # ------------------------------------------------------- collected revenue
+    def collected_revenue(self, program: Program) -> dict[str, Any]:
+        """Sum the SUCCEEDED camp payments into ``{total_cents, by_campus, count}``.
+
+        A pure read over :meth:`list_camp_payments` (works for every concrete store):
+        only ``status == 'succeeded'`` rows count toward collected revenue. ``by_campus``
+        maps each campus to its succeeded total (minor units); ``count`` is the number of
+        succeeded payments. An empty ledger yields zeros — the caller then falls back to
+        the synthetic paid × price estimate.
+        """
+        total_cents = 0
+        by_campus: dict[str, int] = {}
+        count = 0
+        for payment in self.list_camp_payments(program):
+            if payment.status != _SUCCEEDED_STATUS:
+                continue
+            total_cents += payment.amount_cents
+            by_campus[payment.campus] = by_campus.get(payment.campus, 0) + payment.amount_cents
+            count += 1
+        return {"total_cents": total_cents, "by_campus": by_campus, "count": count}
+
 
 class InMemoryCampStore(CampStore):
     """In-memory :class:`CampStore` — per-program lists; pure, no I/O.
@@ -269,6 +347,9 @@ class InMemoryCampStore(CampStore):
         self._registrations: dict[Program, list[CampRegistrationRow]] = {}
         self._campuses: dict[Program, list[Campus]] = {}
         self._sessions: dict[Program, list[CampSession]] = {}
+        # Camp payments keyed by payment_id per program so an upsert is intrinsically
+        # idempotent (a redelivered PaymentIntent replaces, never appends).
+        self._payments: dict[Program, dict[str, CampPayment]] = {}
         self._seeded: set[Program] = set()
 
     # ----------------------------------------------------------------- registrations
@@ -366,6 +447,34 @@ class InMemoryCampStore(CampStore):
                 return row
         rows.append(row)
         return row
+
+    # ----------------------------------------------------------------- payments
+    def record_camp_payment(
+        self,
+        program: Program,
+        *,
+        payment_id: str,
+        campus: str,
+        amount_cents: int,
+        currency: str,
+        status: str,
+        stripe_event_id: str,
+    ) -> CampPayment:
+        payment = CampPayment(
+            payment_id=payment_id,
+            campus=campus,
+            amount_cents=amount_cents,
+            currency=currency,
+            status=status,
+            stripe_event_id=stripe_event_id,
+        )
+        # Keyed by payment_id ⇒ the same PaymentIntent recorded twice merges (no
+        # double-count), exactly the at-least-once-delivery contract.
+        self._payments.setdefault(program, {})[payment_id] = payment
+        return payment
+
+    def list_camp_payments(self, program: Program) -> list[CampPayment]:
+        return list(self._payments.get(program, {}).values())
 
     # ------------------------------------------------------------------ demo seed
     def seed_demo(self, program: Program) -> None:
@@ -694,6 +803,53 @@ class SupabaseCampStore(CampStore):
             raise SupabaseError("PostgREST POST /camp_session returned no representation row")
         return _row_to_session(rows[0])
 
+    # ----------------------------------------------------------------- payments
+    def list_camp_payments(self, program: Program) -> list[CampPayment]:
+        rows = self._request(
+            "GET",
+            _PAYMENT_TABLE,
+            params={
+                "program_id": f"eq.{program.value}",
+                "select": "payment_id,campus,amount_cents,currency,status,stripe_event_id",
+                "order": "created_at.asc",
+            },
+        )
+        return [_row_to_payment(r) for r in rows]
+
+    def record_camp_payment(
+        self,
+        program: Program,
+        *,
+        payment_id: str,
+        campus: str,
+        amount_cents: int,
+        currency: str,
+        status: str,
+        stripe_event_id: str,
+    ) -> CampPayment:
+        payload: dict[str, Any] = {
+            "payment_id": payment_id,
+            "campus": campus,
+            "amount_cents": amount_cents,
+            "currency": currency,
+            "status": status,
+            "stripe_event_id": stripe_event_id,
+            "program_id": program.value,
+        }
+        # IDEMPOTENT: on_conflict=payment_id merges a redelivered PaymentIntent onto the
+        # existing row (no double-count), the same on_conflict-in-URL pattern as the
+        # registration/campus/session upserts above.
+        rows = self._request(
+            "POST",
+            _PAYMENT_TABLE,
+            params={"on_conflict": "payment_id"},
+            payload=payload,
+            prefer="return=representation,resolution=merge-duplicates",
+        )
+        if not rows:
+            raise SupabaseError("PostgREST POST /camp_payment returned no representation row")
+        return _row_to_payment(rows[0])
+
 
 def _parse_date(raw: object) -> date | None:
     """Parse a PostgREST ``date`` to a :class:`datetime.date`, or ``None`` when absent."""
@@ -759,6 +915,18 @@ def _row_to_session(row: dict[str, Any]) -> CampSession:
         duration=str(row.get("duration") or ""),
         capacity=int(row.get("capacity") or 0),
         status=str(row.get("status") or _DEFAULT_SESSION_STATUS),
+    )
+
+
+def _row_to_payment(row: dict[str, Any]) -> CampPayment:
+    """Map a PostgREST ``camp_payment`` row to :class:`CampPayment`."""
+    return CampPayment(
+        payment_id=str(row["payment_id"]),
+        campus=str(row.get("campus") or ""),
+        amount_cents=int(row.get("amount_cents") or 0),
+        currency=str(row.get("currency") or ""),
+        status=str(row.get("status") or ""),
+        stripe_event_id=str(row.get("stripe_event_id") or ""),
     )
 
 

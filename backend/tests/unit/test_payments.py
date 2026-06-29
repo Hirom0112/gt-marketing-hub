@@ -94,6 +94,39 @@ def test_fulfill_on_checkout_session_completed_only() -> None:
     assert decision.amount_cents is None
 
 
+def test_fulfill_on_payment_intent_succeeded_reads_pi_money_fields() -> None:
+    """A ``payment_intent.succeeded`` event fulfills with the PI ``amount`` + ``status``.
+
+    A PaymentIntent carries ``amount`` / ``status`` (not Checkout's ``amount_total`` /
+    ``payment_status``); the camp-revenue slice fulfills on succeeded PIs, so the core
+    must surface those fields. ``payment_intent.succeeded`` is a configured fulfill type.
+    """
+    assert "payment_intent.succeeded" in FULFILL_EVENT_TYPES
+    event = {
+        "id": "evt_pi_1",
+        "type": "payment_intent.succeeded",
+        "created": 1_700_000_002,
+        "livemode": False,
+        "data": {
+            "object": {
+                "id": "pi_camp_1",
+                "object": "payment_intent",
+                "amount": 97500,
+                "currency": "usd",
+                "status": "succeeded",
+            }
+        },
+    }
+    fulfill = decide_payment_event(
+        event, already_seen=False, fulfill_event_types=FULFILL_EVENT_TYPES
+    )
+    assert fulfill.kind is PaymentDecisionKind.FULFILL
+    assert fulfill.amount_cents == 97500
+    assert fulfill.currency == "usd"
+    assert fulfill.status == "succeeded"
+    assert fulfill.object_id == "pi_camp_1"
+
+
 def test_malformed_event_missing_data_object_does_not_raise() -> None:
     """A malformed event (no data.object keys) decides without crashing."""
     # A fulfill-type event whose data.object is absent must still decide FULFILL

@@ -43,6 +43,7 @@ from pydantic import BaseModel
 from app.adapters.payments.base import PaymentsAdapter, SignatureVerificationError
 from app.api.deps import (
     get_active_program,
+    get_camp_store,
     get_observability_log,
     get_params,
     get_payments_adapter_dep,
@@ -53,6 +54,7 @@ from app.core.funding_gate import advance_funding_state
 from app.core.params import Params
 from app.core.payments import PaymentDecision, PaymentDecisionKind, decide_payment_event
 from app.core.program import Program
+from app.data.camp_store import CampStore
 from app.data.models import FundingState
 from app.data.payments_store import PaymentsStore
 from app.data.repository import FamilyRepository
@@ -64,6 +66,7 @@ router = APIRouter(tags=["payments"])
 # idiomatic FastAPI style matching app/api/crm_sync.py).
 AdapterDep = Annotated[PaymentsAdapter, Depends(get_payments_adapter_dep)]
 StoreDep = Annotated[PaymentsStore, Depends(get_payments_store)]
+CampStoreDep = Annotated[CampStore, Depends(get_camp_store)]
 RepositoryDep = Annotated[FamilyRepository, Depends(get_repository)]
 LogDep = Annotated[ObservabilityLog, Depends(get_observability_log)]
 ProgramDep = Annotated[Program, Depends(get_active_program)]
@@ -87,6 +90,15 @@ _FAMILY_ID_METADATA_KEYS = ("gt_family_id", "client_reference_id")
 # program a family maps to (the synthetic cohort is Texas — app.api.funding's default).
 _FIRST_INSTALLMENT_SIGNAL = "first_installment_received"
 _DEFAULT_VOUCHER_PROGRAM = "tx_tefa"
+
+# The PaymentIntent metadata key/value a Summer Camp charge stamps (the create-charges
+# script sets ``metadata[program]=summer_camp`` + ``metadata[campus]=…``). A fulfill
+# event carrying this routes to the CAMP revenue ledger instead of the fall-enrollment
+# family resolve + funding advance. A fixed wire token (the metadata vocabulary), not a
+# business tunable — INV-11 carve-out, mirroring Program.SUMMER_CAMP.value.
+_PROGRAM_METADATA_KEY = "program"
+_CAMP_PROGRAM_METADATA_VALUE = Program.SUMMER_CAMP.value
+_CAMPUS_METADATA_KEY = "campus"
 
 
 class WebhookAck(BaseModel):
@@ -221,6 +233,7 @@ async def stripe_webhook(
     request: Request,
     adapter: AdapterDep,
     store: StoreDep,
+    camp_store: CampStoreDep,
     repository: RepositoryDep,
     log: LogDep,
     program: ProgramDep,
@@ -235,9 +248,11 @@ async def stripe_webhook(
     3. Dedupe on ``event.id`` and run the deterministic decision.
     4. NOOP (replay) ⇒ do nothing, fast 200 (idempotent — the headline property).
        ACK (new non-fulfill) ⇒ record the event for future dedupe, 200.
-       FULFILL (new fulfill type) ⇒ record the event; record the payment; advance the
-       GT funding signal IF a family matched (an illegal §5.4 step is caught, the
-       payment stands, no 500); LOG it; 200.
+       FULFILL (new fulfill type) ⇒ record the event; then route on the verified
+       object's ``metadata.program``: a ``summer_camp`` PaymentIntent records into the
+       CAMP revenue ledger (no fall family / no fall funding advance); any other fulfill
+       records the payment + advances the GT funding signal IF a family matched (an
+       illegal §5.4 step is caught, the payment stands, no 500); LOG it; 200.
     """
     # 1. RAW body first — verified BEFORE any JSON parse (signature integrity).
     raw = await request.body()
@@ -275,14 +290,40 @@ async def stripe_webhook(
         _log_event(log, decision=decision, family_id=None, anomaly=None)
         return WebhookAck(received=True, kind=decision.kind.value)
 
-    # 4c. FULFILL — a new event of a configured fulfill type. Resolve the family,
-    # record the payment (amount is the FACT), then advance the GT funding signal.
+    # 4c. FULFILL — a new event of a configured fulfill type. Read the verified object
+    # to decide which ledger owns it.
     decision_object = event.get("data", {})
     if isinstance(decision_object, dict):
         decision_object = decision_object.get("object", {})
-    family_id = _resolve_family(
-        repository, decision_object if isinstance(decision_object, dict) else {}
-    )
+    if not isinstance(decision_object, dict):
+        decision_object = {}
+    raw_metadata = decision_object.get("metadata")
+    metadata: dict[str, Any] = raw_metadata if isinstance(raw_metadata, dict) else {}
+
+    # 4c-i. CAMP fulfill — the PaymentIntent carries metadata.program == 'summer_camp'.
+    # Record it into the CAMP revenue ledger and return: a camp charge resolves NO fall
+    # family and advances NO fall funding state (those are the fall-enrollment path
+    # below). The event id is already recorded above (dedupe), and the camp ledger
+    # upserts on the PaymentIntent id, so a redelivered camp event double-records
+    # NEITHER. Identity/amounts come from the verified event only (INV-1: no PII —
+    # amounts + campus only).
+    if metadata.get(_PROGRAM_METADATA_KEY) == _CAMP_PROGRAM_METADATA_VALUE:
+        payment_id = decision.object_id or str(decision_object.get("id") or "")
+        camp_store.record_camp_payment(
+            Program.SUMMER_CAMP,
+            payment_id=payment_id,
+            campus=str(metadata.get(_CAMPUS_METADATA_KEY, "")),
+            amount_cents=decision.amount_cents or 0,
+            currency=decision.currency or "usd",
+            status=decision.status or "",
+            stripe_event_id=decision.event_id,
+        )
+        _log_event(log, decision=decision, family_id=None, anomaly=None)
+        return WebhookAck(received=True, kind=decision.kind.value)
+
+    # 4c-ii. FALL fulfill — resolve the family, record the payment (amount is the FACT),
+    # then advance the GT funding signal.
+    family_id = _resolve_family(repository, decision_object)
 
     store.record_payment(
         program,

@@ -85,6 +85,77 @@ def test_get_summer_reconcile(client: TestClient) -> None:
     assert rev["basis"] == "synthetic_paid_times_price"  # honest: no Stripe this phase
 
 
+def test_reconcile_revenue_synthetic_fallback_when_ledger_empty(client: TestClient) -> None:
+    """No camp payments ⇒ revenue falls back to the synthetic paid × price estimate."""
+    rev = client.get("/summer/reconcile").json()["revenue"]
+    assert rev["basis"] == "synthetic_paid_times_price"
+    assert rev["collected_count"] == 0
+    assert rev["revenue_usd"] == 219 * rev["price_per_seat_usd"]
+    # The synthetic per-campus split sums back to the total.
+    assert sum(rev["revenue_by_campus"].values()) == rev["revenue_usd"]
+
+
+def test_reconcile_revenue_stripe_collected_when_ledger_has_charges(
+    client: TestClient, camp_store: InMemoryCampStore
+) -> None:
+    """A camp ledger with succeeded charges ⇒ revenue reads REAL collected revenue."""
+    camp_store.record_camp_payment(
+        _CAMP,
+        payment_id="pi_a",
+        campus="Austin",
+        amount_cents=97500,
+        currency="usd",
+        status="succeeded",
+        stripe_event_id="evt_a",
+    )
+    camp_store.record_camp_payment(
+        _CAMP,
+        payment_id="pi_b",
+        campus="Dallas",
+        amount_cents=97500,
+        currency="usd",
+        status="succeeded",
+        stripe_event_id="evt_b",
+    )
+    # A non-succeeded charge must NOT count toward collected revenue.
+    camp_store.record_camp_payment(
+        _CAMP,
+        payment_id="pi_c",
+        campus="Austin",
+        amount_cents=97500,
+        currency="usd",
+        status="requires_payment_method",
+        stripe_event_id="evt_c",
+    )
+
+    rev = client.get("/summer/reconcile").json()["revenue"]
+    assert rev["basis"] == "stripe_collected"
+    assert rev["collected_count"] == 2
+    assert rev["revenue_usd"] == 1950  # 2 × $975
+    assert rev["revenue_by_campus"] == {"Austin": 975, "Dallas": 975}
+    # Yield per registered family = revenue_usd / registered (288 registered).
+    assert rev["revenue_per_registered_usd"] == round(1950 / 288, 2)
+
+
+def test_reconcile_revenue_collected_is_idempotent_on_redelivery(
+    client: TestClient, camp_store: InMemoryCampStore
+) -> None:
+    """Recording the SAME PaymentIntent twice does not double-count collected revenue."""
+    for _ in range(2):
+        camp_store.record_camp_payment(
+            _CAMP,
+            payment_id="pi_dup",
+            campus="Austin",
+            amount_cents=97500,
+            currency="usd",
+            status="succeeded",
+            stripe_event_id="evt_dup",
+        )
+    rev = client.get("/summer/reconcile").json()["revenue"]
+    assert rev["collected_count"] == 1
+    assert rev["revenue_usd"] == 975
+
+
 def test_reconcile_extended_dimensions(client: TestClient) -> None:
     body = client.get("/summer/reconcile").json()
 

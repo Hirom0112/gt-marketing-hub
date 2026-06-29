@@ -125,18 +125,27 @@ def decide_payment_event(
         )
 
     if event_type in fulfill_event_types:
-        amount_total = obj.get("amount_total")
+        # Money fields vary by object: a Checkout Session carries ``amount_total`` +
+        # ``payment_status``; a PaymentIntent carries ``amount`` + ``status``. Read the
+        # Checkout fields first, falling back to the PaymentIntent fields, so BOTH
+        # ``checkout.session.completed`` AND ``payment_intent.succeeded`` surface the
+        # real amount/status (the camp-revenue slice fulfills on succeeded PIs).
+        amount_raw = obj.get("amount_total")
+        if amount_raw is None:
+            amount_raw = obj.get("amount")
         currency = obj.get("currency")
-        payment_status = obj.get("payment_status")
+        status_raw = obj.get("payment_status")
+        if status_raw is None:
+            status_raw = obj.get("status")
         dedupe_key = f"{object_id}:{event_type}" if object_id is not None else None
         return PaymentDecision(
             kind=PaymentDecisionKind.FULFILL,
             event_id=event_id,
             event_type=event_type,
             object_id=object_id,
-            amount_cents=amount_total if isinstance(amount_total, int) else None,
+            amount_cents=amount_raw if isinstance(amount_raw, int) else None,
             currency=currency if isinstance(currency, str) else None,
-            status=payment_status if isinstance(payment_status, str) else None,
+            status=status_raw if isinstance(status_raw, str) else None,
             dedupe_key=dedupe_key,
         )
 

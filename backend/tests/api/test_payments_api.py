@@ -28,6 +28,7 @@ from fastapi.testclient import TestClient
 from app.adapters.payments.simulated import SimulatedPaymentsAdapter
 from app.api import deps
 from app.core.program import Program
+from app.data.camp_store import InMemoryCampStore
 from app.data.models import FundingState, FundingType
 from app.data.repository import InMemoryFamilyRepository
 from app.data.synthetic import SyntheticDataset
@@ -61,6 +62,8 @@ class _Fixtures:
             webhook_secret=_TEST_WEBHOOK_SECRET, tolerance_seconds=tolerance
         )
         self.store = deps.InMemoryPaymentsStore()
+        # A clean (unseeded) camp store so the camp-revenue ledger starts empty.
+        self.camp_store = InMemoryCampStore()
         self.log = InMemoryObservabilityLog()
         # A family at GT_CONFIRMED so a first-installment receipt is exactly the one
         # legal §5.4 advance (GT_CONFIRMED → FIRST_INSTALLMENT_RECEIVED).
@@ -74,6 +77,7 @@ def fx() -> Iterator[_Fixtures]:
     fixtures = _Fixtures()
     app.dependency_overrides[deps.get_payments_adapter_dep] = lambda: fixtures.adapter
     app.dependency_overrides[deps.get_payments_store] = lambda: fixtures.store
+    app.dependency_overrides[deps.get_camp_store] = lambda: fixtures.camp_store
     app.dependency_overrides[deps.get_repository] = lambda: fixtures.repo
     app.dependency_overrides[deps.get_observability_log] = lambda: fixtures.log
     app.dependency_overrides[deps.get_active_program] = lambda: _PROGRAM
@@ -228,3 +232,68 @@ def test_webhook_illegal_funding_advance_fails_closed(fx: _Fixtures) -> None:
         if p.payload.get("funding_anomaly")
     ]
     assert anomalies and "rejected" in anomalies[0]
+
+
+def _camp_pi_event(
+    *, campus: str = "Austin", event_id: str = "evt_camp_1", pi_id: str = "pi_camp_1"
+) -> bytes:
+    """A ``payment_intent.succeeded`` event tagged ``metadata.program == 'summer_camp'``."""
+    event: dict[str, Any] = {
+        "id": event_id,
+        "type": "payment_intent.succeeded",
+        "created": int(time.time()),
+        "livemode": False,
+        "data": {
+            "object": {
+                "id": pi_id,
+                "amount": 97500,
+                "currency": "usd",
+                "status": "succeeded",
+                "metadata": {"program": "summer_camp", "campus": campus},
+            }
+        },
+    }
+    return json.dumps(event).encode("utf-8")
+
+
+def test_webhook_camp_payment_records_to_camp_ledger_no_fall_advance(fx: _Fixtures) -> None:
+    """A camp PaymentIntent (metadata.program==summer_camp) lands in the CAMP ledger only.
+
+    The camp-revenue branch: the payment records into the camp store (amount + campus,
+    no PII), NO fall payment row is written, and the fall family funding never advances —
+    a camp charge is not a fall first-installment. Idempotent on redelivery.
+    """
+    raw = _camp_pi_event(campus="Austin")
+    resp = client.post(
+        "/payments/webhook",
+        content=raw,
+        headers={"stripe-signature": _sign(raw), "content-type": "application/json"},
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["kind"] == "fulfill"
+
+    # Recorded into the CAMP ledger (amount + campus only).
+    camp_payments = fx.camp_store.list_camp_payments(Program.SUMMER_CAMP)
+    assert len(camp_payments) == 1
+    assert camp_payments[0].payment_id == "pi_camp_1"
+    assert camp_payments[0].amount_cents == 97500
+    assert camp_payments[0].campus == "Austin"
+    assert camp_payments[0].status == "succeeded"
+
+    # NO fall payment row, and the fall family funding state never advanced.
+    assert fx.store.list_payments(_PROGRAM) == []
+    assert fx.repo.get_family(fx.family.family_id).family.funding_state is FundingState.GT_CONFIRMED
+
+    # Collected revenue rolls up from the camp ledger.
+    collected = fx.camp_store.collected_revenue(Program.SUMMER_CAMP)
+    assert collected == {"total_cents": 97500, "by_campus": {"Austin": 97500}, "count": 1}
+
+    # REDELIVERY: the same event again ⇒ 200 NOOP, no double-record (event dedupe +
+    # the payment_id upsert).
+    replay = client.post(
+        "/payments/webhook",
+        content=raw,
+        headers={"stripe-signature": _sign(raw), "content-type": "application/json"},
+    )
+    assert replay.status_code == 200, replay.text
+    assert len(fx.camp_store.list_camp_payments(Program.SUMMER_CAMP)) == 1
