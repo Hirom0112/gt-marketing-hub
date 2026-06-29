@@ -12,7 +12,7 @@ import { STARTER_IDS, widgetById, WIDGETS, type WidgetSize } from '@/lib/widgets
 import { useSession } from '@/lib/session';
 import { WidgetCard, NEXT_SIZE } from '@/components/home/WidgetCard';
 import { WidgetPicker } from '@/components/home/WidgetPicker';
-import { fetchHomeLive, type HomeLive } from '@/lib/home-live';
+import { loadHomeLive, type HomeLive } from '@/lib/home-live';
 
 const MONO = 'JetBrains Mono';
 
@@ -29,11 +29,19 @@ export function HomeModule() {
   const loaded = useRef(false);
   const dragIdx = useRef<number | null>(null);
 
-  // Pull the live aggregates from every owning module once (fails soft per endpoint →
-  // those widgets just stay on their labelled SAMPLE seed).
+  // Stream the live aggregates from every owning module — each endpoint flips its own
+  // widgets the moment it returns (a slow live HubSpot read never blocks the rest). Fails
+  // soft per endpoint → those widgets just stay on their labelled SAMPLE seed.
   useEffect(() => {
     let on = true;
-    fetchHomeLive(session.role).then((d) => { if (on) setLive(d); });
+    setLive(null);
+    loadHomeLive(session.role, (partial) => {
+      if (!on) return;
+      setLive((prev) => ({
+        content: { ...prev?.content, ...partial.content },
+        status: { ...prev?.status, ...partial.status },
+      }));
+    });
     return () => { on = false; };
   }, [session.role]);
 

@@ -8,7 +8,10 @@
 //   • 'simulated' — a real API round-trip, but the upstream source is a STOOD-IN (GA4).
 //   • 'sample'    — static seed; no live endpoint (the widget keeps its catalog content).
 //
-// Every fetch fails soft (apiGet → null): a down endpoint just leaves its widgets on seed.
+// STREAMING: each endpoint group resolves INDEPENDENTLY and flips its own widgets the
+// moment it returns (onPartial) — a slow live HubSpot read never blocks the fast widgets,
+// so there is no all-or-nothing "wait for the slowest" lag. Every fetch fails soft
+// (apiGet → null): a down endpoint just leaves its widgets on the labelled SAMPLE seed.
 
 import type { Role } from './registry';
 import { apiGet } from './api';
@@ -20,6 +23,8 @@ export interface HomeLive {
   content: Record<string, WidgetContent>; // widgetId → live content override
   status: Record<string, LiveStatus>; // widgetId → 'live' | 'simulated'
 }
+
+type Put = (id: string, c: WidgetContent, s: LiveStatus) => void;
 
 // ---- formatters -------------------------------------------------------------
 const num = (n: number) => Math.round(n).toLocaleString('en-US');
@@ -59,24 +64,22 @@ interface ContentPerformance {
   channels: { channel: string; reach: number; conversions: number; conversion_rate_pct: number }[];
 }
 
-export async function fetchHomeLive(role: Role): Promise<HomeLive> {
-  const [web, adm, voice, crm, nur, bud, score, contentPerf] = await Promise.all([
-    apiGet<WebsiteOverview>('/website/overview', role),
-    apiGet<AdmissionsOverview>('/admissions/overview', role),
-    apiGet<AdmissionsVoice>('/admissions/voice', role),
-    apiGet<CrmOverview>('/crm/ops/overview', role),
-    apiGet<NurtureOverview>('/nurture/overview', role),
-    apiGet<BudgetResponse>('/budget', role),
-    apiGet<ScorecardWeekly>('/scorecard/weekly', role),
-    apiGet<ContentPerformance>('/content/performance', role),
-  ]);
-
-  const content: Record<string, WidgetContent> = {};
-  const status: Record<string, LiveStatus> = {};
-  const put = (id: string, c: WidgetContent, s: LiveStatus) => { content[id] = c; status[id] = s; };
+// Stream live data into Home: each owning module's endpoint flips its widgets as soon as
+// it returns (onPartial fires per group; merge them in the caller). Fails soft per group.
+export function loadHomeLive(role: Role, onPartial: (p: HomeLive) => void): void {
+  const run = <T>(p: Promise<T | null>, build: (d: T, put: Put) => void): void => {
+    p.then((d) => {
+      if (!d) return;
+      const content: Record<string, WidgetContent> = {};
+      const status: Record<string, LiveStatus> = {};
+      build(d, (id, c, s) => { content[id] = c; status[id] = s; });
+      if (Object.keys(content).length > 0) onPartial({ content, status });
+    }).catch(() => { /* fail soft — widget stays on its SAMPLE seed */ });
+  };
 
   // ---- Website (GA4 stood-in → 'simulated') --------------------------------
-  if (web?.site_rollup) {
+  run(apiGet<WebsiteOverview>('/website/overview', role), (web, put) => {
+    if (!web.site_rollup) return;
     put('website-sessions', {
       kind: 'stat',
       value: num(web.site_rollup.total_sessions),
@@ -84,14 +87,12 @@ export async function fetchHomeLive(role: Role): Promise<HomeLive> {
       deltaColor: 'var(--ink-3)',
       sub: `${num(web.site_rollup.total_pageviews)} pageviews this week`,
     }, 'simulated');
-
     put('top-landing-pages', {
       kind: 'list',
       items: web.top_landing_pages.slice(0, 3).map(
         (p) => `${p.page_path} — ${num(p.pageviews)} views (${p.trend_pct >= 0 ? '▲' : '▼'}${Math.abs(p.trend_pct)}%)`,
       ),
     }, 'simulated');
-
     const wow = web.download_summary.wow_delta_pct;
     put('pdf-downloads', {
       kind: 'stat',
@@ -100,74 +101,80 @@ export async function fetchHomeLive(role: Role): Promise<HomeLive> {
       deltaColor: wow >= 0 ? 'var(--ok)' : 'var(--warn)',
       sub: web.top_downloads[0] ? `top: ${web.top_downloads[0].file_name}` : 'PDF + resource downloads',
     }, 'simulated');
-  }
+  });
 
   // ---- Admissions (live) ---------------------------------------------------
-  if (adm?.top_objections) {
+  run(apiGet<AdmissionsOverview>('/admissions/overview', role), (adm, put) => {
+    if (!adm.top_objections) return;
     put('top-objections', {
       kind: 'list',
       items: adm.top_objections.slice(0, 3).map((o) => `“${human(o.theme)}” — ${o.week_count} this week`),
     }, 'live');
-  }
-  if (voice?.quote_of_week) {
+  });
+  run(apiGet<AdmissionsVoice>('/admissions/voice', role), (voice, put) => {
+    if (!voice.quote_of_week) return;
     put('family-quote', {
       kind: 'list',
       items: [`“${voice.quote_of_week.quote}” — on ${human(voice.quote_of_week.theme)}`],
     }, 'live');
-  }
+  });
 
   // ---- CRM Ops · live HubSpot lead-score histogram -------------------------
-  if (crm?.lead_score_distribution?.bands) {
+  run(apiGet<CrmOverview>('/crm/ops/overview', role), (crm, put) => {
+    if (!crm.lead_score_distribution?.bands) return;
     const bands = crm.lead_score_distribution.bands;
     const w = barWidths(bands, (b) => b.count);
     put('lead-score-dist', {
       kind: 'bars',
       rows: bands.map((b) => ({ name: b.label, pct: num(b.count), width: w(b) })),
     }, 'live');
-  }
+  });
 
   // ---- Nurture (live HubSpot + Supabase) -----------------------------------
-  if (nur?.engagement_tier_mix) {
-    const m = nur.engagement_tier_mix;
-    const t = Math.max(1, m.total);
-    put('engagement-tier-mix', {
-      kind: 'split',
-      segs: [
-        { w: Math.round((100 * m.clicked) / t), label: 'Clicked', value: `${Math.round((100 * m.clicked) / t)}%`, color: 'var(--gold)' },
-        { w: Math.round((100 * m.opened) / t), label: 'Opened', value: `${Math.round((100 * m.opened) / t)}%`, color: 'var(--gold)', textColor: 'var(--ink)' },
-        { w: Math.round((100 * m.cold) / t), label: 'Cold', value: `${Math.round((100 * m.cold) / t)}%`, color: 'var(--broken)' },
-      ],
-      sub: `${num(m.reachable)} of ${num(m.total)} reachable`,
-    }, 'live');
-  }
-  if (nur?.tiers) {
-    put('t1t2t3-counts', {
-      kind: 'tiers',
-      items: nur.tiers.map((t) => ({ n: num(t.audience_size), label: `${t.tier} · ${t.reachability_pct}% reach` })),
-      sub: 'Audience size + reachability by tier',
-    }, 'live');
-  }
-  if (nur?.pipeline_stage_distribution) {
-    const rows = nur.pipeline_stage_distribution;
-    const w = barWidths(rows, (r) => r.count);
-    put('funnel-stages', {
-      kind: 'bars',
-      rows: rows.map((r) => ({ name: human(r.stage), pct: num(r.count), width: w(r) })),
-    }, 'live');
-  }
-  if (typeof nur?.sla_compliance_pct === 'number') {
-    const pct = nur.sla_compliance_pct;
-    put('sla-24h', {
-      kind: 'progress',
-      value: `${pct}%`,
-      pct,
-      color: pct >= 90 ? 'var(--ok)' : 'var(--warn)',
-      sub: 'target 90% · 24-hr follow-up',
-    }, 'live');
-  }
+  run(apiGet<NurtureOverview>('/nurture/overview', role), (nur, put) => {
+    if (nur.engagement_tier_mix) {
+      const m = nur.engagement_tier_mix;
+      const t = Math.max(1, m.total);
+      put('engagement-tier-mix', {
+        kind: 'split',
+        segs: [
+          { w: Math.round((100 * m.clicked) / t), label: 'Clicked', value: `${Math.round((100 * m.clicked) / t)}%`, color: 'var(--gold)' },
+          { w: Math.round((100 * m.opened) / t), label: 'Opened', value: `${Math.round((100 * m.opened) / t)}%`, color: 'var(--gold)', textColor: 'var(--ink)' },
+          { w: Math.round((100 * m.cold) / t), label: 'Cold', value: `${Math.round((100 * m.cold) / t)}%`, color: 'var(--broken)' },
+        ],
+        sub: `${num(m.reachable)} of ${num(m.total)} reachable`,
+      }, 'live');
+    }
+    if (nur.tiers) {
+      put('t1t2t3-counts', {
+        kind: 'tiers',
+        items: nur.tiers.map((t) => ({ n: num(t.audience_size), label: `${t.tier} · ${t.reachability_pct}% reach` })),
+        sub: 'Audience size + reachability by tier',
+      }, 'live');
+    }
+    if (nur.pipeline_stage_distribution) {
+      const rows = nur.pipeline_stage_distribution;
+      const w = barWidths(rows, (r) => r.count);
+      put('funnel-stages', {
+        kind: 'bars',
+        rows: rows.map((r) => ({ name: human(r.stage), pct: num(r.count), width: w(r) })),
+      }, 'live');
+    }
+    if (typeof nur.sla_compliance_pct === 'number') {
+      const pct = nur.sla_compliance_pct;
+      put('sla-24h', {
+        kind: 'progress',
+        value: `${pct}%`,
+        pct,
+        color: pct >= 90 ? 'var(--ok)' : 'var(--warn)',
+        sub: 'target 90% · 24-hr follow-up',
+      }, 'live');
+    }
+  });
 
   // ---- Budget (the Hub) ----------------------------------------------------
-  if (bud?.rollup) {
+  run(apiGet<BudgetResponse>('/budget', role), (bud, put) => {
+    if (!bud.rollup) return;
     const { total_planned, total_actual } = bud.rollup;
     const pct = total_planned > 0 ? Math.round((100 * total_actual) / total_planned) : 0;
     put('budget-burn', {
@@ -177,16 +184,16 @@ export async function fetchHomeLive(role: Role): Promise<HomeLive> {
       color: 'var(--gold)',
       sub: `${pct}% of the $365K plan spent`,
     }, 'live');
-
     const w = barWidths(bud.workstreams, (x) => x.actual);
     put('spend-by-workstream', {
       kind: 'bars',
       rows: bud.workstreams.map((x) => ({ name: human(x.workstream), pct: usdK(x.actual), width: w(x) })),
     }, 'live');
-  }
+  });
 
   // ---- Scorecard (Supabase app_form funnel + Stripe ledger) ----------------
-  if (score?.metrics) {
+  run(apiGet<ScorecardWeekly>('/scorecard/weekly', role), (score, put) => {
+    if (!score.metrics) return;
     const by = (k: string) => score.metrics.find((m) => m.key === k);
     const ap = by('applicants');
     if (ap) {
@@ -210,17 +217,16 @@ export async function fetchHomeLive(role: Role): Promise<HomeLive> {
         sub: `${pct}% of the Fall goal · Stripe deposit ledger`,
       }, 'live');
     }
-  }
+  });
 
   // ---- Conversion by channel (Content perf — Google Sheet + computed) -------
-  if (contentPerf?.channels?.length) {
+  run(apiGet<ContentPerformance>('/content/performance', role), (contentPerf, put) => {
+    if (!contentPerf.channels?.length) return;
     const top = [...contentPerf.channels].sort((a, b) => b.conversion_rate_pct - a.conversion_rate_pct).slice(0, 5);
     const w = barWidths(top, (c) => c.conversion_rate_pct);
     put('conversion-by-channel', {
       kind: 'bars',
       rows: top.map((c) => ({ name: human(c.channel), pct: `${c.conversion_rate_pct}%`, width: w(c) })),
     }, 'live');
-  }
-
-  return { content, status };
+  });
 }
