@@ -474,3 +474,9 @@ summer_camp:                # D2 — Summer Camp dual-source reconcile business 
     San Antonio: 60
   price_per_seat_usd: 975           # list price of one camp seat (USD)
   revenue_target_usd: 260000        # season revenue target (USD) — separate from the marketing budget
+  registration_channels:            # signup-channel labels the breakdown buckets into; word_of_mouth is the seeded top channel (~40%)
+    - word_of_mouth
+    - social
+    - email
+    - website
+  registration_window_days: 7       # recent-window size (days) for the "registrations this week" count

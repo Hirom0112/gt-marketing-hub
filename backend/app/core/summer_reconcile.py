@@ -30,6 +30,7 @@ from __future__ import annotations
 import re
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
+from datetime import date, datetime, timedelta
 
 from app.core.program import Program
 
@@ -65,6 +66,13 @@ class CampRegistration:
             fallback dedup key when no email is present.
         paid: Whether the registration has been paid (vs a registered-but-unpaid
             lead).
+        registration_channel: How the family signed up (word_of_mouth / social /
+            email / website). ``None`` when the source did not record it (the dedup
+            core ignores this field; it is carried for the channel breakdown).
+        attended: Whether the child attended (camp is in the FUTURE in Phase 1, so
+            every row is honestly ``False`` — the funnel surfaces it as pending).
+        registered_at: When the registration arrived — for the recent-window
+            ("registrations this week") count. ``None`` when not recorded.
     """
 
     external_id: str
@@ -74,6 +82,9 @@ class CampRegistration:
     synthetic_email: str | None
     synthetic_phone: str | None
     paid: bool
+    registration_channel: str | None = None
+    attended: bool = False
+    registered_at: datetime | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -268,3 +279,155 @@ def reconcile(
         conflicts=tuple(conflicts),
         sources=tuple(SourceCount(source=s, rows=n) for s, n in sorted(source_rows.items())),
     )
+
+
+# ---------------------------------------------------------------------------
+# Phase-1 dimensions over the SAME deduped registrant set (all PURE / clock-free —
+# any "now"/reference is INJECTED by the caller, never read here, INV-2). Each helper
+# dedups on the SAME identity key as :func:`reconcile`, so a both-sources registrant
+# is counted ONCE here too (no double-count leaks into the channel/funnel/recency).
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True, slots=True)
+class ChannelCount:
+    """One signup-channel slice over the deduped registrant set."""
+
+    channel: str
+    count: int
+    pct: float  # count / total_unique * 100, rounded to 1dp
+
+
+@dataclass(frozen=True, slots=True)
+class FunnelStage:
+    """One funnel stage — its count, the drop from the previous stage, and pending."""
+
+    stage: str
+    count: int
+    drop_off_pct: float  # (prev - count) / prev * 100, 0.0 for the first stage
+    pending: bool  # True ⇒ the figure is not-yet-realized (e.g. attendance, camp future)
+
+
+@dataclass(frozen=True, slots=True)
+class CampusWaitlist:
+    """One campus's overflow beyond capacity (registered − capacity, never negative)."""
+
+    campus: str
+    capacity: int
+    registered: int
+    waitlisted: int
+
+
+def _unique_registrants(rows: Iterable[CampRegistration]) -> list[CampRegistration]:
+    """Collapse ``rows`` to ONE representative per identity (the dedup spine reused).
+
+    Rows sharing an identity key fold to a single representative (the first seen);
+    an un-keyed row (no email/phone) is its own registrant — IDENTICAL grouping to
+    :func:`reconcile`, so every Phase-1 dimension counts each registrant exactly once.
+    A conflicting-campus group is NOT special-cased here (these dimensions are not
+    campus-credited), so its representative still counts once.
+    """
+    seen: dict[str, CampRegistration] = {}
+    unkeyed: list[CampRegistration] = []
+    for row in rows:
+        key = _dedup_key(row)
+        if key is None:
+            unkeyed.append(row)
+        elif key not in seen:
+            seen[key] = row
+    return [*seen.values(), *unkeyed]
+
+
+def channel_breakdown(rows: Iterable[CampRegistration]) -> tuple[ChannelCount, ...]:
+    """The signup-channel breakdown over the DEDUPED registrant set, sorted desc.
+
+    Each unique registrant contributes its ``registration_channel`` once (a missing
+    channel is bucketed as ``"unknown"`` — honest, never dropped). Sorted by count
+    desc then channel asc (stable, deterministic) so the first row is the top channel.
+    """
+    registrants = _unique_registrants(rows)
+    total = len(registrants)
+    counts: dict[str, int] = {}
+    for r in registrants:
+        channel = r.registration_channel or "unknown"
+        counts[channel] = counts.get(channel, 0) + 1
+    ordered = sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))
+    return tuple(
+        ChannelCount(channel=ch, count=n, pct=round(n / total * 100, 1) if total else 0.0)
+        for ch, n in ordered
+    )
+
+
+def registration_funnel(result: SummerReconciliation, attended: int) -> tuple[FunnelStage, ...]:
+    """The Lead → Registered → Paid → Attended funnel with per-step drop-off.
+
+    The instrumented progression is Registered → Paid → Attended; counts come
+    straight from the deduped reconcile result plus the injected ``attended`` count.
+    ``drop_off_pct`` for a stage is the share lost from the PREVIOUS stage. Two stages
+    are flagged ``pending`` (their drop-off is forced to 0.0, never a misleading
+    number): "Lead" — pre-registration inquiries are NOT instrumented in the synthetic
+    registration sources, so it is floored at ``total_registered`` (everyone who
+    registered was at least a lead) rather than fabricated; and "Attended" — camp is in
+    the future, so a 0 there is honestly "not yet", never a real drop to zero.
+    """
+    steps: tuple[tuple[str, int, bool], ...] = (
+        ("Lead", result.total_registered, True),
+        ("Registered", result.total_registered, False),
+        ("Paid", result.total_paid, False),
+        ("Attended", attended, True),
+    )
+    stages: list[FunnelStage] = []
+    prev: int | None = None
+    for stage, count, pending in steps:
+        if pending or prev is None or prev == 0:
+            drop = 0.0
+        else:
+            drop = round((prev - count) / prev * 100, 1)
+        stages.append(FunnelStage(stage=stage, count=count, drop_off_pct=drop, pending=pending))
+        prev = count
+    return tuple(stages)
+
+
+def registrations_in_window(rows: Iterable[CampRegistration], *, now: datetime, days: int) -> int:
+    """Count DEDUPED registrants whose ``registered_at`` is within the last ``days``.
+
+    ``now`` is INJECTED (the helper never reads a clock — INV-2). The window is the
+    half-open ``(now - days, now]``: a registration exactly ``days`` ago is just
+    outside it. A registrant with no ``registered_at`` is not counted (honest).
+    """
+    if days <= 0:
+        return 0
+    cutoff = now - timedelta(days=days)
+    count = 0
+    for r in _unique_registrants(rows):
+        ts = r.registered_at
+        if ts is not None and cutoff < ts <= now:
+            count += 1
+    return count
+
+
+def waitlist_by_campus(result: SummerReconciliation) -> tuple[CampusWaitlist, ...]:
+    """Per-campus overflow beyond capacity (registered − capacity, clamped at 0).
+
+    Computed from the deduped per-campus rollup, so it is honest: with the seeded
+    fill (every campus under capacity) every ``waitlisted`` is 0; an over-subscribed
+    campus surfaces a real overflow.
+    """
+    return tuple(
+        CampusWaitlist(
+            campus=c.campus,
+            capacity=c.capacity,
+            registered=c.registered,
+            waitlisted=max(0, c.registered - c.capacity),
+        )
+        for c in result.per_campus
+    )
+
+
+def days_until(target: date, *, now: date) -> int:
+    """Whole days from ``now`` to ``target`` (negative once ``target`` has passed).
+
+    ``now`` is INJECTED (clock-free — INV-2). Used for the camp-start countdown
+    (earliest session ``starts_on`` minus the injected today).
+    """
+    return (target - now).days

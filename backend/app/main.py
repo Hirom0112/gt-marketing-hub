@@ -299,10 +299,14 @@ app.include_router(ambassadors_router)
 # core (app.core.grassroots) + store seam (app.data.grassroots_store, 0035). INV-1/6/11.
 app.include_router(grassroots_router)
 
-# Summer Camp dual-source reconcile (summer.gt.school + standalone registration form) —
-# GET /summer/reconcile. Pure reconciler (app.core.summer_reconcile) merges the two
-# sources with NO double-count, per-campus rollup vs capacity, conflicts held out
-# fail-closed (INV-4). Tied to Phase-1 program isolation (program_id='summer_camp').
+# Summer Camp (Module 4) — fed from the camp store seam (app.data.camp_store, 0032 +
+# 0037). GET /summer/reconcile: dual-source reconcile (summer.gt.school + standalone
+# form) with NO double-count + Phase-1 dimensions (signup-channel breakdown, funnel,
+# registrations-this-week, camp-start countdown, session calendar, per-campus waitlist;
+# optional ?campus/?grade_band/?source slicing). GET /summer/content: the camp_-tagged
+# slice of the live content kanban. POST /summer/session-change: owner-gated leadership
+# cross-link → Decision Queue (flag_decision). Pure reconciler (app.core.summer_reconcile);
+# program isolation (program_id='summer_camp'). Revenue stays synthetic (paid × price).
 app.include_router(summer_router)
 
 # Content production kanban synced to Google Sheets (INV-9 simulated/live) —

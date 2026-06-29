@@ -1665,14 +1665,22 @@ class SummerCamp(_StrictModel):
     * ``price_per_seat_usd`` — the list price of one camp seat (whole USD).
     * ``revenue_target_usd`` — the season revenue target (whole USD; a SEPARATE P&L
       from the marketing ``budget`` block).
+    * ``registration_channels`` — the signup-channel LABELS the channel breakdown
+      buckets registrations into (word_of_mouth / social / email / website). The
+      seed's per-row channel assignment is keyed off this list's order (INV-11 — the
+      labels' one home; the distribution weights are documented in the seed).
+    * ``registration_window_days`` — the recent-window size (in days) the
+      "registrations this week" count uses (default a 7-day week).
 
-    Every value MUST be ``>= 1``; capacities MUST be non-empty (an empty rollup is
-    meaningless — drift fails the build, CLAUDE.md §4.1).
+    Every numeric value MUST be ``>= 1``; capacities + channels MUST be non-empty (an
+    empty rollup/channel set is meaningless — drift fails the build, CLAUDE.md §4.1).
     """
 
     campus_capacity: dict[str, int]
     price_per_seat_usd: int
     revenue_target_usd: int
+    registration_channels: list[str]
+    registration_window_days: int
 
     @model_validator(mode="after")
     def _guard(self) -> SummerCamp:
@@ -1688,6 +1696,13 @@ class SummerCamp(_StrictModel):
         if self.revenue_target_usd < 1:
             raise ValueError(
                 f"summer_camp.revenue_target_usd must be >= 1, got {self.revenue_target_usd!r}"
+            )
+        if not self.registration_channels:
+            raise ValueError("summer_camp.registration_channels must be non-empty")
+        if self.registration_window_days < 1:
+            raise ValueError(
+                "summer_camp.registration_window_days must be >= 1, got "
+                f"{self.registration_window_days!r}"
             )
         return self
 

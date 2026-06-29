@@ -44,6 +44,11 @@ from app.data.budget_store import (
     InMemoryBudgetStore,
     build_supabase_budget_store,
 )
+from app.data.camp_store import (
+    CampStore,
+    InMemoryCampStore,
+    build_supabase_camp_store,
+)
 from app.data.content_metrics_store import (
     ContentMetricsStore,
     InMemoryContentMetricsStore,
@@ -539,6 +544,59 @@ def _seeded_in_memory_content_metrics_store(program: Program) -> InMemoryContent
 _content_metrics_store: ContentMetricsStore = _build_content_metrics_store()
 
 
+def _build_camp_store() -> CampStore:
+    """Bind the Module-4 Summer Camp store, MIRRORING ``_build_content_metrics_store``.
+
+    The same ``COCKPIT_REPO`` / ``SUPABASE_URL`` selection as the family, watermark,
+    payments, decisions, layouts, budget, grassroots, and content stores, so they never
+    disagree on which backend is live (the NFR-8 store seam):
+
+    - ``synthetic`` ⇒ FORCE the in-memory store (never Supabase), with the deterministic
+      demo registrations/campuses/sessions seeded for the active program (INV-1).
+    - ``supabase`` ⇒ REQUIRE the live store; a missing ``SUPABASE_URL`` is a misconfig
+      ⇒ raise (fail loud, the family-store posture).
+    - ``auto`` (default) ⇒ Supabase when ``SUPABASE_URL`` is configured, else the seeded
+      in-memory v1 fallback (A-3).
+    """
+    repo_mode = Settings.from_env().cockpit_repo
+    if repo_mode == "synthetic":
+        return _seeded_in_memory_camp_store()
+    if repo_mode == "supabase":
+        supabase = build_supabase_camp_store()
+        if supabase is None:
+            raise RuntimeError(
+                "COCKPIT_REPO=supabase requires SUPABASE_URL (+ "
+                "SUPABASE_SERVICE_ROLE_KEY) for the Summer Camp store; none was "
+                "configured. Set them, or use COCKPIT_REPO=synthetic / auto."
+            )
+        return supabase
+    return build_supabase_camp_store() or _seeded_in_memory_camp_store()
+
+
+def _seeded_in_memory_camp_store() -> InMemoryCampStore:
+    """Build the in-memory camp store + the deterministic demo seed (Module 4).
+
+    Unlike the other module stores, Summer Camp is its OWN program tenant
+    (:data:`Program.SUMMER_CAMP`) regardless of the env's active program — the reconcile
+    surface always scopes to ``summer_camp`` (0032) — so the seed lands under
+    ``SUMMER_CAMP``. The demo registrations (both synthetic sources + per-row channel +
+    recency), campuses, and Aug-2026 sessions make the reconcile + channel breakdown +
+    funnel + countdown demonstrable on synthetic data alone (idempotent; INV-1). The
+    seed reads the channel labels + capacities from ``params`` (INV-11). Tests that need
+    a CLEAN store construct :class:`InMemoryCampStore` directly (no seed).
+    """
+    store = InMemoryCampStore(params=_params)
+    store.seed_demo(Program.SUMMER_CAMP)
+    return store
+
+
+# Singleton Summer Camp store (Module 4) — the registration/campus/session state behind
+# the same NFR-8 seam as ``_repository``. Default v1 = in-memory (A-3), seeded with the
+# deterministic demo; production swaps the Supabase-backed impl over the 0032 + 0037
+# tables.
+_camp_store: CampStore = _build_camp_store()
+
+
 def _build_goals_store() -> GoalsStore:
     """Bind the Module-6 KPI-goals store, MIRRORING ``_build_budget_store``.
 
@@ -942,6 +1000,11 @@ def get_grassroots_store() -> GrassrootsStore:
 def get_content_metrics_store() -> ContentMetricsStore:
     """FastAPI dependency yielding the active Content-metrics store (Module 3 seam)."""
     return _content_metrics_store
+
+
+def get_camp_store() -> CampStore:
+    """FastAPI dependency yielding the active Summer Camp store (Module 4 seam)."""
+    return _camp_store
 
 
 def get_goals_store() -> GoalsStore:
