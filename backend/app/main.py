@@ -10,6 +10,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from mangum import Mangum
 
+from app.api.admissions import router as admissions_router
 from app.api.ai_actions import router as ai_actions_router
 from app.api.ambassadors import router as ambassadors_router
 from app.api.auth import router as auth_router
@@ -326,6 +327,18 @@ app.include_router(content_kanban_router)
 # /kpi-feed for the Dashboard module, and /attribution for Content Performance. Pure core
 # (app.core.nurture); program isolation; sequences are a read-only synthetic mirror. INV-1/6/11.
 app.include_router(nurture_router)
+
+# Admissions & Voice of Customer (Module 9) — the listening post: objection log, voice/
+# quote feed + §7.5 aggregate sentiment (placeholder, never live; INV-6), feedback→
+# marketing loop with a 7-day closure rate, weekly admission stats, and the objection→
+# content bridge tracker (app.data.admissions_store, 0042; pure core app.core.admissions).
+# GET /admissions/overview|objections|voice|feedback|bridge (any seat). Owner-gated
+# (admissions) writes: POST /admissions/objections/{id}/brief → a Content calendar DRAFT
+# brief + a bridge row (CROSS-LINK to Module 3), POST /admissions/feedback → an item that,
+# when actionable, enqueues an OPEN `admissions` Decision-Queue card (CROSS-LINK to Module
+# 11). PATCH /admissions/feedback/{id} (action/close) is leader/admin. `owner`/`raised_by`
+# are the VERIFIED principal (never the body). No LLM, no external send. INV-1/6/11.
+app.include_router(admissions_router)
 
 
 # AWS Lambda + API Gateway entrypoint (ARCHITECTURE.md §12).

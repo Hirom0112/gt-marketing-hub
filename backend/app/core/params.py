@@ -1827,6 +1827,52 @@ class SummerCamp(_StrictModel):
         return self
 
 
+class Admissions(_StrictModel):
+    """admissions — Module 9 (Admissions & Voice of Customer) business tunables (INV-11).
+
+    The single canonical home for the Admissions listening-post surface's surfaced
+    configuration — the deterministic core (``core/admissions.py``) + the demo seed read
+    them here, never a code literal:
+
+    * ``themes`` — the closed list of objection-theme LABELS (accreditation / cost /
+      gifted_enough / scheduling / curriculum / social / tech_requirements / other).
+      Aggregate labels only (INV-1/INV-6). The 0042 ``objection_log`` CHECK is the DB
+      backstop. MUST be non-empty and free of duplicates.
+    * ``feedback_categories`` — the closed list of feedback-loop category LABELS
+      (messaging_gap / persona_mismatch / objection_pattern / positive_signal / urgent).
+      The 0042 ``feedback_item`` CHECK is the DB backstop. MUST be non-empty / unique.
+    * ``sla_closure_days`` — the feedback-closure SLA window (days) the closure-rate
+      deriver measures actioned items against. MUST be ``>= 1``.
+    * ``top_objections_n`` — how many top objections the overview surfaces. MUST be ``>= 1``.
+    * ``trend_weeks`` — the objection-trend look-back window (weeks). MUST be ``>= 1``.
+    """
+
+    themes: list[str]
+    feedback_categories: list[str]
+    sla_closure_days: int
+    top_objections_n: int
+    trend_weeks: int
+
+    @model_validator(mode="after")
+    def _guard(self) -> Admissions:
+        if not self.themes:
+            raise ValueError("admissions.themes must be non-empty")
+        if len(set(self.themes)) != len(self.themes):
+            raise ValueError(f"admissions.themes must not repeat a label, got {self.themes!r}")
+        if not self.feedback_categories:
+            raise ValueError("admissions.feedback_categories must be non-empty")
+        if len(set(self.feedback_categories)) != len(self.feedback_categories):
+            raise ValueError(
+                "admissions.feedback_categories must not repeat a label, got "
+                f"{self.feedback_categories!r}"
+            )
+        for name in ("sla_closure_days", "top_objections_n", "trend_weeks"):
+            value = getattr(self, name)
+            if value < 1:
+                raise ValueError(f"admissions.{name} must be >= 1, got {value!r}")
+        return self
+
+
 class CrmOpsUtm(_StrictModel):
     """crm_ops.utm — UTM-health rule set (TODO_v2 §C1; INV-11).
 
@@ -2144,6 +2190,7 @@ class Params(_StrictModel):
     field_events: FieldEvents
     content: Content
     summer_camp: SummerCamp
+    admissions: Admissions
 
 
 def _resolve_path(path: Path | None) -> Path:

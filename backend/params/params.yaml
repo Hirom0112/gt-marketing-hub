@@ -516,3 +516,9 @@ summer_camp:                # D2 — Summer Camp dual-source reconcile business 
     - email
     - website
   registration_window_days: 7       # recent-window size (days) for the "registrations this week" count
+admissions:                 # Module 9 (Admissions & Voice of Customer) — objection theme labels + feedback categories + closure SLA + ranking/trend dials; single home for the surfaced numbers (INV-11)
+  themes: [accreditation, cost, gifted_enough, scheduling, curriculum, social, tech_requirements, other]  # the eight objection-theme labels (aggregate; INV-1/INV-6); the 0042 objection_log CHECK is the DB backstop
+  feedback_categories: [messaging_gap, persona_mismatch, objection_pattern, positive_signal, urgent]  # the five feedback-loop category labels; the 0042 feedback_item CHECK is the DB backstop
+  sla_closure_days: 7               # the feedback-closure SLA window (days) the closure-rate deriver measures actioned items against
+  top_objections_n: 3               # how many top objections the overview surfaces
+  trend_weeks: 4                    # the objection-trend look-back window (weeks)

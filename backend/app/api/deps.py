@@ -39,6 +39,11 @@ from app.core.program import Program, resolve_program
 from app.core.sales_agents import lookup as lookup_sales_agent
 from app.core.seam import MirrorState
 from app.core.settings import Settings
+from app.data.admissions_store import (
+    AdmissionsStore,
+    InMemoryAdmissionsStore,
+    build_supabase_admissions_store,
+)
 from app.data.budget_store import (
     BudgetStore,
     InMemoryBudgetStore,
@@ -604,6 +609,56 @@ def _seeded_in_memory_nurture_store(program: Program) -> InMemoryNurtureStore:
 _nurture_store: NurtureStore = _build_nurture_store()
 
 
+def _build_admissions_store() -> AdmissionsStore:
+    """Bind the Module-9 Admissions store, MIRRORING ``_build_nurture_store``.
+
+    The same ``COCKPIT_REPO`` / ``SUPABASE_URL`` selection as the other module stores, so
+    they never disagree on which backend is live (the NFR-8 store seam):
+
+    - ``synthetic`` ⇒ FORCE the in-memory store (never Supabase), with the deterministic
+      demo objections/quotes/feedback/stats/bridges seeded for the active program (INV-1).
+    - ``supabase`` ⇒ REQUIRE the live store; a missing ``SUPABASE_URL`` is a misconfig
+      ⇒ raise (fail loud, the family-store posture).
+    - ``auto`` (default) ⇒ Supabase when ``SUPABASE_URL`` is configured, else the seeded
+      in-memory v1 fallback (A-3).
+    """
+    settings = Settings.from_env()
+    repo_mode = settings.cockpit_repo
+    program = resolve_program(settings.gt_program_id)
+    if repo_mode == "synthetic":
+        return _seeded_in_memory_admissions_store(program)
+    if repo_mode == "supabase":
+        supabase = build_supabase_admissions_store()
+        if supabase is None:
+            raise RuntimeError(
+                "COCKPIT_REPO=supabase requires SUPABASE_URL (+ "
+                "SUPABASE_SERVICE_ROLE_KEY) for the Admissions store; none was "
+                "configured. Set them, or use COCKPIT_REPO=synthetic / auto."
+            )
+        return supabase
+    return build_supabase_admissions_store() or _seeded_in_memory_admissions_store(program)
+
+
+def _seeded_in_memory_admissions_store(program: Program) -> InMemoryAdmissionsStore:
+    """Build the in-memory admissions store + the deterministic demo seed (Module 9).
+
+    The demo objections/quotes/feedback/stats/bridges are seeded for the active program so
+    the five Admissions sub-views are demonstrable on synthetic data alone (idempotent;
+    INV-1). Tests that need a CLEAN store construct :class:`InMemoryAdmissionsStore`
+    directly (no seed).
+    """
+    store = InMemoryAdmissionsStore()
+    store.seed_demo(program)
+    return store
+
+
+# Singleton Admissions & Voice-of-Customer store (Module 9) — the objection-log/voice/
+# feedback/stat/bridge state behind the same NFR-8 seam as ``_repository``. Default v1 =
+# in-memory (A-3), seeded with the deterministic demo; production swaps the Supabase-backed
+# impl over the 0042 tables.
+_admissions_store: AdmissionsStore = _build_admissions_store()
+
+
 def _build_crm_ops_store() -> CrmOpsStore:
     """Bind the Module-7 CRM-Ops store, MIRRORING ``_build_nurture_store``.
 
@@ -1167,6 +1222,11 @@ def get_field_events_store() -> FieldEventsStore:
 def get_nurture_store() -> NurtureStore:
     """FastAPI dependency yielding the active Nurture & Lifecycle store (Module 5 seam)."""
     return _nurture_store
+
+
+def get_admissions_store() -> AdmissionsStore:
+    """FastAPI dependency yielding the active Admissions store (Module 9 seam)."""
+    return _admissions_store
 
 
 def get_crm_ops_store() -> CrmOpsStore:
