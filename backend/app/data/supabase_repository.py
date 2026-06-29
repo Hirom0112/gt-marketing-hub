@@ -758,6 +758,18 @@ class SupabaseFamilyRepository(FamilyRepository):
             {field: self._json_value(value)},
         )
 
+    def update_attribution_utm(self, family_id: UUID, utm: dict[str, object]) -> None:
+        # PATCH the attribution_utm jsonb column on the one spine row via
+        # service_role (INV-5 / D-RLS-4) — the Module-7 UTM repair write. The whole
+        # blob is replaced with the already-repaired mapping (the deterministic core
+        # owns the derivation, INV-2; this only persists it). PostgREST stores a
+        # dict directly as jsonb; an id with no row is a silent no-op.
+        self._patch(
+            f"{_REST}/family_record",
+            {"family_id": f"eq.{family_id}"},
+            {"attribution_utm": utm},
+        )
+
     def assign_families(
         self, family_ids: list[UUID], agent_id: UUID, assigned_at: datetime
     ) -> list[UUID]:

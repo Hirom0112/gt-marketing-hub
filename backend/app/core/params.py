@@ -1838,13 +1838,20 @@ class CrmOpsUtm(_StrictModel):
       the UTM ``broken``.
     * ``allowed_mediums`` — the closed set of acceptable ``utm_medium`` values; a
       ``utm_medium`` outside this set flags ``broken``.
+    * ``medium_aliases`` — an ``{alias: canonical}`` table the EXPLICIT, audited
+      UTM-repair core (``core/utm_repair.py``) consults to map a known-bad
+      ``utm_medium`` spelling onto an allowed canonical (e.g. ``qr_code`` → ``event``,
+      ``ppc`` → ``cpc``). Read-only here for the detect path — it NEVER relaxes
+      ``check_utm`` (an aliasable medium is still flagged ``broken`` until repaired).
 
-    Both lists MUST be non-empty — an empty rule set would silently pass every
-    UTM, defeating the honesty mandate (drift fails the build, CLAUDE.md §4.1).
+    The two rule lists MUST be non-empty — an empty rule set would silently pass
+    every UTM, defeating the honesty mandate (drift fails the build, CLAUDE.md §4.1).
+    ``medium_aliases`` MAY be empty (no aliases configured).
     """
 
     required_keys: list[str]
     allowed_mediums: list[str]
+    medium_aliases: dict[str, str]
 
     @model_validator(mode="after")
     def _non_empty(self) -> CrmOpsUtm:

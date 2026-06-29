@@ -64,6 +64,7 @@ from app.api._crm_ops_cache import (
     ParitySnapshot,
     TtlSingleFlightCache,
     parity_snapshot,
+    reset_crm_ops_cache,
 )
 from app.api.decisions import DecisionResponse, _actor_token, flag_decision
 from app.api.deps import (
@@ -84,6 +85,7 @@ from app.core.params import Params
 from app.core.program import Program
 from app.core.seam import MirrorState
 from app.core.utm_health import check_utm
+from app.core.utm_repair import repair_utm
 from app.data.crm_ops_store import (
     CATEGORIES,
     SEVERITIES,
@@ -118,6 +120,18 @@ SOURCE_SYNTHETIC = "synthetic"  # only when a connector genuinely can't be read 
 
 # The always-on rule-of-truth string the 5d sync-parity view surfaces.
 RULE_OF_TRUTH = "Supabase app_form is the source of truth for funnel/TEFA/income"
+
+# Data-driven UTM-health status tokens (so the frontend renders the flag from data
+# rather than a hardcoded-permanent red). Fixed wire tokens (INV-11 carve-out).
+# HONEST: healthy ONLY when the broken count is exactly zero.
+UTM_STATUS_BROKEN = "broken"
+UTM_STATUS_HEALTHY = "healthy"
+
+
+def _utm_status(broken_count: int) -> str:
+    """The data-driven UTM-health status — ``broken`` iff any UTM is broken."""
+    return UTM_STATUS_BROKEN if broken_count > 0 else UTM_STATUS_HEALTHY
+
 
 # DqKind → persisted issue category (one of CATEGORIES). The single mapping home.
 _KIND_CATEGORY: dict[DqKind, str] = {
@@ -510,6 +524,7 @@ class OverviewResponse(BaseModel):
     data_confidence_banner: bool
     utm_ok: int
     utm_broken: int
+    utm_status: str  # data-driven: "broken" iff utm_broken > 0, else "healthy".
     lead_score_distribution: LeadScoreDistributionOut
     open_dq_count: int
     last_sync: list[ConnectorSync]
@@ -548,6 +563,7 @@ class SourceTrackingResponse(BaseModel):
 
     params: list[UtmParamResolution]
     broken_utm: list[UtmEntityOut]
+    utm_status: str  # data-driven: "broken" iff any UTM is broken, else "healthy".
     attribution_chain: list[AttributionChainStep]
     fix_log: list[FixLogOut]
     source: str
@@ -661,6 +677,33 @@ class ScoringChangeResponse(BaseModel):
 
     decision: DecisionResponse
     fix: FixLogOut
+
+
+class UtmRepairFixOut(BaseModel):
+    """One repaired entity — its synthetic ref + the human-readable fixes applied."""
+
+    entity_ref: str
+    fixes: list[str]
+
+
+class UtmRepairManualOut(BaseModel):
+    """One unrepairable entity — its synthetic ref + the reasons a human must fix."""
+
+    entity_ref: str
+    reasons: list[str]
+
+
+class UtmRepairResponse(BaseModel):
+    """The POST /crm/ops/utm/repair outcome — what was repaired + what needs a human.
+
+    There is DELIBERATELY no ``actor``/``owner`` field on the REQUEST (the endpoint
+    takes no body): the audit actor is stamped from the verified principal, never a
+    client claim (INV-1). ``entity_ref`` is a SYNTHETIC family id, never PII (INV-6).
+    """
+
+    repaired_count: int
+    fixes: list[UtmRepairFixOut]
+    manual: list[UtmRepairManualOut]
 
 
 def _issue_out(i: CrmOpsIssue) -> IssueOut:
@@ -781,6 +824,7 @@ def get_overview(
         data_confidence_banner=parity.overall < params.crm_ops.parity_floor,
         utm_ok=len(list(repository.list_families())) - len(broken),
         utm_broken=len(broken),
+        utm_status=_utm_status(len(broken)),
         lead_score_distribution=_lead_distribution_cached(
             repository, live_adapter, params, program
         ),
@@ -819,9 +863,11 @@ def get_source_tracking(
         AttributionChainStep(step=i + 1, label=label, status="ok")
         for i, label in enumerate(params.crm_ops.attribution_chain_steps)
     ]
+    broken = _broken_utm_entities(repository, params)
     return SourceTrackingResponse(
         params=rows,
-        broken_utm=_broken_utm_entities(repository, params),
+        broken_utm=broken,
+        utm_status=_utm_status(len(broken)),
         attribution_chain=chain,
         fix_log=[_fix_out(f) for f in store.list_fix_log(program, kind="utm_fix")],
         source=SOURCE_UTM,
@@ -1037,3 +1083,61 @@ def approve_scoring_change(
     )
     fix = store.append_fix_log(program, kind="scoring_change", summary=body.summary, actor=actor)
     return ScoringChangeResponse(decision=DecisionResponse.of(decision), fix=_fix_out(fix))
+
+
+@router.post("/crm/ops/utm/repair", response_model=UtmRepairResponse)
+def repair_broken_utms(
+    principal: AnyPrincipalDep,
+    repository: RepositoryDep,
+    store: CrmOpsStoreDep,
+    params: ParamsDep,
+    program: ProgramDep,
+) -> UtmRepairResponse:
+    """Repair the cohort's broken UTMs — EXPLICIT, AUDITED, owner-gated (Module 7 §7b).
+
+    This does NOT violate the detect-only honesty mandate (``core/utm_health.py``):
+    that mandate governs the silent READ path. This is an OWNER-triggered, LOGGED,
+    lossless-or-aliased repair — exactly the "Fix log: UTM fixes applied, when, by
+    whom" the spec anticipates.
+
+    Owner-gated like every CRM-Ops write (leader/admin, or the operator who owns the
+    ``crm`` workstream — :func:`_owner_gate_crm_ops`). For each family whose stored
+    ``attribution_utm`` is currently broken (:func:`check_utm`), the deterministic
+    :func:`app.core.utm_repair.repair_utm` is run; if it RESOLVES the UTM the
+    repaired blob is persisted (preserving the opaque ``click_id`` + any non-str
+    keys) and the fix is appended to the audit fix log with the actor stamped from
+    the VERIFIED principal (never the client). An unresolved UTM (e.g. a missing
+    required key) is collected into ``manual`` with its remaining reasons — never
+    fabricated. After the loop the shared CRM-Ops snapshot cache is invalidated so
+    subsequent reads recompute the now-healthier UTM health.
+    """
+    _owner_gate_crm_ops(principal)
+    actor = _actor_token(principal)
+    fixes: list[UtmRepairFixOut] = []
+    manual: list[UtmRepairManualOut] = []
+    for record in repository.list_families():
+        current = _record_utm(record)
+        if check_utm(current, params=params).status == "ok":
+            continue
+        entity_ref = str(record.family_id)
+        result = repair_utm(current, params=params)
+        if result.resolved:
+            # Merge the repaired str-keyed mapping back over the full stored blob so
+            # the opaque click_id (and any non-str value _record_utm drops) survives.
+            merged: dict[str, object] = {**record.attribution_utm, **result.repaired}
+            repository.update_attribution_utm(record.family_id, merged)
+            store.append_fix_log(
+                program,
+                kind="utm_fix",
+                summary=f"{entity_ref}: " + "; ".join(result.fixes),
+                actor=actor,
+            )
+            fixes.append(UtmRepairFixOut(entity_ref=entity_ref, fixes=list(result.fixes)))
+        else:
+            manual.append(
+                UtmRepairManualOut(entity_ref=entity_ref, reasons=list(result.remaining_reasons))
+            )
+    # Invalidate the shared LIVE snapshot cache so the next overview/source-tracking
+    # read recomputes UTM health against the repaired records (not a stale snapshot).
+    reset_crm_ops_cache()
+    return UtmRepairResponse(repaired_count=len(fixes), fixes=fixes, manual=manual)

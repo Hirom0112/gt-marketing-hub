@@ -360,6 +360,19 @@ class FamilyRepository(ABC):
         raise NotImplementedError
 
     @abstractmethod
+    def update_attribution_utm(self, family_id: UUID, utm: dict[str, object]) -> None:
+        """Persist the family's ``attribution_utm`` blob (the Module-7 UTM repair).
+
+        Overwrites the whole ``attribution_utm`` jsonb with the (already-repaired)
+        ``utm`` mapping — the EXPLICIT, owner-triggered, audited write of
+        ``POST /crm/ops/utm/repair`` (distinct from the detect-only read path). The
+        deterministic core (``core/utm_repair.py``) owns the derivation (INV-2);
+        this only commits the approved result. An unknown ``family_id`` is a silent
+        no-op. Idempotent: re-applying the same blob is a no-op.
+        """
+        raise NotImplementedError
+
+    @abstractmethod
     def assign_families(
         self, family_ids: list[UUID], agent_id: UUID, assigned_at: datetime
     ) -> list[UUID]:
@@ -633,6 +646,11 @@ class InMemoryFamilyRepository(FamilyRepository):
     def apply_field(self, family_id: UUID, field: str, value: object) -> None:
         # Adopt one mirror field (ACCEPT_MIRROR) onto the in-mem record.
         self._replace(family_id, **{field: value})
+
+    def update_attribution_utm(self, family_id: UUID, utm: dict[str, object]) -> None:
+        # Commit the repaired attribution_utm blob onto the in-mem record (Module 7
+        # UTM repair). Unknown id ⇒ silent no-op via _replace.
+        self._replace(family_id, attribution_utm=utm)
 
     def assign_families(
         self, family_ids: list[UUID], agent_id: UUID, assigned_at: datetime

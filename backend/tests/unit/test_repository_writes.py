@@ -56,3 +56,33 @@ def test_apply_field_adopts_value_on_store_record() -> None:
     reloaded = repo.get_family(family.family_id)
     assert reloaded is not None
     assert reloaded.family.current_stage == other_stage
+
+
+def test_update_attribution_utm_overwrites_blob_on_store_record() -> None:
+    """update_attribution_utm replaces the attribution_utm blob (Module 7 UTM repair)."""
+    repo = _repo()
+    family = next(iter(repo.list_families()))
+    repaired = {
+        "utm_source": "newsletter",
+        "utm_medium": "email",
+        "utm_campaign": "spring",
+        "click_id": "clk_deadbeef",
+    }
+
+    repo.update_attribution_utm(family.family_id, repaired)
+
+    reloaded = repo.get_family(family.family_id)
+    assert reloaded is not None
+    assert reloaded.family.attribution_utm == repaired
+    # The list view reads the same mutated record (one store, not a copy).
+    listed = next(f for f in repo.list_families() if f.family_id == family.family_id)
+    assert listed.attribution_utm == repaired
+
+
+def test_update_attribution_utm_unknown_family_is_noop() -> None:
+    """Repairing an unknown family neither raises nor mutates any record."""
+    repo = _repo()
+    before = {f.family_id: f.attribution_utm for f in repo.list_families()}
+    repo.update_attribution_utm(uuid4(), {"utm_medium": "email"})
+    after = {f.family_id: f.attribution_utm for f in repo.list_families()}
+    assert before == after

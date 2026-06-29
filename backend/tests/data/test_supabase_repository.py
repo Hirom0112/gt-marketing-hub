@@ -788,6 +788,26 @@ def test_apply_field_patches_adopted_enum_as_its_value() -> None:
     assert captured["body"] == {"current_stage": "tuition"}
 
 
+def test_update_attribution_utm_patches_jsonb_via_service_role() -> None:
+    """update_attribution_utm PATCHes the attribution_utm jsonb blob (Module 7 repair)."""
+    captured: dict[str, Any] = {}
+    repo = _make_repo(_capture_patch_handler(captured))
+    fid = UUID(_FID_INTEREST)
+    repaired = {
+        "utm_source": "newsletter",
+        "utm_medium": "email",
+        "utm_campaign": "spring",
+        "click_id": "clk_deadbeef",
+    }
+
+    repo.update_attribution_utm(fid, repaired)
+
+    assert captured["method"] == "PATCH"
+    assert captured["query"]["family_id"] == [f"eq.{fid}"]
+    assert captured["body"] == {"attribution_utm": repaired}
+    assert captured["prefer"] == "return=minimal"
+
+
 def test_patch_non_2xx_fails_loud() -> None:
     """A non-2xx PATCH raises SupabaseError (fail loud, never a silent lost write)."""
     from datetime import UTC, datetime

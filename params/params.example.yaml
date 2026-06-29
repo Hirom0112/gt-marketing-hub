@@ -411,6 +411,7 @@ crm_ops:                    # C1 — CRM/Marketing-Ops data-quality cores; share
   utm:                              # UTM-health rule set — the deriver DETECTS + FLAGS, never normalizes (honesty mandate, mirrors INV-4)
     required_keys: [utm_source, utm_medium, utm_campaign]   # UTM keys that MUST be present + non-blank; a missing one ⇒ broken
     allowed_mediums: [email, social, cpc, organic, referral, event]  # the closed set of acceptable utm_medium values; anything else ⇒ broken
+    medium_aliases: {qr_code: event, "e-mail": email, e_mail: email, ppc: cpc, paid_search: cpc, paidsearch: cpc}   # {alias: canonical} the EXPLICIT utm-repair core maps onto an allowed medium (never relaxes check_utm)
   data_quality:                     # the auto data-quality queue's severity order over the known issue kinds
     severity_order: [conflict, utm_broken, unreliable_field, mojibake, missing_field]   # highest→lowest; the queue ranks each issue by its position here (mojibake/missing_field = the CRM-import edge cases)
   unreliable_fields: [tefa_amount, attribution_source, income_tier]   # fields known to be low-trust; flagged unreliable + surfaced as an unreliable_field issue

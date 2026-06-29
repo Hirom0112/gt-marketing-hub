@@ -261,3 +261,93 @@ def test_scoring_change_operator_forbidden() -> None:
     _install()
     resp = client.post("/crm/ops/scoring-change", headers=_auth("operator"), json={"summary": "x"})
     assert resp.status_code == 403, resp.text
+
+
+# ===========================================================================
+# Module-7 §7b — EXPLICIT, audited UTM repair + data-driven UTM health status.
+# ===========================================================================
+# A repairable broken UTM: "E-Mail" trims+lowercases to "e-mail", then aliases to the
+# allowed "email" (medium_aliases). The opaque click_id must survive the repair write.
+_REPAIRABLE_UTM = {
+    "utm_source": "newsletter",
+    "utm_medium": "E-Mail",
+    "utm_campaign": "spring_open_house",
+    "click_id": "clk_keepme",
+}
+# An UNREPAIRABLE broken UTM: utm_campaign is missing — never fabricated, stays manual.
+_UNREPAIRABLE_UTM = {"utm_source": "newsletter", "utm_medium": "email"}
+
+
+def test_utm_repair_fixes_fixable_lists_manual_and_logs() -> None:
+    """POST /crm/ops/utm/repair repairs the fixable, lists the manual, appends a fix log."""
+    repo, _, store = _install()
+    families = list(repo.list_families())
+    fixable, manual = families[0], families[1]
+    repo.update_attribution_utm(fixable.family_id, dict(_REPAIRABLE_UTM))
+    repo.update_attribution_utm(manual.family_id, dict(_UNREPAIRABLE_UTM))
+
+    resp = client.post("/crm/ops/utm/repair", headers=_auth("leader"))
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+
+    assert body["repaired_count"] == 1
+    assert [f["entity_ref"] for f in body["fixes"]] == [str(fixable.family_id)]
+    assert body["fixes"][0]["fixes"], "the applied fixes must be listed"
+    assert [m["entity_ref"] for m in body["manual"]] == [str(manual.family_id)]
+    assert body["manual"][0]["reasons"], "the manual entry must carry remaining reasons"
+
+    # The repaired blob is persisted: medium normalized, opaque click_id preserved.
+    reloaded = repo.get_family(fixable.family_id)
+    assert reloaded is not None
+    assert reloaded.family.attribution_utm["utm_medium"] == "email"
+    assert reloaded.family.attribution_utm["click_id"] == "clk_keepme"
+
+    # The audit fix log records a utm_fix from the verified actor.
+    fixes = store.list_fix_log(PROGRAM, kind="utm_fix")
+    assert any(str(fixable.family_id) in f.summary for f in fixes)
+
+
+def test_utm_repair_owner_gated() -> None:
+    """An operator (non-owner of the crm workstream) cannot trigger a repair (403)."""
+    _install()
+    resp = client.post("/crm/ops/utm/repair", headers=_auth("operator"))
+    assert resp.status_code == 403, resp.text
+
+
+def test_utm_repair_invalidates_snapshot_cache() -> None:
+    """After a repair the cached snapshot is invalidated, so /crm/ops recomputes health."""
+    repo, _, _ = _install()
+    fixable = next(iter(repo.list_families()))
+    repo.update_attribution_utm(fixable.family_id, dict(_REPAIRABLE_UTM))
+
+    # Prime the shared parity-snapshot cache (the /crm/ops view derives UTM health
+    # from the CACHED (record, mirror) pairs) — the broken UTM is counted.
+    before = client.get("/crm/ops", headers=_auth()).json()["utm_health"]["broken"]
+    assert before >= 1
+
+    repaired = client.post("/crm/ops/utm/repair", headers=_auth("leader"))
+    assert repaired.status_code == 200, repaired.text
+
+    # A stale cache would still show the pre-repair pairs; invalidation forces a
+    # fresh snapshot, so the repaired family is no longer counted broken.
+    after = client.get("/crm/ops", headers=_auth()).json()["utm_health"]["broken"]
+    assert after == before - 1
+
+
+def test_overview_and_source_tracking_utm_status_is_data_driven() -> None:
+    """utm_status is "healthy" with no broken UTM and "broken" once one exists."""
+    repo, _, _ = _install()
+
+    overview = client.get("/crm/ops/overview", headers=_auth()).json()
+    assert overview["utm_broken"] == 0
+    assert overview["utm_status"] == "healthy"
+    tracking = client.get("/crm/ops/source-tracking", headers=_auth()).json()
+    assert tracking["utm_status"] == "healthy"
+
+    # Introduce a broken UTM — the status flips to "broken" (honest, data-driven).
+    repo.update_attribution_utm(next(iter(repo.list_families())).family_id, dict(_UNREPAIRABLE_UTM))
+    overview2 = client.get("/crm/ops/overview", headers=_auth()).json()
+    assert overview2["utm_broken"] >= 1
+    assert overview2["utm_status"] == "broken"
+    tracking2 = client.get("/crm/ops/source-tracking", headers=_auth()).json()
+    assert tracking2["utm_status"] == "broken"
