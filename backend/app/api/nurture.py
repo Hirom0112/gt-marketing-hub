@@ -35,6 +35,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 
 from app.adapters.hubspot.crm_adapter import CRMAdapter
+from app.api._crm_ops_cache import TtlSingleFlightCache
 from app.api.decisions import DecisionResponse, _actor_token, flag_decision
 from app.api.deps import (
     Principal,
@@ -459,6 +460,15 @@ def _top_sequence(store: NurtureStore, program: Program) -> str | None:
 # ===========================================================================
 # READ endpoints (any authenticated seat).
 # ===========================================================================
+# Short-TTL single-flight cache for the LIVE nurture overview (perf): the engagement-mix
+# + pipeline reads hit the live HubSpot portal (~4s), and the Home/Executive-Command
+# dashboard polls this on every load. Memoizing the whole computed response per program
+# for the params TTL — with the warmer keeping it hot — turns the cold ~4s live read into
+# a warm sub-second hit. Registered, so the test-isolation reset clears it (a cached LIVE
+# read is still live; the cache never changes the values or the source labels).
+_OVERVIEW_CACHE: TtlSingleFlightCache[OverviewResponse] = TtlSingleFlightCache()
+
+
 @router.get("/nurture/overview", response_model=OverviewResponse)
 def get_overview(
     store: StoreDep,
@@ -469,6 +479,21 @@ def get_overview(
     principal: AnyPrincipalDep,
 ) -> OverviewResponse:
     """The 5a overview — every widget computed from the seeded/aggregate sources."""
+    return _OVERVIEW_CACHE.get_or_compute(
+        program,
+        lambda: _compute_overview(store, crm, repo, program, params),
+        ttl_seconds=params.crm_ops.snapshot_ttl_seconds,
+    )
+
+
+def _compute_overview(
+    store: NurtureStore,
+    crm: CRMAdapter,
+    repo: FamilyRepository,
+    program: Program,
+    params: Params,
+) -> OverviewResponse:
+    """Compute the 5a overview (the live engagement-mix + pipeline reads live here)."""
     now = datetime.now(UTC)
     lc = params.nurture.lifecycle
 

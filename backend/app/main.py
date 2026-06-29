@@ -83,10 +83,12 @@ async def _warm_caches_forever(interval: float) -> None:
                 token = resp.json().get("access_token") if resp.status_code == 200 else None
                 if token:
                     headers = {"Authorization": f"Bearer {token}"}
-                    await asyncio.gather(
-                        *(client.get(path, headers=headers) for path in _WARM_PATHS),
-                        return_exceptions=True,
-                    )
+                    # Sequential (not concurrent) so the live HubSpot reads don't burst the
+                    # rate limit — a gentle warm keeps the snapshot caches reliably hot.
+                    for path in _WARM_PATHS:
+                        with contextlib.suppress(Exception):
+                            await client.get(path, headers=headers)
+                        await asyncio.sleep(0.5)
             await asyncio.sleep(interval)
 
 
