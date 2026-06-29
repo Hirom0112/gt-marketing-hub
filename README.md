@@ -150,8 +150,8 @@ matches for human review (never auto-merge). Summer Camp ties to Phase-1 **progr
 ## Where I spent depth (and what I cut)
 
 The judgment being scored is *which* modules to build deep. I built the **data backbone** plus the
-**ten modules that exercise it hardest** — each end-to-end across every sub-view tab, persisted to
-live Supabase (migrations `0032`–`0042`, program-scoped RLS), with real owner-gated writes verified
+**eleven modules that exercise it hardest** — each end-to-end across every sub-view tab, persisted to
+live Supabase (migrations `0032`–`0043`, program-scoped RLS), with real owner-gated writes verified
 live — and deliberately left the breadth/viz surfaces as honest seed.
 
 **Built deep, on the real backbone:**
@@ -197,10 +197,19 @@ live — and deliberately left the breadth/viz surfaces as honest seed.
   Voice-of-Families quotes + sentiment (placeholder adapter, labeled aggregate), and a
   **feedback-to-marketing loop** where actionable items flag to the **Decision Queue** + surface to the
   Marketing Lead, with a **7-day closure rate**. Admission numbers (applicants/Shadow Days/offers/deposits) by week.
+- **Website & Digital Analytics** — GA4 for `gt.school` + `anywhere.gt.school`: site/page/source/
+  download/conversion-path metrics read off a **GA4 boundary** that is a **stood-in simulated adapter**
+  in v1 (`source_mode="simulated"`, no live GA4 credential in this portal — labeled in the header,
+  never implied live), with a pure core deriving the session-weighted rollups, top landing pages,
+  channel breakdown, and **landing→application funnel drop-off**. The Hub owns only the
+  **leadership-input** state (page-refresh flags + analysis requests). **Three cross-links:** a flagged
+  page drafts a **Content refresh brief** (Module 3) + raises a **Decision** (Module 11); an analysis
+  request raises a **Decision**; and the traffic view runs the **same UTM rule set CRM Ops uses** over
+  the tagged campaigns at the **origin** of the tags (Module 7; detect-only — broken flagged, never
+  auto-fixed).
 
-**Left as honest seed (labeled, behind the right shape):** Home, Website Analytics
-(GA4 stood-in), Resource Library. These are breadth/aggregation/viz surfaces that don't further test
-the backbone.
+**Left as honest seed (labeled, behind the right shape):** Home, Resource Library.
+These are breadth/aggregation/viz surfaces that don't further test the backbone.
 
 ---
 
@@ -264,7 +273,7 @@ The brief rewards honesty over fake green. Current limitations:
 - **Stood-in sources** (Meta/GA4/X/summer.gt.school/community.gt.school) are seeded and labeled, not
   live. Event-to-consult and parent NPS are **manual / un-instrumented**, surfaced as such — never a
   faked auto-metric.
-- **Sub-view tabs** are fully built out for the ten deep modules (above); the remaining seed
+- **Sub-view tabs** are fully built out for the eleven deep modules (above); the remaining seed
   modules render their data behind the correct shape rather than fake per-tab depth.
 - The Hub falls back to **seed data** when the backend isn't running — by design, so it's always
   demoable.
@@ -281,7 +290,7 @@ python scripts/check_dep_budget.py         # 2. runtime dependency budget
 cd backend
 uv run ruff check . && uv run ruff format --check .   # 3-4. lint + format
 uv run mypy app                            # 5. strict types
-uv run pytest -q                           # 6. tests  → 1415 passed, 6 skipped
+uv run pytest -q                           # 6. tests  → 1451 passed, 6 skipped
 cd ../web && npx tsc --noEmit              # frontend typecheck
 ```
 
